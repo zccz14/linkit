@@ -30,11 +30,9 @@ import { Input } from "@/components/ui/input"
 import { Separator } from "@/components/ui/separator"
 import { Textarea } from "@/components/ui/textarea"
 import { Toaster } from "@/components/ui/sonner"
-import { api, clearSession, consumeLoginCallback, openPagePath, session, startLogin, subscribeToEvents, upload, type Attachment, type Bot, type Config, type Conversation, type ConversationDetail, type Me, type Message, type Profile } from "@/lib/api"
+import { api, attachmentObjectUrl, clearSession, consumeLoginCallback, openPagePath, session, startLogin, subscribeToEvents, upload, type Attachment, type Bot, type Config, type Conversation, type ConversationDetail, type Me, type Message, type Profile } from "@/lib/api"
 
 const profileRoute = (username: string) => `/people/${encodeURIComponent(username)}`
-const attachmentRoute = (id: string) => `/api/attachments/${id}/content`
-
 export default function App() {
   const callbackError = consumeLoginCallback()
   const config = useQuery({ queryKey: ["config"], queryFn: () => api<Config>("/api/config") })
@@ -252,8 +250,19 @@ function MessageRow({ message, mine }: { message: Message; mine: boolean }) {
 }
 
 function AttachmentView({ attachment }: { attachment: Attachment }) {
-  if (attachment.media_type.startsWith("image/")) return <a href={attachmentRoute(attachment.id)} target="_blank" rel="noreferrer"><img className="max-h-72 rounded-md object-contain" src={attachmentRoute(attachment.id)} alt={attachment.file_name} /></a>
-  return <a className="flex items-center gap-2 text-sm underline" href={attachmentRoute(attachment.id)}><FileIcon />{attachment.file_name}</a>
+  const [url, setUrl] = useState("")
+  useEffect(() => {
+    let active = true
+    let objectUrl = ""
+    void attachmentObjectUrl(attachment.id).then((next) => {
+      objectUrl = next
+      if (active) setUrl(next)
+      else URL.revokeObjectURL(next)
+    }).catch(() => undefined)
+    return () => { active = false; if (objectUrl) URL.revokeObjectURL(objectUrl) }
+  }, [attachment.id])
+  if (attachment.media_type.startsWith("image/")) return url ? <a href={url} target="_blank" rel="noreferrer"><img className="max-h-72 rounded-md object-contain" src={url} alt={attachment.file_name} /></a> : <Badge variant="secondary">Loading {attachment.file_name}</Badge>
+  return url ? <a className="flex items-center gap-2 text-sm underline" href={url} download={attachment.file_name}><FileIcon />{attachment.file_name}</a> : <Badge variant="secondary">Loading {attachment.file_name}</Badge>
 }
 
 function Directory() {
@@ -316,7 +325,16 @@ function ProfileCard({ profile }: { profile: Profile }) {
 
 function ProfileAvatar({ profile }: { profile?: Partial<Profile> }) {
   const fallback = profile?.display_name?.slice(0, 1).toUpperCase() ?? "?"
-  return <Avatar><AvatarImage src={profile?.avatar_attachment_id ? attachmentRoute(profile.avatar_attachment_id) : undefined} alt={profile?.display_name ?? ""} /><AvatarFallback>{fallback}</AvatarFallback></Avatar>
+  const [url, setUrl] = useState("")
+  useEffect(() => {
+    const id = profile?.avatar_attachment_id
+    if (!id) { setUrl(""); return }
+    let active = true
+    let objectUrl = ""
+    void attachmentObjectUrl(id).then((next) => { objectUrl = next; if (active) setUrl(next); else URL.revokeObjectURL(next) }).catch(() => undefined)
+    return () => { active = false; if (objectUrl) URL.revokeObjectURL(objectUrl) }
+  }, [profile?.avatar_attachment_id])
+  return <Avatar><AvatarImage src={url || undefined} alt={profile?.display_name ?? ""} /><AvatarFallback>{fallback}</AvatarFallback></Avatar>
 }
 
 function Page({ title, description, children }: { title: string; description: string; children?: React.ReactNode }) {

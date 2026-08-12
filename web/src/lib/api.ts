@@ -86,6 +86,43 @@ export function session(): StoredSession | undefined {
   }
 }
 
+function sessionIssuer() {
+  try {
+    const context = JSON.parse(sessionStorage.getItem(LOGIN_KEY) ?? "{}") as { issuer?: string }
+    return context.issuer
+  } catch {
+    return undefined
+  }
+}
+
+async function refreshSession() {
+  const current = session()
+  const issuer = sessionIssuer()
+  if (!current || !issuer) return undefined
+  const response = await fetch(`${issuer}/session/refresh`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ session_id: current.sessionId, refresh_token: current.refreshToken }),
+  })
+  if (!response.ok) return undefined
+  const next = (await response.json()) as {
+    access_token?: string
+    refresh_token?: string
+    session_id?: string
+    expires_in?: number
+  }
+  if (!next.access_token || !next.refresh_token || !next.session_id || !next.expires_in)
+    return undefined
+  const renewed = {
+    accessToken: next.access_token,
+    refreshToken: next.refresh_token,
+    sessionId: next.session_id,
+    expiresAt: new Date(Date.now() + next.expires_in * 1000).toISOString(),
+  }
+  localStorage.setItem(SESSION_KEY, JSON.stringify(renewed))
+  return renewed
+}
+
 export function clearSession() {
   localStorage.removeItem(SESSION_KEY)
 }
@@ -109,6 +146,7 @@ export function consumeLoginCallback() {
   try {
     const context = JSON.parse(sessionStorage.getItem(LOGIN_KEY) ?? "{}") as {
       state?: string
+      issuer?: string
     }
     if (!context.state || params.get("state") !== context.state)
       throw new Error("Auth Mini login state does not match")
@@ -133,7 +171,7 @@ export function consumeLoginCallback() {
         expiresAt: new Date(Date.now() + expiresIn * 1000).toISOString(),
       })
     )
-    sessionStorage.removeItem(LOGIN_KEY)
+    sessionStorage.setItem(LOGIN_KEY, JSON.stringify({ issuer: context.issuer }))
     window.history.replaceState(null, "", `${window.location.pathname}${openPagePath()}`)
     return ""
   } catch (error) {
@@ -182,7 +220,14 @@ export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
   if (current) headers.set("Authorization", `Bearer ${current.accessToken}`)
   if (init.body && !(init.body instanceof FormData))
     headers.set("Content-Type", "application/json")
-  const response = await fetch(path, { ...init, headers })
+  let response = await fetch(path, { ...init, headers })
+  if (response.status === 401) {
+    const renewed = await refreshSession()
+    if (renewed) {
+      headers.set("Authorization", `Bearer ${renewed.accessToken}`)
+      response = await fetch(path, { ...init, headers })
+    }
+  }
   if (response.status === 204) return undefined as T
   if (!response.ok) {
     const payload = (await response.json().catch(() => undefined)) as
@@ -197,4 +242,17 @@ export async function upload(file: File) {
   const form = new FormData()
   form.append("file", file)
   return api<Attachment>("/api/attachments", { method: "POST", body: form })
+}
+
+export async function attachmentObjectUrl(id: string) {
+  const current = session()
+  if (!current) throw new Error("Sign in to access attachments")
+  let response = await fetch(`/api/attachments/${id}/content`, { headers: { Authorization: `Bearer ${current.accessToken}` } })
+  if (response.status === 401) {
+    const renewed = await refreshSession()
+    if (renewed)
+      response = await fetch(`/api/attachments/${id}/content`, { headers: { Authorization: `Bearer ${renewed.accessToken}` } })
+  }
+  if (!response.ok) throw new Error("Could not download attachment")
+  return URL.createObjectURL(await response.blob())
 }
