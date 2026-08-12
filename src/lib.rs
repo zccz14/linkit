@@ -1,0 +1,1221 @@
+pub mod auth;
+pub mod config;
+pub mod db;
+
+use std::{path::PathBuf, sync::Arc};
+
+use auth_mini_axum::{AuthMiniLayer, JwksCachePolicy};
+use axum::{
+    Router,
+    body::Body,
+    extract::{Multipart, Path, Query, State},
+    http::{HeaderMap, StatusCode, header},
+    middleware::from_fn_with_state,
+    response::{IntoResponse, Response},
+    routing::{get, patch, post, put},
+};
+use rand::{Rng, distr::Alphanumeric};
+use rust_embed::RustEmbed;
+use serde::{Deserialize, Serialize};
+use serde_json::json;
+use sha2::{Digest, Sha256};
+use sqlx::{FromRow, SqlitePool};
+use tower_http::{compression::CompressionLayer, limit::RequestBodyLimitLayer, trace::TraceLayer};
+use uuid::Uuid;
+
+use crate::{
+    auth::{AuthManager, UserIdentity},
+    config::BootstrapConfig,
+};
+
+const MAX_UPLOAD_BYTES: usize = 52_428_800;
+
+#[derive(Clone)]
+pub struct AppState {
+    pub db: SqlitePool,
+    pub auth: AuthManager,
+    pub uploads: Arc<PathBuf>,
+    events: tokio::sync::broadcast::Sender<ConversationEvent>,
+}
+
+impl AppState {
+    pub async fn new(bootstrap: BootstrapConfig, db: SqlitePool) -> anyhow::Result<Self> {
+        let auth = AuthManager::default();
+        let complete: bool = meta(&db, "setup_complete").await?.parse()?;
+        if complete {
+            let issuer = meta(&db, "auth_issuer").await?;
+            let audience = meta(&db, "auth_audience").await?;
+            auth.configure(&issuer, &audience).await?;
+        }
+        let (events, _) = tokio::sync::broadcast::channel(256);
+        Ok(Self {
+            db,
+            auth,
+            uploads: Arc::new(bootstrap.upload_dir),
+            events,
+        })
+    }
+}
+
+pub fn router(state: AppState) -> Router {
+    let signed_in = Router::new()
+        .route("/api/me", get(me))
+        .route("/api/events", get(events))
+        .route("/api/profile", put(update_profile))
+        .route("/api/users", get(list_users))
+        .route("/api/users/{username}", get(read_user))
+        .route(
+            "/api/conversations",
+            get(list_conversations).post(create_group),
+        )
+        .route("/api/conversations/{id}", get(conversation_detail))
+        .route("/api/conversations/direct/{username}", post(open_direct))
+        .route("/api/conversations/{id}/members", post(add_member))
+        .route(
+            "/api/conversations/{id}/messages",
+            get(list_messages).post(send_message),
+        )
+        .route("/api/conversations/{id}/read", post(mark_read))
+        .route(
+            "/api/attachments",
+            post(upload_attachment).layer(RequestBodyLimitLayer::new(MAX_UPLOAD_BYTES)),
+        )
+        .route("/api/attachments/{id}/content", get(download_attachment))
+        .route("/api/bots", get(list_bots).post(create_bot))
+        .route("/api/bots/{id}", patch(update_bot))
+        .route(
+            "/api/bots/{id}/groups/{conversation_id}",
+            post(add_bot_to_group),
+        )
+        .route(
+            "/api/notification-subscriptions",
+            post(save_notification_subscription),
+        )
+        .route_layer(from_fn_with_state(state.clone(), auth::authenticate));
+
+    Router::new()
+        .route("/api/health", get(health))
+        .route("/api/config", get(public_config))
+        .route("/api/setup", get(setup_status).post(setup))
+        .route("/bot/v1/messages", post(bot_send_message))
+        .merge(signed_in)
+        .fallback(static_asset)
+        .layer(axum::extract::DefaultBodyLimit::disable())
+        .layer(CompressionLayer::new())
+        .layer(TraceLayer::new_for_http())
+        .with_state(state)
+}
+
+#[derive(Debug, thiserror::Error)]
+#[error("{message}")]
+pub struct AppError {
+    status: StatusCode,
+    message: String,
+}
+
+impl AppError {
+    fn bad_request(message: impl Into<String>) -> Self {
+        Self {
+            status: StatusCode::BAD_REQUEST,
+            message: message.into(),
+        }
+    }
+    fn unauthorized(message: impl Into<String>) -> Self {
+        Self {
+            status: StatusCode::UNAUTHORIZED,
+            message: message.into(),
+        }
+    }
+    fn forbidden(message: impl Into<String>) -> Self {
+        Self {
+            status: StatusCode::FORBIDDEN,
+            message: message.into(),
+        }
+    }
+    fn not_found(message: impl Into<String>) -> Self {
+        Self {
+            status: StatusCode::NOT_FOUND,
+            message: message.into(),
+        }
+    }
+    fn conflict(message: impl Into<String>) -> Self {
+        Self {
+            status: StatusCode::CONFLICT,
+            message: message.into(),
+        }
+    }
+    fn unavailable(message: impl Into<String>) -> Self {
+        Self {
+            status: StatusCode::SERVICE_UNAVAILABLE,
+            message: message.into(),
+        }
+    }
+}
+
+impl IntoResponse for AppError {
+    fn into_response(self) -> Response {
+        (
+            self.status,
+            axum::Json(json!({"error":{"message":self.message,"code":self.status.as_u16()}})),
+        )
+            .into_response()
+    }
+}
+
+impl From<sqlx::Error> for AppError {
+    fn from(error: sqlx::Error) -> Self {
+        tracing::error!(%error, "database request failed");
+        Self {
+            status: StatusCode::INTERNAL_SERVER_ERROR,
+            message: "database request failed".to_owned(),
+        }
+    }
+}
+
+impl From<std::io::Error> for AppError {
+    fn from(error: std::io::Error) -> Self {
+        tracing::error!(%error, "storage request failed");
+        Self {
+            status: StatusCode::INTERNAL_SERVER_ERROR,
+            message: "storage request failed".to_owned(),
+        }
+    }
+}
+
+#[derive(Serialize)]
+struct Health {
+    status: &'static str,
+}
+
+#[derive(Clone, Serialize)]
+struct ConversationEvent {
+    conversation_id: String,
+    sender_id: String,
+}
+
+async fn events(
+    State(state): State<AppState>,
+    axum::Extension(user): axum::Extension<UserIdentity>,
+) -> axum::response::sse::Sse<
+    impl futures_util::Stream<Item = Result<axum::response::sse::Event, std::convert::Infallible>>,
+> {
+    let mut receiver = state.events.subscribe();
+    let stream = async_stream::stream! {
+        while let Ok(event) = receiver.recv().await {
+            let member: Option<i64> = sqlx::query_scalar("SELECT 1 FROM conversation_members WHERE conversation_id=? AND user_id=?")
+                .bind(&event.conversation_id)
+                .bind(&user.id)
+                .fetch_optional(&state.db)
+                .await
+                .unwrap_or(None);
+            if member.is_some() {
+                let payload = serde_json::to_string(&event).expect("event serializes");
+                yield Ok(axum::response::sse::Event::default().event("message").data(payload));
+            }
+        }
+    };
+    axum::response::sse::Sse::new(stream).keep_alive(axum::response::sse::KeepAlive::default())
+}
+
+async fn health() -> axum::Json<Health> {
+    axum::Json(Health { status: "ok" })
+}
+
+#[derive(Serialize)]
+struct PublicConfig {
+    setup_required: bool,
+    auth_issuer: Option<String>,
+    public_origin: Option<String>,
+}
+
+async fn public_config(
+    State(state): State<AppState>,
+) -> Result<axum::Json<PublicConfig>, AppError> {
+    let setup_required = meta(&state.db, "setup_complete").await? != "true";
+    let auth_issuer = meta(&state.db, "auth_issuer").await?;
+    let public_origin = meta(&state.db, "public_origin").await?;
+    Ok(axum::Json(PublicConfig {
+        setup_required,
+        auth_issuer: (!auth_issuer.is_empty()).then_some(auth_issuer),
+        public_origin: (!public_origin.is_empty()).then_some(public_origin),
+    }))
+}
+
+#[derive(Serialize)]
+struct SetupStatus {
+    setup_required: bool,
+}
+
+async fn setup_status(State(state): State<AppState>) -> Result<axum::Json<SetupStatus>, AppError> {
+    Ok(axum::Json(SetupStatus {
+        setup_required: meta(&state.db, "setup_complete").await? != "true",
+    }))
+}
+
+#[derive(Deserialize)]
+struct SetupInput {
+    root_user_id: String,
+    auth_issuer: String,
+    auth_audience: String,
+    public_origin: String,
+}
+
+async fn setup(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    axum::Json(input): axum::Json<SetupInput>,
+) -> Result<axum::Json<SetupStatus>, AppError> {
+    if meta(&state.db, "setup_complete").await? == "true" {
+        return Err(AppError::conflict("Linkit setup is already complete"));
+    }
+    let issuer = valid_origin(&input.auth_issuer, "Auth Mini issuer")?;
+    let audience = valid_audience(&input.auth_audience)?;
+    let public_origin = valid_origin(&input.public_origin, "public origin")?;
+    if input.root_user_id.trim().is_empty() {
+        return Err(AppError::bad_request("root_user_id is required"));
+    }
+    let token = bearer_token(&headers)?;
+    let layer = AuthMiniLayer::from_issuer(&issuer, audience.clone(), JwksCachePolicy::default())
+        .await
+        .map_err(|_| AppError::unavailable("Auth Mini JWKS is unavailable"))?;
+    let principal = layer
+        .verifier()
+        .verify(token)
+        .await
+        .map_err(|_| AppError::unauthorized("root user token is invalid"))?;
+    if principal.subject != input.root_user_id {
+        return Err(AppError::forbidden(
+            "root_user_id must equal the verified Auth Mini subject",
+        ));
+    }
+    let now = chrono::Utc::now().timestamp();
+    let mut tx = state.db.begin().await?;
+    for (key, value) in [
+        ("root_user_id", input.root_user_id.as_str()),
+        ("auth_issuer", issuer.as_str()),
+        ("auth_audience", audience.as_str()),
+        ("public_origin", public_origin.as_str()),
+        ("setup_complete", "true"),
+    ] {
+        sqlx::query("UPDATE app_meta SET value=? WHERE key=?")
+            .bind(value)
+            .bind(key)
+            .execute(&mut *tx)
+            .await?;
+    }
+    sqlx::query("INSERT INTO users(id,created_at) VALUES(?,?) ON CONFLICT(id) DO NOTHING")
+        .bind(&input.root_user_id)
+        .bind(now)
+        .execute(&mut *tx)
+        .await?;
+    tx.commit().await?;
+    state.auth.configure(&issuer, &audience).await?;
+    Ok(axum::Json(SetupStatus {
+        setup_required: false,
+    }))
+}
+
+#[derive(Clone, Serialize, FromRow)]
+struct Profile {
+    user_id: String,
+    username: String,
+    display_name: String,
+    motto: String,
+    avatar_attachment_id: Option<String>,
+    updated_at: i64,
+}
+
+async fn profile_for_user(db: &SqlitePool, user_id: &str) -> Result<Option<Profile>, AppError> {
+    Ok(sqlx::query_as("SELECT user_id,username,display_name,motto,avatar_attachment_id,updated_at FROM profiles WHERE user_id=?").bind(user_id).fetch_optional(db).await?)
+}
+
+#[derive(Serialize)]
+struct Me {
+    id: String,
+    root: bool,
+    profile: Option<Profile>,
+}
+
+async fn me(
+    State(state): State<AppState>,
+    axum::Extension(user): axum::Extension<UserIdentity>,
+) -> Result<axum::Json<Me>, AppError> {
+    let root = meta(&state.db, "root_user_id").await? == user.id;
+    Ok(axum::Json(Me {
+        profile: profile_for_user(&state.db, &user.id).await?,
+        id: user.id,
+        root,
+    }))
+}
+
+#[derive(Deserialize)]
+struct ProfileInput {
+    username: String,
+    display_name: String,
+    motto: String,
+    avatar_attachment_id: Option<String>,
+}
+
+async fn update_profile(
+    State(state): State<AppState>,
+    axum::Extension(user): axum::Extension<UserIdentity>,
+    axum::Json(input): axum::Json<ProfileInput>,
+) -> Result<axum::Json<Profile>, AppError> {
+    let username = valid_username(&input.username)?;
+    let display_name = nonempty(&input.display_name, "display_name", 80)?;
+    let motto = bounded(&input.motto, "motto", 280)?;
+    if let Some(attachment_id) = &input.avatar_attachment_id {
+        let allowed: Option<String> = sqlx::query_scalar("SELECT id FROM attachments WHERE id=? AND owner_user_id=? AND media_type LIKE 'image/%'").bind(attachment_id).bind(&user.id).fetch_optional(&state.db).await?;
+        if allowed.is_none() {
+            return Err(AppError::bad_request(
+                "avatar_attachment_id must be one of your image uploads",
+            ));
+        }
+    }
+    let now = chrono::Utc::now().timestamp();
+    let result = sqlx::query("INSERT INTO profiles(user_id,username,display_name,motto,avatar_attachment_id,updated_at) VALUES(?,?,?,?,?,?) ON CONFLICT(user_id) DO UPDATE SET username=excluded.username,display_name=excluded.display_name,motto=excluded.motto,avatar_attachment_id=excluded.avatar_attachment_id,updated_at=excluded.updated_at")
+        .bind(&user.id).bind(username).bind(display_name).bind(motto).bind(input.avatar_attachment_id).bind(now).execute(&state.db).await;
+    if let Err(error) = result {
+        if matches!(error, sqlx::Error::Database(ref database) if database.is_unique_violation()) {
+            return Err(AppError::conflict("username is already taken"));
+        }
+        return Err(error.into());
+    }
+    Ok(axum::Json(
+        profile_for_user(&state.db, &user.id)
+            .await?
+            .expect("profile was inserted"),
+    ))
+}
+
+#[derive(Deserialize)]
+struct UserQuery {
+    query: Option<String>,
+}
+
+async fn list_users(
+    State(state): State<AppState>,
+    Query(query): Query<UserQuery>,
+) -> Result<axum::Json<Vec<Profile>>, AppError> {
+    let query = query.query.unwrap_or_default().trim().to_owned();
+    let rows = sqlx::query_as("SELECT user_id,username,display_name,motto,avatar_attachment_id,updated_at FROM profiles WHERE username LIKE '%' || ? || '%' OR display_name LIKE '%' || ? || '%' ORDER BY username LIMIT 50").bind(&query).bind(&query).fetch_all(&state.db).await?;
+    Ok(axum::Json(rows))
+}
+
+async fn read_user(
+    State(state): State<AppState>,
+    Path(username): Path<String>,
+) -> Result<axum::Json<Profile>, AppError> {
+    sqlx::query_as("SELECT user_id,username,display_name,motto,avatar_attachment_id,updated_at FROM profiles WHERE username=?").bind(username).fetch_optional(&state.db).await?.map(axum::Json).ok_or_else(|| AppError::not_found("user not found"))
+}
+
+#[derive(Clone, Serialize, FromRow)]
+struct Conversation {
+    id: String,
+    kind: String,
+    title: String,
+    created_by: String,
+    created_at: i64,
+    latest_body: Option<String>,
+    latest_at: Option<i64>,
+    unread_count: i64,
+}
+
+async fn list_conversations(
+    State(state): State<AppState>,
+    axum::Extension(user): axum::Extension<UserIdentity>,
+) -> Result<axum::Json<Vec<Conversation>>, AppError> {
+    let rows = sqlx::query_as("SELECT c.id,c.kind,c.title,c.created_by,c.created_at,(SELECT body FROM messages WHERE conversation_id=c.id ORDER BY created_at DESC LIMIT 1) latest_body,(SELECT created_at FROM messages WHERE conversation_id=c.id ORDER BY created_at DESC LIMIT 1) latest_at,(SELECT COUNT(*) FROM messages WHERE conversation_id=c.id AND created_at>cm.last_read_at AND sender_id<>?) unread_count FROM conversations c JOIN conversation_members cm ON cm.conversation_id=c.id WHERE cm.user_id=? ORDER BY COALESCE(latest_at,c.created_at) DESC")
+        .bind(&user.id).bind(&user.id).fetch_all(&state.db).await?;
+    Ok(axum::Json(rows))
+}
+
+#[derive(Clone, Serialize, FromRow)]
+struct ConversationMember {
+    user_id: String,
+    username: String,
+    display_name: String,
+    role: String,
+}
+
+#[derive(Serialize)]
+struct ConversationDetail {
+    #[serde(flatten)]
+    conversation: Conversation,
+    members: Vec<ConversationMember>,
+    bots: Vec<Bot>,
+}
+
+async fn conversation_detail(
+    State(state): State<AppState>,
+    axum::Extension(user): axum::Extension<UserIdentity>,
+    Path(id): Path<String>,
+) -> Result<axum::Json<ConversationDetail>, AppError> {
+    let conversation = conversation(&state.db, &id, &user.id).await?;
+    let members = sqlx::query_as("SELECT cm.user_id,p.username,p.display_name,cm.role FROM conversation_members cm JOIN profiles p ON p.user_id=cm.user_id WHERE cm.conversation_id=? ORDER BY cm.joined_at")
+        .bind(&id)
+        .fetch_all(&state.db)
+        .await?;
+    let bots = sqlx::query_as("SELECT b.id,b.owner_user_id,b.name,b.token_prefix,b.created_at,b.updated_at FROM bots b JOIN conversation_bots cb ON cb.bot_id=b.id WHERE cb.conversation_id=? ORDER BY cb.added_at")
+        .bind(&id)
+        .fetch_all(&state.db)
+        .await?;
+    Ok(axum::Json(ConversationDetail {
+        conversation,
+        members,
+        bots,
+    }))
+}
+
+#[derive(Deserialize)]
+struct GroupInput {
+    title: String,
+    usernames: Vec<String>,
+}
+
+async fn create_group(
+    State(state): State<AppState>,
+    axum::Extension(user): axum::Extension<UserIdentity>,
+    axum::Json(input): axum::Json<GroupInput>,
+) -> Result<axum::Json<Conversation>, AppError> {
+    let title = nonempty(&input.title, "title", 120)?;
+    let now = chrono::Utc::now().timestamp();
+    let id = Uuid::new_v4().to_string();
+    let mut tx = state.db.begin().await?;
+    sqlx::query(
+        "INSERT INTO conversations(id,kind,title,created_by,created_at) VALUES(?,'group',?,?,?)",
+    )
+    .bind(&id)
+    .bind(&title)
+    .bind(&user.id)
+    .bind(now)
+    .execute(&mut *tx)
+    .await?;
+    sqlx::query("INSERT INTO conversation_members(conversation_id,user_id,role,joined_at) VALUES(?,?,'owner',?)").bind(&id).bind(&user.id).bind(now).execute(&mut *tx).await?;
+    for username in input.usernames {
+        add_member_by_username(&mut tx, &id, &username, now).await?;
+    }
+    tx.commit().await?;
+    conversation(&state.db, &id, &user.id).await.map(axum::Json)
+}
+
+async fn open_direct(
+    State(state): State<AppState>,
+    axum::Extension(user): axum::Extension<UserIdentity>,
+    Path(username): Path<String>,
+) -> Result<axum::Json<Conversation>, AppError> {
+    let target = user_id_from_username(&state.db, &username).await?;
+    if target == user.id {
+        return Err(AppError::bad_request(
+            "cannot open a direct conversation with yourself",
+        ));
+    }
+    let direct_key = direct_key(&user.id, &target);
+    let now = chrono::Utc::now().timestamp();
+    let id = Uuid::new_v4().to_string();
+    let mut tx = state.db.begin().await?;
+    sqlx::query("INSERT INTO conversations(id,kind,title,direct_key,created_by,created_at) VALUES(?,'direct','',?,?,?) ON CONFLICT(direct_key) DO NOTHING").bind(&id).bind(&direct_key).bind(&user.id).bind(now).execute(&mut *tx).await?;
+    let actual_id: String = sqlx::query_scalar("SELECT id FROM conversations WHERE direct_key=?")
+        .bind(&direct_key)
+        .fetch_one(&mut *tx)
+        .await?;
+    for member in [&user.id, &target] {
+        sqlx::query("INSERT INTO conversation_members(conversation_id,user_id,role,joined_at) VALUES(?,?,'member',?) ON CONFLICT DO NOTHING").bind(&actual_id).bind(member).bind(now).execute(&mut *tx).await?;
+    }
+    tx.commit().await?;
+    conversation(&state.db, &actual_id, &user.id)
+        .await
+        .map(axum::Json)
+}
+
+#[derive(Deserialize)]
+struct MemberInput {
+    username: String,
+}
+
+async fn add_member(
+    State(state): State<AppState>,
+    axum::Extension(user): axum::Extension<UserIdentity>,
+    Path(id): Path<String>,
+    axum::Json(input): axum::Json<MemberInput>,
+) -> Result<StatusCode, AppError> {
+    require_group_owner(&state.db, &id, &user.id).await?;
+    let now = chrono::Utc::now().timestamp();
+    let mut tx = state.db.begin().await?;
+    add_member_by_username(&mut tx, &id, &input.username, now).await?;
+    tx.commit().await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+#[derive(Clone, Serialize, FromRow)]
+struct Attachment {
+    id: String,
+    file_name: String,
+    media_type: String,
+    byte_size: i64,
+    created_at: i64,
+}
+
+#[derive(Clone, Serialize, FromRow)]
+struct StoredMessage {
+    id: String,
+    conversation_id: String,
+    sender_kind: String,
+    sender_id: String,
+    sender_name: String,
+    body: String,
+    created_at: i64,
+}
+
+#[derive(Clone, Serialize)]
+struct Message {
+    #[serde(flatten)]
+    message: StoredMessage,
+    attachments: Vec<Attachment>,
+}
+
+async fn list_messages(
+    State(state): State<AppState>,
+    axum::Extension(user): axum::Extension<UserIdentity>,
+    Path(id): Path<String>,
+) -> Result<axum::Json<Vec<Message>>, AppError> {
+    require_member(&state.db, &id, &user.id).await?;
+    Ok(axum::Json(messages_for(&state.db, &id).await?))
+}
+
+#[derive(Deserialize)]
+struct SendMessageInput {
+    body: String,
+    attachment_ids: Vec<String>,
+}
+
+async fn send_message(
+    State(state): State<AppState>,
+    axum::Extension(user): axum::Extension<UserIdentity>,
+    Path(id): Path<String>,
+    axum::Json(input): axum::Json<SendMessageInput>,
+) -> Result<axum::Json<Message>, AppError> {
+    require_member(&state.db, &id, &user.id).await?;
+    let message = create_message(
+        &state.db,
+        &id,
+        "user",
+        &user.id,
+        input.body,
+        input.attachment_ids,
+        Some(&user.id),
+    )
+    .await?;
+    let _ = state.events.send(ConversationEvent {
+        conversation_id: id,
+        sender_id: user.id,
+    });
+    Ok(axum::Json(message))
+}
+
+async fn mark_read(
+    State(state): State<AppState>,
+    axum::Extension(user): axum::Extension<UserIdentity>,
+    Path(id): Path<String>,
+) -> Result<StatusCode, AppError> {
+    let now = chrono::Utc::now().timestamp();
+    let result = sqlx::query(
+        "UPDATE conversation_members SET last_read_at=? WHERE conversation_id=? AND user_id=?",
+    )
+    .bind(now)
+    .bind(id)
+    .bind(user.id)
+    .execute(&state.db)
+    .await?;
+    if result.rows_affected() == 0 {
+        return Err(AppError::not_found("conversation not found"));
+    }
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn upload_attachment(
+    State(state): State<AppState>,
+    axum::Extension(user): axum::Extension<UserIdentity>,
+    mut multipart: Multipart,
+) -> Result<axum::Json<Attachment>, AppError> {
+    let Some(field) = multipart
+        .next_field()
+        .await
+        .map_err(|_| AppError::bad_request("invalid multipart upload"))?
+    else {
+        return Err(AppError::bad_request("file is required"));
+    };
+    if field.name() != Some("file") {
+        return Err(AppError::bad_request("upload field must be named file"));
+    }
+    let file_name = field
+        .file_name()
+        .map(str::to_owned)
+        .filter(|name| !name.is_empty())
+        .unwrap_or_else(|| "upload".to_owned());
+    let media_type = field
+        .content_type()
+        .map(str::to_owned)
+        .unwrap_or_else(|| "application/octet-stream".to_owned());
+    let bytes = field
+        .bytes()
+        .await
+        .map_err(|_| AppError::bad_request("could not read upload"))?;
+    if bytes.is_empty() || bytes.len() > MAX_UPLOAD_BYTES {
+        return Err(AppError::bad_request(
+            "file must be between 1 byte and 50 MiB",
+        ));
+    }
+    let id = Uuid::new_v4().to_string();
+    let storage_name = format!("{id}.bin");
+    tokio::fs::write(state.uploads.join(&storage_name), &bytes).await?;
+    let now = chrono::Utc::now().timestamp();
+    sqlx::query("INSERT INTO attachments(id,owner_user_id,file_name,media_type,byte_size,storage_name,created_at) VALUES(?,?,?,?,?,?,?)").bind(&id).bind(&user.id).bind(&file_name).bind(&media_type).bind(bytes.len() as i64).bind(&storage_name).bind(now).execute(&state.db).await?;
+    Ok(axum::Json(Attachment {
+        id,
+        file_name,
+        media_type,
+        byte_size: bytes.len() as i64,
+        created_at: now,
+    }))
+}
+
+async fn download_attachment(
+    State(state): State<AppState>,
+    axum::Extension(user): axum::Extension<UserIdentity>,
+    Path(id): Path<String>,
+) -> Result<Response, AppError> {
+    let row: Option<(String, String, String, Option<String>)> = sqlx::query_as("SELECT a.storage_name,a.file_name,a.media_type,a.message_id FROM attachments a WHERE a.id=? AND (a.owner_user_id=? OR EXISTS(SELECT 1 FROM messages m JOIN conversation_members cm ON cm.conversation_id=m.conversation_id WHERE m.id=a.message_id AND cm.user_id=?))").bind(&id).bind(&user.id).bind(&user.id).fetch_optional(&state.db).await?;
+    let Some((storage_name, file_name, media_type, _)) = row else {
+        return Err(AppError::not_found("attachment not found"));
+    };
+    let bytes = tokio::fs::read(state.uploads.join(storage_name)).await?;
+    Ok((
+        [
+            (header::CONTENT_TYPE, media_type),
+            (
+                header::CONTENT_DISPOSITION,
+                format!("attachment; filename=\"{}\"", file_name.replace('"', "_")),
+            ),
+        ],
+        Body::from(bytes),
+    )
+        .into_response())
+}
+
+#[derive(Clone, Serialize, FromRow)]
+struct Bot {
+    id: String,
+    owner_user_id: String,
+    name: String,
+    token_prefix: String,
+    created_at: i64,
+    updated_at: i64,
+}
+
+#[derive(Serialize)]
+struct CreatedBot {
+    #[serde(flatten)]
+    bot: Bot,
+    token: String,
+}
+
+#[derive(Deserialize)]
+struct CreateBotInput {
+    name: String,
+}
+
+async fn list_bots(
+    State(state): State<AppState>,
+    axum::Extension(user): axum::Extension<UserIdentity>,
+) -> Result<axum::Json<Vec<Bot>>, AppError> {
+    Ok(axum::Json(sqlx::query_as("SELECT id,owner_user_id,name,token_prefix,created_at,updated_at FROM bots WHERE owner_user_id=? ORDER BY created_at DESC").bind(user.id).fetch_all(&state.db).await?))
+}
+
+async fn create_bot(
+    State(state): State<AppState>,
+    axum::Extension(user): axum::Extension<UserIdentity>,
+    axum::Json(input): axum::Json<CreateBotInput>,
+) -> Result<axum::Json<CreatedBot>, AppError> {
+    let name = nonempty(&input.name, "name", 80)?;
+    let id = Uuid::new_v4().to_string();
+    let token = new_bot_token();
+    let now = chrono::Utc::now().timestamp();
+    let bot = Bot {
+        id: id.clone(),
+        owner_user_id: user.id.clone(),
+        name,
+        token_prefix: token[..11].to_owned(),
+        created_at: now,
+        updated_at: now,
+    };
+    sqlx::query("INSERT INTO bots(id,owner_user_id,name,token_prefix,token_hash,created_at,updated_at) VALUES(?,?,?,?,?,?,?)").bind(&bot.id).bind(&bot.owner_user_id).bind(&bot.name).bind(&bot.token_prefix).bind(token_hash(&token)).bind(bot.created_at).bind(bot.updated_at).execute(&state.db).await?;
+    Ok(axum::Json(CreatedBot { bot, token }))
+}
+
+#[derive(Deserialize)]
+struct UpdateBotInput {
+    name: Option<String>,
+    new_owner_username: Option<String>,
+    rotate_token: Option<bool>,
+}
+
+#[derive(Serialize)]
+struct UpdatedBot {
+    #[serde(flatten)]
+    bot: Bot,
+    token: Option<String>,
+}
+
+async fn update_bot(
+    State(state): State<AppState>,
+    axum::Extension(user): axum::Extension<UserIdentity>,
+    Path(id): Path<String>,
+    axum::Json(input): axum::Json<UpdateBotInput>,
+) -> Result<axum::Json<UpdatedBot>, AppError> {
+    let mut bot: Bot = sqlx::query_as(
+        "SELECT id,owner_user_id,name,token_prefix,created_at,updated_at FROM bots WHERE id=?",
+    )
+    .bind(&id)
+    .fetch_optional(&state.db)
+    .await?
+    .ok_or_else(|| AppError::not_found("bot not found"))?;
+    if bot.owner_user_id != user.id {
+        return Err(AppError::forbidden(
+            "only the bot owner can update this bot",
+        ));
+    }
+    let name = input
+        .name
+        .as_deref()
+        .map(|value| nonempty(value, "name", 80))
+        .transpose()?
+        .unwrap_or_else(|| bot.name.clone());
+    let owner = match input.new_owner_username {
+        Some(username) => user_id_from_username(&state.db, &username).await?,
+        None => bot.owner_user_id.clone(),
+    };
+    let token = input.rotate_token.unwrap_or(false).then(new_bot_token);
+    let prefix = token
+        .as_ref()
+        .map(|value| value[..11].to_owned())
+        .unwrap_or_else(|| bot.token_prefix.clone());
+    let now = chrono::Utc::now().timestamp();
+    if let Some(token) = &token {
+        sqlx::query("UPDATE bots SET owner_user_id=?,name=?,token_prefix=?,token_hash=?,updated_at=? WHERE id=?").bind(&owner).bind(&name).bind(&prefix).bind(token_hash(token)).bind(now).bind(&id).execute(&state.db).await?;
+    } else {
+        sqlx::query("UPDATE bots SET owner_user_id=?,name=?,updated_at=? WHERE id=?")
+            .bind(&owner)
+            .bind(&name)
+            .bind(now)
+            .bind(&id)
+            .execute(&state.db)
+            .await?;
+    }
+    bot.owner_user_id = owner;
+    bot.name = name;
+    bot.token_prefix = prefix;
+    bot.updated_at = now;
+    Ok(axum::Json(UpdatedBot { bot, token }))
+}
+
+async fn add_bot_to_group(
+    State(state): State<AppState>,
+    axum::Extension(user): axum::Extension<UserIdentity>,
+    Path((id, conversation_id)): Path<(String, String)>,
+) -> Result<StatusCode, AppError> {
+    let bot: Option<String> =
+        sqlx::query_scalar("SELECT id FROM bots WHERE id=? AND owner_user_id=?")
+            .bind(&id)
+            .bind(&user.id)
+            .fetch_optional(&state.db)
+            .await?;
+    if bot.is_none() {
+        return Err(AppError::not_found("bot not found"));
+    }
+    require_group_owner(&state.db, &conversation_id, &user.id).await?;
+    sqlx::query("INSERT INTO conversation_bots(conversation_id,bot_id,added_at) VALUES(?,?,?) ON CONFLICT DO NOTHING").bind(&conversation_id).bind(id).bind(chrono::Utc::now().timestamp()).execute(&state.db).await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+#[derive(Deserialize)]
+struct BotMessageInput {
+    conversation_id: Option<String>,
+    recipient_username: Option<String>,
+    body: String,
+    attachment_ids: Option<Vec<String>>,
+}
+
+async fn bot_send_message(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    axum::Json(input): axum::Json<BotMessageInput>,
+) -> Result<axum::Json<Message>, AppError> {
+    let bot = bot_from_headers(&state.db, &headers).await?;
+    let conversation_id = match (input.conversation_id, input.recipient_username) {
+        (Some(id), None) => {
+            let allowed: Option<String> = sqlx::query_scalar("SELECT c.id FROM conversations c JOIN conversation_bots cb ON cb.conversation_id=c.id WHERE c.id=? AND cb.bot_id=?").bind(&id).bind(&bot.id).fetch_optional(&state.db).await?;
+            allowed
+                .ok_or_else(|| AppError::forbidden("bot is not a member of this conversation"))?
+        }
+        (None, Some(username)) => open_bot_direct(&state.db, &bot.id, &username).await?,
+        _ => {
+            return Err(AppError::bad_request(
+                "provide exactly one of conversation_id or recipient_username",
+            ));
+        }
+    };
+    let message = create_message(
+        &state.db,
+        &conversation_id,
+        "bot",
+        &bot.id,
+        input.body,
+        input.attachment_ids.unwrap_or_default(),
+        None,
+    )
+    .await?;
+    let _ = state.events.send(ConversationEvent {
+        conversation_id,
+        sender_id: bot.id,
+    });
+    Ok(axum::Json(message))
+}
+
+#[derive(Deserialize)]
+struct NotificationInput {
+    endpoint: String,
+    subscription: serde_json::Value,
+}
+
+async fn save_notification_subscription(
+    State(state): State<AppState>,
+    axum::Extension(user): axum::Extension<UserIdentity>,
+    axum::Json(input): axum::Json<NotificationInput>,
+) -> Result<StatusCode, AppError> {
+    let endpoint = nonempty(&input.endpoint, "endpoint", 4096)?;
+    sqlx::query("INSERT INTO notification_subscriptions(id,user_id,endpoint,subscription_json,created_at) VALUES(?,?,?,?,?) ON CONFLICT(endpoint) DO UPDATE SET user_id=excluded.user_id,subscription_json=excluded.subscription_json,created_at=excluded.created_at").bind(Uuid::new_v4().to_string()).bind(user.id).bind(endpoint).bind(serde_json::to_string(&input.subscription).map_err(|_| AppError::bad_request("subscription is invalid"))?).bind(chrono::Utc::now().timestamp()).execute(&state.db).await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn create_message(
+    db: &SqlitePool,
+    conversation_id: &str,
+    sender_kind: &str,
+    sender_id: &str,
+    body: String,
+    attachment_ids: Vec<String>,
+    attachment_owner: Option<&str>,
+) -> Result<Message, AppError> {
+    let body = bounded(&body, "body", 10_000)?;
+    if body.trim().is_empty() && attachment_ids.is_empty() {
+        return Err(AppError::bad_request(
+            "a message needs text or an attachment",
+        ));
+    }
+    let now = chrono::Utc::now().timestamp();
+    let id = Uuid::new_v4().to_string();
+    let mut tx = db.begin().await?;
+    if let Some(owner) = attachment_owner {
+        for attachment_id in &attachment_ids {
+            let available: Option<String> = sqlx::query_scalar(
+                "SELECT id FROM attachments WHERE id=? AND owner_user_id=? AND message_id IS NULL",
+            )
+            .bind(attachment_id)
+            .bind(owner)
+            .fetch_optional(&mut *tx)
+            .await?;
+            if available.is_none() {
+                return Err(AppError::bad_request(
+                    "attachment_ids must be your unattached uploads",
+                ));
+            }
+        }
+    } else if !attachment_ids.is_empty() {
+        return Err(AppError::bad_request(
+            "bot messages cannot attach user uploads",
+        ));
+    }
+    sqlx::query("INSERT INTO messages(id,conversation_id,sender_kind,sender_id,body,created_at) VALUES(?,?,?,?,?,?)").bind(&id).bind(conversation_id).bind(sender_kind).bind(sender_id).bind(body).bind(now).execute(&mut *tx).await?;
+    for attachment_id in attachment_ids {
+        sqlx::query("UPDATE attachments SET message_id=? WHERE id=?")
+            .bind(&id)
+            .bind(attachment_id)
+            .execute(&mut *tx)
+            .await?;
+    }
+    tx.commit().await?;
+    message(db, &id).await
+}
+
+async fn messages_for(db: &SqlitePool, conversation_id: &str) -> Result<Vec<Message>, AppError> {
+    let rows: Vec<StoredMessage> = sqlx::query_as("SELECT m.id,m.conversation_id,m.sender_kind,m.sender_id,COALESCE(p.display_name,b.name,m.sender_id) sender_name,m.body,m.created_at FROM messages m LEFT JOIN profiles p ON m.sender_kind='user' AND p.user_id=m.sender_id LEFT JOIN bots b ON m.sender_kind='bot' AND b.id=m.sender_id WHERE m.conversation_id=? ORDER BY m.created_at").bind(conversation_id).fetch_all(db).await?;
+    let mut result = Vec::with_capacity(rows.len());
+    for row in rows {
+        result.push(Message {
+            attachments: attachments_for(db, &row.id).await?,
+            message: row,
+        });
+    }
+    Ok(result)
+}
+
+async fn message(db: &SqlitePool, id: &str) -> Result<Message, AppError> {
+    let row: StoredMessage = sqlx::query_as("SELECT m.id,m.conversation_id,m.sender_kind,m.sender_id,COALESCE(p.display_name,b.name,m.sender_id) sender_name,m.body,m.created_at FROM messages m LEFT JOIN profiles p ON m.sender_kind='user' AND p.user_id=m.sender_id LEFT JOIN bots b ON m.sender_kind='bot' AND b.id=m.sender_id WHERE m.id=?").bind(id).fetch_optional(db).await?.ok_or_else(|| AppError::not_found("message not found"))?;
+    Ok(Message {
+        attachments: attachments_for(db, id).await?,
+        message: row,
+    })
+}
+
+async fn attachments_for(db: &SqlitePool, message_id: &str) -> Result<Vec<Attachment>, AppError> {
+    Ok(sqlx::query_as("SELECT id,file_name,media_type,byte_size,created_at FROM attachments WHERE message_id=? ORDER BY created_at").bind(message_id).fetch_all(db).await?)
+}
+
+async fn conversation(db: &SqlitePool, id: &str, user_id: &str) -> Result<Conversation, AppError> {
+    sqlx::query_as("SELECT c.id,c.kind,c.title,c.created_by,c.created_at,(SELECT body FROM messages WHERE conversation_id=c.id ORDER BY created_at DESC LIMIT 1) latest_body,(SELECT created_at FROM messages WHERE conversation_id=c.id ORDER BY created_at DESC LIMIT 1) latest_at,(SELECT COUNT(*) FROM messages WHERE conversation_id=c.id AND created_at>cm.last_read_at AND sender_id<>?) unread_count FROM conversations c JOIN conversation_members cm ON cm.conversation_id=c.id WHERE c.id=? AND cm.user_id=?").bind(user_id).bind(id).bind(user_id).fetch_optional(db).await?.ok_or_else(|| AppError::not_found("conversation not found"))
+}
+
+async fn require_member(
+    db: &SqlitePool,
+    conversation_id: &str,
+    user_id: &str,
+) -> Result<(), AppError> {
+    let found: Option<i64> = sqlx::query_scalar(
+        "SELECT 1 FROM conversation_members WHERE conversation_id=? AND user_id=?",
+    )
+    .bind(conversation_id)
+    .bind(user_id)
+    .fetch_optional(db)
+    .await?;
+    if found.is_none() {
+        return Err(AppError::not_found("conversation not found"));
+    }
+    Ok(())
+}
+
+async fn require_group_owner(
+    db: &SqlitePool,
+    conversation_id: &str,
+    user_id: &str,
+) -> Result<(), AppError> {
+    let found: Option<i64> = sqlx::query_scalar("SELECT 1 FROM conversations c JOIN conversation_members cm ON cm.conversation_id=c.id WHERE c.id=? AND c.kind='group' AND cm.user_id=? AND cm.role='owner'").bind(conversation_id).bind(user_id).fetch_optional(db).await?;
+    if found.is_none() {
+        return Err(AppError::forbidden(
+            "only a group owner can manage membership",
+        ));
+    }
+    Ok(())
+}
+
+async fn add_member_by_username(
+    tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+    conversation_id: &str,
+    username: &str,
+    now: i64,
+) -> Result<(), AppError> {
+    let user_id: Option<String> =
+        sqlx::query_scalar("SELECT user_id FROM profiles WHERE username=?")
+            .bind(username.trim())
+            .fetch_optional(&mut **tx)
+            .await?;
+    let user_id = user_id.ok_or_else(|| AppError::not_found("user not found"))?;
+    sqlx::query("INSERT INTO conversation_members(conversation_id,user_id,role,joined_at) VALUES(?,?,'member',?) ON CONFLICT DO NOTHING").bind(conversation_id).bind(user_id).bind(now).execute(&mut **tx).await?;
+    Ok(())
+}
+
+async fn user_id_from_username(db: &SqlitePool, username: &str) -> Result<String, AppError> {
+    sqlx::query_scalar("SELECT user_id FROM profiles WHERE username=?")
+        .bind(username.trim())
+        .fetch_optional(db)
+        .await?
+        .ok_or_else(|| AppError::not_found("user not found"))
+}
+
+async fn open_bot_direct(
+    db: &SqlitePool,
+    bot_id: &str,
+    recipient_username: &str,
+) -> Result<String, AppError> {
+    let recipient = user_id_from_username(db, recipient_username).await?;
+    let direct_key = format!("bot:{bot_id}:user:{recipient}");
+    let now = chrono::Utc::now().timestamp();
+    let id = Uuid::new_v4().to_string();
+    let mut tx = db.begin().await?;
+    sqlx::query("INSERT INTO conversations(id,kind,title,direct_key,created_by,created_at) VALUES(?,'direct','',?,?,?) ON CONFLICT(direct_key) DO NOTHING").bind(&id).bind(&direct_key).bind(&recipient).bind(now).execute(&mut *tx).await?;
+    let actual_id: String = sqlx::query_scalar("SELECT id FROM conversations WHERE direct_key=?")
+        .bind(&direct_key)
+        .fetch_one(&mut *tx)
+        .await?;
+    sqlx::query("INSERT INTO conversation_members(conversation_id,user_id,role,joined_at) VALUES(?,?,'member',?) ON CONFLICT DO NOTHING").bind(&actual_id).bind(&recipient).bind(now).execute(&mut *tx).await?;
+    sqlx::query("INSERT INTO conversation_bots(conversation_id,bot_id,added_at) VALUES(?,?,?) ON CONFLICT DO NOTHING").bind(&actual_id).bind(bot_id).bind(now).execute(&mut *tx).await?;
+    tx.commit().await?;
+    Ok(actual_id)
+}
+
+async fn bot_from_headers(db: &SqlitePool, headers: &HeaderMap) -> Result<Bot, AppError> {
+    let token = bearer_token(headers)?;
+    if !token.starts_with("sk-") {
+        return Err(AppError::unauthorized("bot token must start with sk-"));
+    }
+    sqlx::query_as("SELECT id,owner_user_id,name,token_prefix,created_at,updated_at FROM bots WHERE token_hash=?").bind(token_hash(token)).fetch_optional(db).await?.ok_or_else(|| AppError::unauthorized("bot token is invalid"))
+}
+
+async fn meta(db: &SqlitePool, key: &str) -> Result<String, AppError> {
+    sqlx::query_scalar("SELECT value FROM app_meta WHERE key=?")
+        .bind(key)
+        .fetch_one(db)
+        .await
+        .map_err(Into::into)
+}
+
+fn bearer_token(headers: &HeaderMap) -> Result<&str, AppError> {
+    headers
+        .get(header::AUTHORIZATION)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.strip_prefix("Bearer "))
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| AppError::unauthorized("Bearer token is required"))
+}
+
+fn valid_username(value: &str) -> Result<String, AppError> {
+    let value = value.trim();
+    if !(3..=32).contains(&value.len())
+        || !value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_' || byte == b'-')
+    {
+        return Err(AppError::bad_request(
+            "username must be 3-32 letters, numbers, underscores, or hyphens",
+        ));
+    }
+    Ok(value.to_owned())
+}
+
+fn nonempty(value: &str, field: &str, max: usize) -> Result<String, AppError> {
+    let value = bounded(value, field, max)?;
+    if value.trim().is_empty() {
+        return Err(AppError::bad_request(format!("{field} is required")));
+    }
+    Ok(value)
+}
+
+fn bounded(value: &str, field: &str, max: usize) -> Result<String, AppError> {
+    if value.chars().count() > max {
+        return Err(AppError::bad_request(format!(
+            "{field} must be at most {max} characters"
+        )));
+    }
+    Ok(value.trim().to_owned())
+}
+
+fn valid_origin(value: &str, label: &str) -> Result<String, AppError> {
+    let parsed = url::Url::parse(value.trim())
+        .map_err(|_| AppError::bad_request(format!("{label} must be a valid URL")))?;
+    let local = matches!(
+        parsed.host_str(),
+        Some("localhost") | Some("127.0.0.1") | Some("::1")
+    );
+    if !matches!(parsed.scheme(), "https" | "http")
+        || parsed.host_str().is_none()
+        || (parsed.scheme() == "http" && !local)
+        || parsed.query().is_some()
+        || parsed.fragment().is_some()
+        || !parsed.username().is_empty()
+        || parsed.password().is_some()
+    {
+        return Err(AppError::bad_request(format!(
+            "{label} must be an HTTPS origin"
+        )));
+    }
+    Ok(parsed.as_str().trim_end_matches('/').to_owned())
+}
+
+fn valid_audience(value: &str) -> Result<String, AppError> {
+    let value = value.trim().to_ascii_lowercase();
+    if value.is_empty() || value.contains(['/', ':', '?', '#', '@']) {
+        return Err(AppError::bad_request("auth_audience must be a hostname"));
+    }
+    Ok(value)
+}
+
+fn direct_key(first: &str, second: &str) -> String {
+    if first < second {
+        format!("user:{first}:user:{second}")
+    } else {
+        format!("user:{second}:user:{first}")
+    }
+}
+fn new_bot_token() -> String {
+    format!(
+        "sk-{}",
+        rand::rng()
+            .sample_iter(&Alphanumeric)
+            .take(40)
+            .map(char::from)
+            .collect::<String>()
+    )
+}
+fn token_hash(token: &str) -> String {
+    format!("{:x}", Sha256::digest(token.as_bytes()))
+}
+
+include!(concat!(env!("OUT_DIR"), "/embedded_assets_fingerprint.rs"));
+
+#[derive(RustEmbed)]
+#[folder = "web/dist/"]
+struct Assets;
+
+async fn static_asset(uri: axum::http::Uri) -> Response {
+    if uri.path().starts_with("/api/") || uri.path().starts_with("/bot/") {
+        return StatusCode::NOT_FOUND.into_response();
+    }
+    let requested = uri.path().trim_start_matches('/');
+    let path = if requested.is_empty() {
+        "index.html"
+    } else {
+        requested
+    };
+    let asset = Assets::get(path);
+    let fallback = asset.is_none();
+    match asset.or_else(|| Assets::get("index.html")) {
+        Some(asset) => {
+            let mime = if fallback || path == "index.html" {
+                "text/html; charset=utf-8"
+            } else {
+                match path.rsplit('.').next() {
+                    Some("js") => "text/javascript",
+                    Some("css") => "text/css",
+                    Some("svg") => "image/svg+xml",
+                    Some("webmanifest") => "application/manifest+json",
+                    Some("png") => "image/png",
+                    Some("ico") => "image/x-icon",
+                    _ => "application/octet-stream",
+                }
+            };
+            ([(header::CONTENT_TYPE, mime)], asset.data).into_response()
+        }
+        None => StatusCode::NOT_FOUND.into_response(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn direct_key_is_stable_for_both_members() {
+        assert_eq!(direct_key("a", "b"), direct_key("b", "a"));
+    }
+
+    #[test]
+    fn bot_tokens_have_an_unambiguous_public_prefix() {
+        assert!(new_bot_token().starts_with("sk-"));
+    }
+
+    #[tokio::test]
+    async fn migrations_create_setup_defaults() {
+        let pool = db::connect_memory().await.unwrap();
+        assert_eq!(meta(&pool, "setup_complete").await.unwrap(), "false");
+    }
+}
