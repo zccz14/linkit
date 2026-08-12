@@ -17,6 +17,8 @@ tokens.
 - **PWA and notifications** — installable manifest, service worker, and an API
   for signed-in browsers to register push subscriptions. A push provider can
   later deliver to those stored subscriptions without changing the client API.
+- **Bilingual UI** — English and Chinese interfaces, with an in-app language
+  picker and browser-language default on first visit.
 - **Native Bots** — each Bot has a durable UUID, one human owner, an `sk-…`
   bearer token, owner transfer, and token rotation. Bots can message a joined
   group or directly message any Linkit user.
