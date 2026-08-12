@@ -1,0 +1,10 @@
+{
+  "name": "Linkit",
+  "short_name": "Linkit",
+  "description": "Profiles and instant messaging, powered by Auth Mini.",
+  "start_url": "/#/inbox",
+  "display": "standalone",
+  "background_color": "#ffffff",
+  "theme_color": "#18181b",
+  "icons": [{ "src": "/linkit.svg", "sizes": "any", "type": "image/svg+xml" }]
+}
