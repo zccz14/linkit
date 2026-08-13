@@ -40,7 +40,8 @@ initialize the instance. The default production issuer is `https://auth.ntnl.io`
 ## Bot API
 
 Create a Bot as its owner in the Linkit UI. The generated token is shown exactly
-once and starts with `sk-`. Send a message using its token:
+once and starts with `sk-`. Send a direct message using its token and the
+recipient's Linkit username:
 
 ```bash
 curl https://linkit.ntnl.io/bot/v1/messages \
@@ -51,6 +52,9 @@ curl https://linkit.ntnl.io/bot/v1/messages \
 
 For a group, add the Bot in the owner-managed group path and supply its
 `conversation_id` instead. A Bot cannot post into a group it has not joined.
+
+See [the Bot direct-message guide](docs/bot-direct-messages.md) for the full
+creation flow, token handling, response contract, and error handling.
 
 ## Development
 
