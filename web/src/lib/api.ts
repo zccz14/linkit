@@ -70,6 +70,23 @@ export type Me = {
   profile?: Profile;
 };
 
+export type SystemOverview = {
+  generated_at: number;
+  cpu_usage_percent: number;
+  used_memory_bytes: number;
+  total_memory_bytes: number;
+  received_bytes_per_second: number;
+  transmitted_bytes_per_second: number;
+  received_bytes_total: number;
+  transmitted_bytes_total: number;
+  sqlite_bytes: number;
+  disks: Array<{
+    mount_point: string;
+    total_bytes: number;
+    available_bytes: number;
+  }>;
+};
+
 export function openPagePath(search = window.location.search) {
   const params = new URLSearchParams(search);
   const open = params.get("open");
