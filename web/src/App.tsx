@@ -319,7 +319,7 @@ function Shell({ me, sdk }: { me: Me; sdk: AuthMiniApi }) {
     refetchInterval: 4_000,
   });
   const [notificationPermission, setNotificationPermission] = useState(
-    Notification.permission,
+    () => window.Notification?.permission,
   );
   useEffect(
     () =>
@@ -331,9 +331,10 @@ function Shell({ me, sdk }: { me: Me; sdk: AuthMiniApi }) {
         if (
           event.sender_id !== me.id &&
           notificationPermission === "granted" &&
-          document.visibilityState !== "visible"
+          document.visibilityState !== "visible" &&
+          window.Notification
         )
-          new Notification(t("notification.title"), {
+          new window.Notification(t("notification.title"), {
             body: t("notification.body"),
           });
       }),
@@ -421,7 +422,7 @@ function Shell({ me, sdk }: { me: Me; sdk: AuthMiniApi }) {
               size="icon-sm"
               aria-label={t("notification.enable")}
               onClick={() =>
-                void Notification.requestPermission().then(
+                void window.Notification?.requestPermission().then(
                   setNotificationPermission,
                 )
               }

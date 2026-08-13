@@ -8,6 +8,7 @@ import {
   translations,
 } from "../src/lib/locale.ts";
 import { openPagePath } from "../src/lib/api.ts";
+import { renderErrorCopy } from "../src/lib/render-error-copy.ts";
 
 test("every supported locale has every translation", () => {
   const keys = Object.keys(translations.en).sort();
@@ -35,4 +36,9 @@ test("open-page requests preserve their authenticated destination", () => {
     "#/compose/alice%2Fsmith",
   );
   assert.equal(openPagePath("?open=message"), "#/inbox");
+});
+
+test("render failure fallback matches the browser language", () => {
+  assert.equal(renderErrorCopy("zh-TW").refresh, "刷新页面");
+  assert.equal(renderErrorCopy("en-US").refresh, "Refresh page");
 });
