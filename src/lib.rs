@@ -2,7 +2,11 @@ pub mod auth;
 pub mod config;
 pub mod db;
 
-use std::{path::PathBuf, sync::Arc};
+use std::{
+    path::{Path as FilePath, PathBuf},
+    sync::{Arc, Mutex},
+    time::Instant,
+};
 
 use auth_mini_axum::{AuthMiniLayer, JwksCachePolicy};
 use axum::{
@@ -20,6 +24,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 use sha2::{Digest, Sha256};
 use sqlx::{FromRow, SqlitePool};
+use sysinfo::{Disks, Networks, System};
 use tower_http::{compression::CompressionLayer, limit::RequestBodyLimitLayer, trace::TraceLayer};
 use uuid::Uuid;
 
@@ -35,6 +40,8 @@ pub struct AppState {
     pub db: SqlitePool,
     pub auth: AuthManager,
     pub uploads: Arc<PathBuf>,
+    database_path: Arc<PathBuf>,
+    system_monitor: Arc<Mutex<SystemMonitor>>,
     events: tokio::sync::broadcast::Sender<ConversationEvent>,
 }
 
@@ -52,6 +59,8 @@ impl AppState {
             db,
             auth,
             uploads: Arc::new(bootstrap.upload_dir),
+            database_path: Arc::new(bootstrap.database_path),
+            system_monitor: Arc::new(Mutex::new(SystemMonitor::new())),
             events,
         })
     }
@@ -60,6 +69,7 @@ impl AppState {
 pub fn router(state: AppState) -> Router {
     let signed_in = Router::new()
         .route("/api/me", get(me))
+        .route("/api/admin/system", get(system_overview))
         .route("/api/events", get(events))
         .route("/api/profile", put(update_profile))
         .route("/api/users", get(list_users))
@@ -346,6 +356,116 @@ async fn me(
         id: user.id,
         root,
     }))
+}
+
+#[derive(Serialize)]
+struct SystemOverview {
+    generated_at: i64,
+    cpu_usage_percent: f32,
+    used_memory_bytes: u64,
+    total_memory_bytes: u64,
+    received_bytes_per_second: f64,
+    transmitted_bytes_per_second: f64,
+    received_bytes_total: u64,
+    transmitted_bytes_total: u64,
+    sqlite_bytes: u64,
+    disks: Vec<DiskOverview>,
+}
+
+#[derive(Serialize)]
+struct DiskOverview {
+    mount_point: String,
+    total_bytes: u64,
+    available_bytes: u64,
+}
+
+struct SystemMonitor {
+    system: System,
+    disks: Disks,
+    networks: Networks,
+    previous_network: Option<(u64, u64, Instant)>,
+}
+
+impl SystemMonitor {
+    fn new() -> Self {
+        Self {
+            system: System::new_all(),
+            disks: Disks::new_with_refreshed_list(),
+            networks: Networks::new_with_refreshed_list(),
+            previous_network: None,
+        }
+    }
+
+    fn snapshot(&mut self, sqlite_bytes: u64) -> SystemOverview {
+        self.system.refresh_cpu_usage();
+        self.system.refresh_memory();
+        self.disks.refresh(false);
+        self.networks.refresh(false);
+
+        let received_bytes_total: u64 = self
+            .networks
+            .values()
+            .map(|network| network.total_received())
+            .sum();
+        let transmitted_bytes_total: u64 = self
+            .networks
+            .values()
+            .map(|network| network.total_transmitted())
+            .sum();
+        let now = Instant::now();
+        let (received_bytes_per_second, transmitted_bytes_per_second) = match self.previous_network
+        {
+            Some((received, transmitted, previous_at)) => {
+                let elapsed = now.duration_since(previous_at).as_secs_f64();
+                if elapsed > 0.0 {
+                    (
+                        received_bytes_total.saturating_sub(received) as f64 / elapsed,
+                        transmitted_bytes_total.saturating_sub(transmitted) as f64 / elapsed,
+                    )
+                } else {
+                    (0.0, 0.0)
+                }
+            }
+            None => (0.0, 0.0),
+        };
+        self.previous_network = Some((received_bytes_total, transmitted_bytes_total, now));
+
+        SystemOverview {
+            generated_at: chrono::Utc::now().timestamp(),
+            cpu_usage_percent: self.system.global_cpu_usage(),
+            used_memory_bytes: self.system.used_memory(),
+            total_memory_bytes: self.system.total_memory(),
+            received_bytes_per_second,
+            transmitted_bytes_per_second,
+            received_bytes_total,
+            transmitted_bytes_total,
+            sqlite_bytes,
+            disks: self
+                .disks
+                .list()
+                .iter()
+                .map(|disk| DiskOverview {
+                    mount_point: disk.mount_point().display().to_string(),
+                    total_bytes: disk.total_space(),
+                    available_bytes: disk.available_space(),
+                })
+                .collect(),
+        }
+    }
+}
+
+async fn system_overview(
+    State(state): State<AppState>,
+    axum::Extension(user): axum::Extension<UserIdentity>,
+) -> Result<axum::Json<SystemOverview>, AppError> {
+    require_root(&state.db, &user.id).await?;
+    let sqlite_bytes = sqlite_bytes(&state.database_path)?;
+    let overview = state
+        .system_monitor
+        .lock()
+        .expect("system monitor mutex is not poisoned")
+        .snapshot(sqlite_bytes);
+    Ok(axum::Json(overview))
 }
 
 #[derive(Deserialize)]
@@ -1008,6 +1128,30 @@ async fn require_group_owner(
     Ok(())
 }
 
+async fn require_root(db: &SqlitePool, user_id: &str) -> Result<(), AppError> {
+    if meta(db, "root_user_id").await? != user_id {
+        return Err(AppError::forbidden(
+            "only the Root User can view system resources",
+        ));
+    }
+    Ok(())
+}
+
+fn sqlite_bytes(database_path: &FilePath) -> Result<u64, AppError> {
+    let mut bytes = file_size(database_path)?;
+    bytes += file_size(&database_path.with_extension("sqlite3-wal"))?;
+    bytes += file_size(&database_path.with_extension("sqlite3-shm"))?;
+    Ok(bytes)
+}
+
+fn file_size(path: &FilePath) -> Result<u64, AppError> {
+    match std::fs::metadata(path) {
+        Ok(metadata) => Ok(metadata.len()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(0),
+        Err(error) => Err(error.into()),
+    }
+}
+
 async fn add_member_by_username(
     tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
     conversation_id: &str,
@@ -1217,5 +1361,35 @@ mod tests {
     async fn migrations_create_setup_defaults() {
         let pool = db::connect_memory().await.unwrap();
         assert_eq!(meta(&pool, "setup_complete").await.unwrap(), "false");
+    }
+
+    #[tokio::test]
+    async fn system_overview_is_limited_to_the_configured_root_user() {
+        let pool = db::connect_memory().await.unwrap();
+        sqlx::query("UPDATE app_meta SET value=? WHERE key='root_user_id'")
+            .bind("root-user")
+            .execute(&pool)
+            .await
+            .unwrap();
+        require_root(&pool, "root-user").await.unwrap();
+        assert_eq!(
+            require_root(&pool, "ordinary-user")
+                .await
+                .unwrap_err()
+                .status,
+            StatusCode::FORBIDDEN
+        );
+    }
+
+    #[test]
+    fn sqlite_bytes_includes_wal_and_shared_memory_files() {
+        let directory = std::env::temp_dir().join(Uuid::new_v4().to_string());
+        std::fs::create_dir(&directory).unwrap();
+        let database = directory.join("linkit.sqlite3");
+        std::fs::write(&database, [0; 5]).unwrap();
+        std::fs::write(directory.join("linkit.sqlite3-wal"), [0; 7]).unwrap();
+        std::fs::write(directory.join("linkit.sqlite3-shm"), [0; 11]).unwrap();
+        assert_eq!(sqlite_bytes(&database).unwrap(), 23);
+        std::fs::remove_dir_all(directory).unwrap();
     }
 }

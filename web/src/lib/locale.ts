@@ -25,6 +25,7 @@ const english = {
   "navigation.directory": "Directory",
   "navigation.bots": "Bots",
   "navigation.profile": "Profile",
+  "navigation.admin": "Administration",
   "navigation.conversations": "Conversations",
   "navigation.newGroup": "New group",
   "notification.enable": "Enable notifications",
@@ -93,6 +94,21 @@ const english = {
   "profileEditor.saved": "Profile saved",
   "profileEditor.avatarError": "Avatar must be an image",
   "profileEditor.uploadError": "Upload failed",
+  "admin.title": "System overview",
+  "admin.description":
+    "Live host resources for this Linkit instance. Refreshes every 5 seconds.",
+  "admin.cpu": "CPU",
+  "admin.memory": "Memory",
+  "admin.network": "Network",
+  "admin.disk": "Disk",
+  "admin.sqlite": "SQLite",
+  "admin.used": "{used} used of {total}",
+  "admin.receive": "Receive",
+  "admin.transmit": "Transmit",
+  "admin.total": "Total",
+  "admin.mountPoint": "Mount point",
+  "admin.available": "Available",
+  "admin.updated": "Updated {time}",
 } as const;
 
 export type TranslationKey = keyof typeof english;
@@ -119,6 +135,7 @@ const chinese: Record<TranslationKey, string> = {
   "navigation.directory": "用户目录",
   "navigation.bots": "机器人",
   "navigation.profile": "个人资料",
+  "navigation.admin": "管理后台",
   "navigation.conversations": "对话",
   "navigation.newGroup": "新建群聊",
   "notification.enable": "启用通知",
@@ -184,6 +201,20 @@ const chinese: Record<TranslationKey, string> = {
   "profileEditor.saved": "个人资料已保存",
   "profileEditor.avatarError": "头像必须是图片",
   "profileEditor.uploadError": "上传失败",
+  "admin.title": "系统概况",
+  "admin.description": "此 Linkit 实例的实时主机资源，每 5 秒刷新。",
+  "admin.cpu": "CPU",
+  "admin.memory": "内存",
+  "admin.network": "网络",
+  "admin.disk": "磁盘",
+  "admin.sqlite": "SQLite",
+  "admin.used": "{used} / {total}",
+  "admin.receive": "接收",
+  "admin.transmit": "发送",
+  "admin.total": "累计",
+  "admin.mountPoint": "挂载点",
+  "admin.available": "可用",
+  "admin.updated": "更新于 {time}",
 };
 
 export const translations = {

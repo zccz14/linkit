@@ -23,6 +23,7 @@ import {
   SearchIcon,
   SendIcon,
   SettingsIcon,
+  ShieldCheckIcon,
   UserRoundIcon,
   UsersRoundIcon,
 } from "lucide-react";
@@ -79,6 +80,7 @@ import {
   type Me,
   type Message,
   type Profile,
+  type SystemOverview,
 } from "@/lib/api";
 
 const profileRoute = (username: string) =>
@@ -342,6 +344,9 @@ function Shell({ me, sdk }: { me: Me; sdk: AuthMiniApi }) {
     ["/directory", t("navigation.directory"), UsersRoundIcon],
     ["/bots", t("navigation.bots"), BotIcon],
     ["/settings/profile", t("navigation.profile"), SettingsIcon],
+    ...(me.root
+      ? [["/admin/system", t("navigation.admin"), ShieldCheckIcon] as const]
+      : []),
   ] as const;
 
   return (
@@ -451,6 +456,7 @@ function Shell({ me, sdk }: { me: Me; sdk: AuthMiniApi }) {
             path="/settings/profile"
             element={<ProfileEditor me={me} sdk={sdk} />}
           />
+          <Route path="/admin/system" element={<SystemDashboard sdk={sdk} />} />
           <Route path="*" element={<Navigate to="/inbox" replace />} />
         </Routes>
       </main>
@@ -474,6 +480,113 @@ function InboxEmpty() {
       </Empty>
     </div>
   );
+}
+
+function SystemDashboard({ sdk }: { sdk: AuthMiniApi }) {
+  const { locale, t } = useI18n();
+  const overview = useQuery({
+    queryKey: ["admin", "system"],
+    queryFn: () => api<SystemOverview>(sdk, "/api/admin/system"),
+    refetchInterval: 5_000,
+  });
+  if (overview.isPending)
+    return <LoadingScreen>{t("profile.loading")}</LoadingScreen>;
+  if (overview.isError)
+    return <LoadingScreen>{overview.error.message}</LoadingScreen>;
+
+  const data = overview.data;
+  return (
+    <Page title={t("admin.title")} description={t("admin.description")}>
+      <p className="mb-4 text-sm text-muted-foreground">
+        {t("admin.updated", {
+          time: new Date(data.generated_at * 1000).toLocaleTimeString(locale),
+        })}
+      </p>
+      <div className="grid gap-4 sm:grid-cols-2">
+        <MetricCard
+          label={t("admin.cpu")}
+          value={`${data.cpu_usage_percent.toFixed(1)}%`}
+        />
+        <MetricCard
+          label={t("admin.memory")}
+          value={t("admin.used", {
+            used: byteSize(data.used_memory_bytes),
+            total: byteSize(data.total_memory_bytes),
+          })}
+        />
+        <MetricCard
+          label={t("admin.network")}
+          value={`${t("admin.receive")} ${byteRate(data.received_bytes_per_second)} · ${t("admin.transmit")} ${byteRate(data.transmitted_bytes_per_second)}`}
+          detail={`${t("admin.total")}: ↓ ${byteSize(data.received_bytes_total)} · ↑ ${byteSize(data.transmitted_bytes_total)}`}
+        />
+        <MetricCard
+          label={t("admin.sqlite")}
+          value={byteSize(data.sqlite_bytes)}
+        />
+      </div>
+      <Card className="mt-6">
+        <CardHeader>
+          <CardTitle>{t("admin.disk")}</CardTitle>
+        </CardHeader>
+        <CardContent className="flex flex-col gap-4">
+          {data.disks.map((disk) => (
+            <div
+              key={disk.mount_point}
+              className="flex flex-wrap items-center justify-between gap-2 border-b pb-4 last:border-0 last:pb-0"
+            >
+              <div>
+                <p className="font-medium">{disk.mount_point}</p>
+                <p className="text-sm text-muted-foreground">
+                  {t("admin.used", {
+                    used: byteSize(disk.total_bytes - disk.available_bytes),
+                    total: byteSize(disk.total_bytes),
+                  })}
+                </p>
+              </div>
+              <Badge variant="secondary">
+                {t("admin.available")}: {byteSize(disk.available_bytes)}
+              </Badge>
+            </div>
+          ))}
+        </CardContent>
+      </Card>
+    </Page>
+  );
+}
+
+function MetricCard({
+  detail,
+  label,
+  value,
+}: {
+  detail?: string;
+  label: string;
+  value: string;
+}) {
+  return (
+    <Card>
+      <CardHeader>
+        <CardDescription>{label}</CardDescription>
+        <CardTitle className="text-2xl">{value}</CardTitle>
+        {detail ? <CardDescription>{detail}</CardDescription> : null}
+      </CardHeader>
+    </Card>
+  );
+}
+
+function byteSize(bytes: number) {
+  const units = ["B", "KiB", "MiB", "GiB", "TiB"];
+  let value = bytes;
+  let unit = 0;
+  while (value >= 1024 && unit < units.length - 1) {
+    value /= 1024;
+    unit += 1;
+  }
+  return `${value.toFixed(value >= 10 || unit === 0 ? 0 : 1)} ${units[unit]}`;
+}
+
+function byteRate(bytes: number) {
+  return `${byteSize(bytes)}/s`;
 }
 
 function ConversationPage({ me, sdk }: { me: Me; sdk: AuthMiniApi }) {
