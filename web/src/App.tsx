@@ -82,6 +82,10 @@ import {
   type Profile,
   type SystemOverview,
 } from "@/lib/api";
+import {
+  announceIncomingMessage,
+  prepareMessageAlertTone,
+} from "@/lib/message-alert";
 
 const profileRoute = (username: string) =>
   `/people/${encodeURIComponent(username)}`;
@@ -321,6 +325,18 @@ function Shell({ me, sdk }: { me: Me; sdk: AuthMiniApi }) {
   const [notificationPermission, setNotificationPermission] = useState(
     () => window.Notification?.permission,
   );
+  useEffect(() => {
+    window.addEventListener("pointerdown", prepareMessageAlertTone, {
+      once: true,
+    });
+    window.addEventListener("keydown", prepareMessageAlertTone, {
+      once: true,
+    });
+    return () => {
+      window.removeEventListener("pointerdown", prepareMessageAlertTone);
+      window.removeEventListener("keydown", prepareMessageAlertTone);
+    };
+  }, []);
   useEffect(
     () =>
       subscribeToEvents(sdk, (event) => {
@@ -328,17 +344,13 @@ function Shell({ me, sdk }: { me: Me; sdk: AuthMiniApi }) {
         void queryClient.invalidateQueries({
           queryKey: ["messages", event.conversation_id],
         });
-        if (
-          event.sender_id !== me.id &&
-          notificationPermission === "granted" &&
-          document.visibilityState !== "visible" &&
-          window.Notification
-        )
-          new window.Notification(t("notification.title"), {
+        if (event.sender_id !== me.id)
+          announceIncomingMessage({
+            title: t("notification.title"),
             body: t("notification.body"),
           });
       }),
-    [me.id, notificationPermission, queryClient, sdk, t],
+    [me.id, queryClient, sdk, t],
   );
   const links = [
     ["/inbox", t("navigation.inbox"), MessageCircleIcon],
