@@ -49,6 +49,13 @@ export type Message = {
   body: string;
   created_at: number;
   attachments: Attachment[];
+  cursor: string;
+};
+
+export type MessagePage = {
+  messages: Message[];
+  older_cursor?: string;
+  newer_cursor?: string;
 };
 
 export type Bot = {
@@ -118,7 +125,11 @@ export async function api<T>(
 
 export function subscribeToEvents(
   sdk: AuthMiniApi,
-  onEvent: (event: { conversation_id: string; sender_id: string }) => void,
+  onEvent: (event: {
+    conversation_id: string;
+    sender_id: string;
+    message: Message;
+  }) => void,
 ) {
   const controller = new AbortController();
   void authenticatedFetch(sdk, "/api/events", { signal: controller.signal })
@@ -144,6 +155,7 @@ export function subscribeToEvents(
               JSON.parse(data) as {
                 conversation_id: string;
                 sender_id: string;
+                message: Message;
               },
             );
         }

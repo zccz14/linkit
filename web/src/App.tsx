@@ -1,5 +1,11 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import {
+  type InfiniteData,
+  useInfiniteQuery,
+  useMutation,
+  useQuery,
+  useQueryClient,
+} from "@tanstack/react-query";
 import type { AuthMiniApi } from "auth-mini/sdk/browser";
 import { AuthMiniProvider, useAuthMini } from "auth-mini-react-components";
 import {
@@ -97,6 +103,7 @@ import {
   type ConversationDetail,
   type Me,
   type Message,
+  type MessagePage,
   type Profile,
   type SystemOverview,
 } from "@/lib/api";
@@ -107,6 +114,23 @@ import {
 
 const profileRoute = (username: string) =>
   `/people/${encodeURIComponent(username)}`;
+
+function appendMessage(
+  data: InfiniteData<MessagePage> | undefined,
+  message: Message,
+) {
+  if (!data || data.pages.some((page) => page.messages.some(({ id }) => id === message.id)))
+    return data;
+  const lastPage = data.pages.length - 1;
+  return {
+    ...data,
+    pages: data.pages.map((page, index) =>
+      index === lastPage
+        ? { ...page, messages: [...page.messages, message] }
+        : page,
+    ),
+  };
+}
 
 export default function App() {
   const { t } = useI18n();
@@ -360,9 +384,10 @@ function Shell({ me, sdk }: { me: Me; sdk: AuthMiniApi }) {
     () =>
       subscribeToEvents(sdk, (event) => {
         void queryClient.invalidateQueries({ queryKey: ["conversations"] });
-        void queryClient.invalidateQueries({
-          queryKey: ["messages", event.conversation_id],
-        });
+        queryClient.setQueryData<InfiniteData<MessagePage>>(
+          ["messages", event.conversation_id],
+          (data) => appendMessage(data, event.message),
+        );
         if (event.sender_id !== me.id)
           announceIncomingMessage({
             title: t("notification.title"),
@@ -836,10 +861,18 @@ function ConversationPage({ me, sdk }: { me: Me; sdk: AuthMiniApi }) {
   const [attachments, setAttachments] = useState<Attachment[]>([]);
   const [manageOpen, setManageOpen] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
-  const messages = useQuery({
+  const messages = useInfiniteQuery({
     queryKey: ["messages", id],
-    queryFn: () => api<Message[]>(sdk, `/api/conversations/${id}/messages`),
-    refetchInterval: 3_000,
+    initialPageParam: "",
+    queryFn: ({ pageParam }) =>
+      api<MessagePage>(
+        sdk,
+        `/api/conversations/${id}/messages${pageParam}`,
+      ),
+    getPreviousPageParam: (page) =>
+      page.older_cursor ? `?before_cursor=${encodeURIComponent(page.older_cursor)}` : undefined,
+    getNextPageParam: (page) =>
+      page.newer_cursor ? `?after_cursor=${encodeURIComponent(page.newer_cursor)}` : undefined,
   });
   const detail = useQuery({
     queryKey: ["conversation", id],
@@ -854,10 +887,13 @@ function ConversationPage({ me, sdk }: { me: Me; sdk: AuthMiniApi }) {
           attachment_ids: attachments.map((attachment) => attachment.id),
         }),
       }),
-    onSuccess: () => {
+    onSuccess: (message) => {
       setBody("");
       setAttachments([]);
-      void queryClient.invalidateQueries({ queryKey: ["messages", id] });
+      queryClient.setQueryData<InfiniteData<MessagePage>>(
+        ["messages", id],
+        (data) => appendMessage(data, message),
+      );
       void queryClient.invalidateQueries({ queryKey: ["conversations"] });
     },
     onError: (error) => toast.error(error.message),
@@ -926,7 +962,20 @@ function ConversationPage({ me, sdk }: { me: Me; sdk: AuthMiniApi }) {
       )}
       <section className="min-h-0 flex-1 overflow-auto p-4 md:p-6">
         <div className="flex flex-col gap-4">
-          {messages.data?.map((message) => (
+          {messages.hasPreviousPage ? (
+            <Button
+              className="self-center"
+              variant="ghost"
+              size="sm"
+              disabled={messages.isFetchingPreviousPage}
+              onClick={() => void messages.fetchPreviousPage()}
+            >
+              {messages.isFetchingPreviousPage
+                ? t("conversation.loadingOlder")
+                : t("conversation.loadOlder")}
+            </Button>
+          ) : null}
+          {messages.data?.pages.flatMap((page) => page.messages).map((message) => (
             <MessageRow
               key={message.id}
               message={message}
