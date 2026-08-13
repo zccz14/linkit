@@ -34,6 +34,7 @@ use crate::{
 };
 
 const MAX_UPLOAD_BYTES: usize = 52_428_800;
+const MESSAGE_PAGE_SIZE: i64 = 50;
 const LIST_CONVERSATIONS_QUERY: &str = "SELECT c.id,c.kind,c.title,c.created_by,c.created_at,CASE WHEN c.kind='direct' THEN COALESCE((SELECT p.display_name FROM conversation_members cm_peer JOIN profiles p ON p.user_id=cm_peer.user_id WHERE cm_peer.conversation_id=c.id AND cm_peer.user_id<>? LIMIT 1),(SELECT b.name FROM conversation_bots cb JOIN bots b ON b.id=cb.bot_id WHERE cb.conversation_id=c.id LIMIT 1)) END counterpart_name,CASE WHEN c.kind='direct' THEN (SELECT p.avatar_attachment_id FROM conversation_members cm_peer JOIN profiles p ON p.user_id=cm_peer.user_id WHERE cm_peer.conversation_id=c.id AND cm_peer.user_id<>? LIMIT 1) END counterpart_avatar_attachment_id,(SELECT body FROM messages WHERE conversation_id=c.id ORDER BY created_at DESC LIMIT 1) latest_body,(SELECT created_at FROM messages WHERE conversation_id=c.id ORDER BY created_at DESC LIMIT 1) latest_at,(SELECT COUNT(*) FROM messages WHERE conversation_id=c.id AND created_at>cm.last_read_at AND sender_id<>?) unread_count FROM conversations c JOIN conversation_members cm ON cm.conversation_id=c.id WHERE cm.user_id=? ORDER BY COALESCE(latest_at,c.created_at) DESC";
 const CONVERSATION_QUERY: &str = "SELECT c.id,c.kind,c.title,c.created_by,c.created_at,CASE WHEN c.kind='direct' THEN COALESCE((SELECT p.display_name FROM conversation_members cm_peer JOIN profiles p ON p.user_id=cm_peer.user_id WHERE cm_peer.conversation_id=c.id AND cm_peer.user_id<>? LIMIT 1),(SELECT b.name FROM conversation_bots cb JOIN bots b ON b.id=cb.bot_id WHERE cb.conversation_id=c.id LIMIT 1)) END counterpart_name,CASE WHEN c.kind='direct' THEN (SELECT p.avatar_attachment_id FROM conversation_members cm_peer JOIN profiles p ON p.user_id=cm_peer.user_id WHERE cm_peer.conversation_id=c.id AND cm_peer.user_id<>? LIMIT 1) END counterpart_avatar_attachment_id,(SELECT body FROM messages WHERE conversation_id=c.id ORDER BY created_at DESC LIMIT 1) latest_body,(SELECT created_at FROM messages WHERE conversation_id=c.id ORDER BY created_at DESC LIMIT 1) latest_at,(SELECT COUNT(*) FROM messages WHERE conversation_id=c.id AND created_at>cm.last_read_at AND sender_id<>?) unread_count FROM conversations c JOIN conversation_members cm ON cm.conversation_id=c.id WHERE c.id=? AND cm.user_id=?";
 
@@ -206,6 +207,7 @@ struct Health {
 struct ConversationEvent {
     conversation_id: String,
     sender_id: String,
+    message: Message,
 }
 
 async fn events(
@@ -723,6 +725,8 @@ struct StoredMessage {
     sender_name: String,
     body: String,
     created_at: i64,
+    #[serde(skip_serializing)]
+    sequence: i64,
 }
 
 #[derive(Clone, Serialize)]
@@ -730,15 +734,30 @@ struct Message {
     #[serde(flatten)]
     message: StoredMessage,
     attachments: Vec<Attachment>,
+    cursor: String,
+}
+
+#[derive(Deserialize)]
+struct MessagePageQuery {
+    before_cursor: Option<String>,
+    after_cursor: Option<String>,
+}
+
+#[derive(Serialize)]
+struct MessagePage {
+    messages: Vec<Message>,
+    older_cursor: Option<String>,
+    newer_cursor: Option<String>,
 }
 
 async fn list_messages(
     State(state): State<AppState>,
     axum::Extension(user): axum::Extension<UserIdentity>,
     Path(id): Path<String>,
-) -> Result<axum::Json<Vec<Message>>, AppError> {
+    Query(query): Query<MessagePageQuery>,
+) -> Result<axum::Json<MessagePage>, AppError> {
     require_member(&state.db, &id, &user.id).await?;
-    Ok(axum::Json(messages_for(&state.db, &id).await?))
+    Ok(axum::Json(messages_for(&state.db, &id, query).await?))
 }
 
 #[derive(Deserialize)]
@@ -767,6 +786,7 @@ async fn send_message(
     let _ = state.events.send(ConversationEvent {
         conversation_id: id,
         sender_id: user.id,
+        message: message.clone(),
     });
     Ok(axum::Json(message))
 }
@@ -1053,6 +1073,7 @@ async fn bot_send_message(
     let _ = state.events.send(ConversationEvent {
         conversation_id,
         sender_id: bot.id,
+        message: message.clone(),
     });
     Ok(axum::Json(message))
 }
@@ -1111,7 +1132,13 @@ async fn create_message(
             "bot messages cannot attach user uploads",
         ));
     }
-    sqlx::query("INSERT INTO messages(id,conversation_id,sender_kind,sender_id,body,created_at) VALUES(?,?,?,?,?,?)").bind(&id).bind(conversation_id).bind(sender_kind).bind(sender_id).bind(body).bind(now).execute(&mut *tx).await?;
+    sqlx::query("INSERT INTO message_sequences DEFAULT VALUES")
+        .execute(&mut *tx)
+        .await?;
+    let sequence: i64 = sqlx::query_scalar("SELECT last_insert_rowid()")
+        .fetch_one(&mut *tx)
+        .await?;
+    sqlx::query("INSERT INTO messages(id,conversation_id,sender_kind,sender_id,body,created_at,sequence) VALUES(?,?,?,?,?,?,?)").bind(&id).bind(conversation_id).bind(sender_kind).bind(sender_id).bind(body).bind(now).bind(sequence).execute(&mut *tx).await?;
     for attachment_id in attachment_ids {
         sqlx::query("UPDATE attachments SET message_id=? WHERE id=?")
             .bind(&id)
@@ -1123,24 +1150,111 @@ async fn create_message(
     message(db, &id).await
 }
 
-async fn messages_for(db: &SqlitePool, conversation_id: &str) -> Result<Vec<Message>, AppError> {
-    let rows: Vec<StoredMessage> = sqlx::query_as("SELECT m.id,m.conversation_id,m.sender_kind,m.sender_id,COALESCE(p.display_name,b.name,m.sender_id) sender_name,m.body,m.created_at FROM messages m LEFT JOIN profiles p ON m.sender_kind='user' AND p.user_id=m.sender_id LEFT JOIN bots b ON m.sender_kind='bot' AND b.id=m.sender_id WHERE m.conversation_id=? ORDER BY m.created_at").bind(conversation_id).fetch_all(db).await?;
-    let mut result = Vec::with_capacity(rows.len());
-    for row in rows {
-        result.push(Message {
-            attachments: attachments_for(db, &row.id).await?,
-            message: row,
-        });
+fn message_cursor(created_at: i64, sequence: i64) -> String {
+    format!("{created_at}:{sequence}")
+}
+
+fn parse_message_cursor(cursor: &str) -> Result<(i64, i64), AppError> {
+    let (created_at, sequence) = cursor
+        .split_once(':')
+        .ok_or_else(|| AppError::bad_request("message cursor is invalid"))?;
+    let created_at = created_at
+        .parse()
+        .map_err(|_| AppError::bad_request("message cursor is invalid"))?;
+    let sequence = sequence
+        .parse()
+        .map_err(|_| AppError::bad_request("message cursor is invalid"))?;
+    if sequence <= 0 {
+        return Err(AppError::bad_request("message cursor is invalid"));
     }
-    Ok(result)
+    Ok((created_at, sequence))
+}
+
+async fn message_from_row(db: &SqlitePool, row: StoredMessage) -> Result<Message, AppError> {
+    Ok(Message {
+        cursor: message_cursor(row.created_at, row.sequence),
+        attachments: attachments_for(db, &row.id).await?,
+        message: row,
+    })
+}
+
+async fn messages_for(
+    db: &SqlitePool,
+    conversation_id: &str,
+    query: MessagePageQuery,
+) -> Result<MessagePage, AppError> {
+    let MessagePageQuery {
+        before_cursor,
+        after_cursor,
+    } = query;
+    if before_cursor.is_some() && after_cursor.is_some() {
+        return Err(AppError::bad_request(
+            "provide at most one of before_cursor or after_cursor",
+        ));
+    }
+
+    enum PageDirection {
+        Latest,
+        Older,
+        Newer,
+    }
+
+    let (mut rows, direction) = if let Some(cursor) = before_cursor {
+        let (created_at, sequence) = parse_message_cursor(&cursor)?;
+        let rows = sqlx::query_as("SELECT m.id,m.conversation_id,m.sender_kind,m.sender_id,COALESCE(p.display_name,b.name,m.sender_id) sender_name,m.body,m.created_at,m.sequence FROM messages m LEFT JOIN profiles p ON m.sender_kind='user' AND p.user_id=m.sender_id LEFT JOIN bots b ON m.sender_kind='bot' AND b.id=m.sender_id WHERE m.conversation_id=? AND (m.created_at<? OR (m.created_at=? AND m.sequence<?)) ORDER BY m.created_at DESC,m.sequence DESC LIMIT ?")
+                .bind(conversation_id)
+                .bind(created_at)
+                .bind(created_at)
+                .bind(sequence)
+                .bind(MESSAGE_PAGE_SIZE + 1)
+                .fetch_all(db)
+                .await?;
+        (rows, PageDirection::Older)
+    } else if let Some(cursor) = after_cursor {
+        let (created_at, sequence) = parse_message_cursor(&cursor)?;
+        let rows = sqlx::query_as("SELECT m.id,m.conversation_id,m.sender_kind,m.sender_id,COALESCE(p.display_name,b.name,m.sender_id) sender_name,m.body,m.created_at,m.sequence FROM messages m LEFT JOIN profiles p ON m.sender_kind='user' AND p.user_id=m.sender_id LEFT JOIN bots b ON m.sender_kind='bot' AND b.id=m.sender_id WHERE m.conversation_id=? AND (m.created_at>? OR (m.created_at=? AND m.sequence>?)) ORDER BY m.created_at,m.sequence LIMIT ?")
+                .bind(conversation_id)
+                .bind(created_at)
+                .bind(created_at)
+                .bind(sequence)
+                .bind(MESSAGE_PAGE_SIZE + 1)
+                .fetch_all(db)
+                .await?;
+        (rows, PageDirection::Newer)
+    } else {
+        let rows = sqlx::query_as("SELECT m.id,m.conversation_id,m.sender_kind,m.sender_id,COALESCE(p.display_name,b.name,m.sender_id) sender_name,m.body,m.created_at,m.sequence FROM messages m LEFT JOIN profiles p ON m.sender_kind='user' AND p.user_id=m.sender_id LEFT JOIN bots b ON m.sender_kind='bot' AND b.id=m.sender_id WHERE m.conversation_id=? ORDER BY m.created_at DESC,m.sequence DESC LIMIT ?")
+                .bind(conversation_id)
+                .bind(MESSAGE_PAGE_SIZE + 1)
+                .fetch_all(db)
+                .await?;
+        (rows, PageDirection::Latest)
+    };
+    let has_more = rows.len() as i64 > MESSAGE_PAGE_SIZE;
+    rows.truncate(MESSAGE_PAGE_SIZE as usize);
+    if matches!(direction, PageDirection::Latest | PageDirection::Older) {
+        rows.reverse();
+    }
+    let mut messages = Vec::with_capacity(rows.len());
+    for row in rows {
+        messages.push(message_from_row(db, row).await?);
+    }
+    let first_cursor = messages.first().map(|message| message.cursor.clone());
+    let last_cursor = messages.last().map(|message| message.cursor.clone());
+    let (older_cursor, newer_cursor) = match direction {
+        PageDirection::Latest => (has_more.then_some(first_cursor).flatten(), None),
+        PageDirection::Older => (has_more.then_some(first_cursor).flatten(), last_cursor),
+        PageDirection::Newer => (first_cursor, has_more.then_some(last_cursor).flatten()),
+    };
+    Ok(MessagePage {
+        messages,
+        older_cursor,
+        newer_cursor,
+    })
 }
 
 async fn message(db: &SqlitePool, id: &str) -> Result<Message, AppError> {
-    let row: StoredMessage = sqlx::query_as("SELECT m.id,m.conversation_id,m.sender_kind,m.sender_id,COALESCE(p.display_name,b.name,m.sender_id) sender_name,m.body,m.created_at FROM messages m LEFT JOIN profiles p ON m.sender_kind='user' AND p.user_id=m.sender_id LEFT JOIN bots b ON m.sender_kind='bot' AND b.id=m.sender_id WHERE m.id=?").bind(id).fetch_optional(db).await?.ok_or_else(|| AppError::not_found("message not found"))?;
-    Ok(Message {
-        attachments: attachments_for(db, id).await?,
-        message: row,
-    })
+    let row: StoredMessage = sqlx::query_as("SELECT m.id,m.conversation_id,m.sender_kind,m.sender_id,COALESCE(p.display_name,b.name,m.sender_id) sender_name,m.body,m.created_at,m.sequence FROM messages m LEFT JOIN profiles p ON m.sender_kind='user' AND p.user_id=m.sender_id LEFT JOIN bots b ON m.sender_kind='bot' AND b.id=m.sender_id WHERE m.id=?").bind(id).fetch_optional(db).await?.ok_or_else(|| AppError::not_found("message not found"))?;
+    message_from_row(db, row).await
 }
 
 async fn attachments_for(db: &SqlitePool, message_id: &str) -> Result<Vec<Attachment>, AppError> {
@@ -1424,6 +1538,101 @@ mod tests {
     async fn migrations_create_setup_defaults() {
         let pool = db::connect_memory().await.unwrap();
         assert_eq!(meta(&pool, "setup_complete").await.unwrap(), "false");
+    }
+
+    #[tokio::test]
+    async fn messages_are_paged_in_both_directions_with_stable_cursors() {
+        let pool = db::connect_memory().await.unwrap();
+        sqlx::query("INSERT INTO users(id,created_at) VALUES('alice',0)")
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query("INSERT INTO conversations(id,kind,title,created_by,created_at) VALUES('conversation','group','Test','alice',0)")
+            .execute(&pool)
+            .await
+            .unwrap();
+        for sequence in 1..=105 {
+            sqlx::query("INSERT INTO message_sequences(sequence) VALUES(?)")
+                .bind(sequence)
+                .execute(&pool)
+                .await
+                .unwrap();
+            sqlx::query("INSERT INTO messages(id,conversation_id,sender_kind,sender_id,body,created_at,sequence) VALUES(?, 'conversation', 'user', 'alice', ?, 1, ?)")
+                .bind(format!("message-{sequence}"))
+                .bind(format!("Message {sequence}"))
+                .bind(sequence)
+                .execute(&pool)
+                .await
+                .unwrap();
+        }
+
+        let latest = messages_for(
+            &pool,
+            "conversation",
+            MessagePageQuery {
+                before_cursor: None,
+                after_cursor: None,
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(latest.messages.len(), 50);
+        assert_eq!(latest.messages.first().unwrap().message.body, "Message 56");
+        assert_eq!(latest.messages.last().unwrap().message.body, "Message 105");
+
+        let middle = messages_for(
+            &pool,
+            "conversation",
+            MessagePageQuery {
+                before_cursor: latest.older_cursor,
+                after_cursor: None,
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(middle.messages.len(), 50);
+        assert_eq!(middle.messages.first().unwrap().message.body, "Message 6");
+        assert_eq!(middle.messages.last().unwrap().message.body, "Message 55");
+
+        let oldest = messages_for(
+            &pool,
+            "conversation",
+            MessagePageQuery {
+                before_cursor: middle.older_cursor,
+                after_cursor: None,
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(oldest.messages.len(), 5);
+        assert_eq!(oldest.messages.first().unwrap().message.body, "Message 1");
+        assert_eq!(oldest.messages.last().unwrap().message.body, "Message 5");
+
+        let forward = messages_for(
+            &pool,
+            "conversation",
+            MessagePageQuery {
+                before_cursor: None,
+                after_cursor: Some(oldest.messages.last().unwrap().cursor.clone()),
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(forward.messages.len(), 50);
+        assert_eq!(forward.messages.first().unwrap().message.body, "Message 6");
+        assert_eq!(forward.messages.last().unwrap().message.body, "Message 55");
+    }
+
+    #[test]
+    fn malformed_message_cursor_is_rejected() {
+        assert_eq!(
+            parse_message_cursor("not-a-cursor").unwrap_err().status,
+            StatusCode::BAD_REQUEST
+        );
+        assert_eq!(
+            parse_message_cursor("1:0").unwrap_err().status,
+            StatusCode::BAD_REQUEST
+        );
     }
 
     #[tokio::test]

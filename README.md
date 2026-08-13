@@ -11,7 +11,7 @@ tokens.
 - **Profiles and people directory** — username, nickname, avatar, motto, and
   search.
 - **Messaging** — direct and group conversations, image/file attachments, read
-  state, and polling-based immediate refresh.
+  state, cursor-paged history, and immediate SSE refresh.
 - **Open-page links** — external apps may open `/?open=profile` to edit the
   profile or `/?open=message&username=alice` to begin a direct message.
 - **PWA and notifications** — installable manifest, service worker, and an API
