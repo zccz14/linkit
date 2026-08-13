@@ -35,7 +35,7 @@ test("open-page requests preserve their authenticated destination", () => {
     openPagePath("?open=message&username=alice%2Fsmith"),
     "#/compose/alice%2Fsmith",
   );
-  assert.equal(openPagePath("?open=message"), "#/inbox");
+  assert.equal(openPagePath("?open=message"), "#/conversations");
 });
 
 test("render failure fallback matches the browser language", () => {

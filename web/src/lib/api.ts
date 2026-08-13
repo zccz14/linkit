@@ -22,6 +22,7 @@ export type Conversation = {
   kind: "direct" | "group";
   title: string;
   counterpart_name?: string;
+  counterpart_avatar_attachment_id?: string;
   created_by: string;
   created_at: number;
   latest_body?: string;
@@ -95,7 +96,7 @@ export function openPagePath(search = window.location.search) {
   if (open === "profile") return "#/settings/profile";
   if (open === "message" && username)
     return `#/compose/${encodeURIComponent(username)}`;
-  return "#/inbox";
+  return "#/conversations";
 }
 
 export async function publicApi<T>(
