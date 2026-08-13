@@ -992,25 +992,27 @@ function ConversationPage({ me, sdk }: { me: Me; sdk: AuthMiniApi }) {
           </Button>
         </div>
       </form>
-      <Drawer
-        open={manageOpen}
-        onOpenChange={setManageOpen}
-        swipeDirection="right"
-      >
-        <DrawerContent className="[--drawer-content-width:28rem]">
-          <DrawerHeader>
-            <DrawerTitle>{t("conversation.manageTitle")}</DrawerTitle>
-          </DrawerHeader>
-          {detail.data ? (
-            <GroupManagementContent detail={detail.data} me={me} sdk={sdk} />
-          ) : null}
-          <DrawerFooter>
-            <Button variant="outline" onClick={() => setManageOpen(false)}>
-              {t("bots.done")}
-            </Button>
-          </DrawerFooter>
-        </DrawerContent>
-      </Drawer>
+      {!isMobile ? (
+        <Drawer
+          open={manageOpen}
+          onOpenChange={setManageOpen}
+          swipeDirection="right"
+        >
+          <DrawerContent className="[--drawer-content-width:28rem]">
+            <DrawerHeader>
+              <DrawerTitle>{t("conversation.manageTitle")}</DrawerTitle>
+            </DrawerHeader>
+            {detail.data ? (
+              <GroupManagementContent detail={detail.data} me={me} sdk={sdk} />
+            ) : null}
+            <DrawerFooter>
+              <Button variant="outline" onClick={() => setManageOpen(false)}>
+                {t("bots.done")}
+              </Button>
+            </DrawerFooter>
+          </DrawerContent>
+        </Drawer>
+      ) : null}
     </div>
   );
 }
