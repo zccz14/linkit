@@ -398,7 +398,9 @@ function Shell({ me, sdk }: { me: Me; sdk: AuthMiniApi }) {
               onClick={() => navigate(`/inbox/${conversation.id}`)}
             >
               <span className="truncate">
-                {conversation.title || t("conversation.direct")}
+                {conversation.title ||
+                  conversation.counterpart_name ||
+                  t("conversation.direct")}
               </span>
               {conversation.unread_count ? (
                 <Badge>{conversation.unread_count}</Badge>

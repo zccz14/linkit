@@ -34,6 +34,8 @@ use crate::{
 };
 
 const MAX_UPLOAD_BYTES: usize = 52_428_800;
+const LIST_CONVERSATIONS_QUERY: &str = "SELECT c.id,c.kind,c.title,c.created_by,c.created_at,CASE WHEN c.kind='direct' THEN COALESCE((SELECT p.display_name FROM conversation_members cm_peer JOIN profiles p ON p.user_id=cm_peer.user_id WHERE cm_peer.conversation_id=c.id AND cm_peer.user_id<>? LIMIT 1),(SELECT b.name FROM conversation_bots cb JOIN bots b ON b.id=cb.bot_id WHERE cb.conversation_id=c.id LIMIT 1)) END counterpart_name,(SELECT body FROM messages WHERE conversation_id=c.id ORDER BY created_at DESC LIMIT 1) latest_body,(SELECT created_at FROM messages WHERE conversation_id=c.id ORDER BY created_at DESC LIMIT 1) latest_at,(SELECT COUNT(*) FROM messages WHERE conversation_id=c.id AND created_at>cm.last_read_at AND sender_id<>?) unread_count FROM conversations c JOIN conversation_members cm ON cm.conversation_id=c.id WHERE cm.user_id=? ORDER BY COALESCE(latest_at,c.created_at) DESC";
+const CONVERSATION_QUERY: &str = "SELECT c.id,c.kind,c.title,c.created_by,c.created_at,CASE WHEN c.kind='direct' THEN COALESCE((SELECT p.display_name FROM conversation_members cm_peer JOIN profiles p ON p.user_id=cm_peer.user_id WHERE cm_peer.conversation_id=c.id AND cm_peer.user_id<>? LIMIT 1),(SELECT b.name FROM conversation_bots cb JOIN bots b ON b.id=cb.bot_id WHERE cb.conversation_id=c.id LIMIT 1)) END counterpart_name,(SELECT body FROM messages WHERE conversation_id=c.id ORDER BY created_at DESC LIMIT 1) latest_body,(SELECT created_at FROM messages WHERE conversation_id=c.id ORDER BY created_at DESC LIMIT 1) latest_at,(SELECT COUNT(*) FROM messages WHERE conversation_id=c.id AND created_at>cm.last_read_at AND sender_id<>?) unread_count FROM conversations c JOIN conversation_members cm ON cm.conversation_id=c.id WHERE c.id=? AND cm.user_id=?";
 
 #[derive(Clone)]
 pub struct AppState {
@@ -536,6 +538,7 @@ struct Conversation {
     title: String,
     created_by: String,
     created_at: i64,
+    counterpart_name: Option<String>,
     latest_body: Option<String>,
     latest_at: Option<i64>,
     unread_count: i64,
@@ -545,8 +548,12 @@ async fn list_conversations(
     State(state): State<AppState>,
     axum::Extension(user): axum::Extension<UserIdentity>,
 ) -> Result<axum::Json<Vec<Conversation>>, AppError> {
-    let rows = sqlx::query_as("SELECT c.id,c.kind,c.title,c.created_by,c.created_at,(SELECT body FROM messages WHERE conversation_id=c.id ORDER BY created_at DESC LIMIT 1) latest_body,(SELECT created_at FROM messages WHERE conversation_id=c.id ORDER BY created_at DESC LIMIT 1) latest_at,(SELECT COUNT(*) FROM messages WHERE conversation_id=c.id AND created_at>cm.last_read_at AND sender_id<>?) unread_count FROM conversations c JOIN conversation_members cm ON cm.conversation_id=c.id WHERE cm.user_id=? ORDER BY COALESCE(latest_at,c.created_at) DESC")
-        .bind(&user.id).bind(&user.id).fetch_all(&state.db).await?;
+    let rows = sqlx::query_as(LIST_CONVERSATIONS_QUERY)
+        .bind(&user.id)
+        .bind(&user.id)
+        .bind(&user.id)
+        .fetch_all(&state.db)
+        .await?;
     Ok(axum::Json(rows))
 }
 
@@ -1093,7 +1100,14 @@ async fn attachments_for(db: &SqlitePool, message_id: &str) -> Result<Vec<Attach
 }
 
 async fn conversation(db: &SqlitePool, id: &str, user_id: &str) -> Result<Conversation, AppError> {
-    sqlx::query_as("SELECT c.id,c.kind,c.title,c.created_by,c.created_at,(SELECT body FROM messages WHERE conversation_id=c.id ORDER BY created_at DESC LIMIT 1) latest_body,(SELECT created_at FROM messages WHERE conversation_id=c.id ORDER BY created_at DESC LIMIT 1) latest_at,(SELECT COUNT(*) FROM messages WHERE conversation_id=c.id AND created_at>cm.last_read_at AND sender_id<>?) unread_count FROM conversations c JOIN conversation_members cm ON cm.conversation_id=c.id WHERE c.id=? AND cm.user_id=?").bind(user_id).bind(id).bind(user_id).fetch_optional(db).await?.ok_or_else(|| AppError::not_found("conversation not found"))
+    sqlx::query_as(CONVERSATION_QUERY)
+        .bind(user_id)
+        .bind(user_id)
+        .bind(id)
+        .bind(user_id)
+        .fetch_optional(db)
+        .await?
+        .ok_or_else(|| AppError::not_found("conversation not found"))
 }
 
 async fn require_member(
@@ -1379,6 +1393,40 @@ mod tests {
                 .status,
             StatusCode::FORBIDDEN
         );
+    }
+
+    #[tokio::test]
+    async fn direct_conversations_include_the_other_participant_name() {
+        let pool = db::connect_memory().await.unwrap();
+        for (id, username, display_name) in [("alice", "alice", "Alice"), ("bob", "bob", "Bob")] {
+            sqlx::query("INSERT INTO users(id,created_at) VALUES(?,0)")
+                .bind(id)
+                .execute(&pool)
+                .await
+                .unwrap();
+            sqlx::query("INSERT INTO profiles(user_id,username,display_name,motto,updated_at) VALUES(?,?,?,'',0)")
+                .bind(id)
+                .bind(username)
+                .bind(display_name)
+                .execute(&pool)
+                .await
+                .unwrap();
+        }
+        sqlx::query("INSERT INTO conversations(id,kind,title,direct_key,created_by,created_at) VALUES('direct','direct','','alice:bob','alice',0)")
+            .execute(&pool)
+            .await
+            .unwrap();
+        for user_id in ["alice", "bob"] {
+            sqlx::query("INSERT INTO conversation_members(conversation_id,user_id,role,joined_at) VALUES('direct',?,'member',0)")
+                .bind(user_id)
+                .execute(&pool)
+                .await
+                .unwrap();
+        }
+
+        let direct = conversation(&pool, "direct", "alice").await.unwrap();
+
+        assert_eq!(direct.counterpart_name.as_deref(), Some("Bob"));
     }
 
     #[test]
