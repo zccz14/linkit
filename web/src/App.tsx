@@ -1,5 +1,7 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import type { AuthMiniApi } from "auth-mini/sdk/browser";
+import { AuthMiniProvider, useAuthMini } from "auth-mini-react-components";
 import {
   Link,
   Navigate,
@@ -14,7 +16,6 @@ import {
   BotIcon,
   FileIcon,
   ImageIcon,
-  LogInIcon,
   LogOutIcon,
   MessageCircleIcon,
   PaperclipIcon,
@@ -66,11 +67,8 @@ import { Textarea } from "@/components/ui/textarea";
 import {
   api,
   attachmentObjectUrl,
-  clearSession,
-  consumeLoginCallback,
   openPagePath,
-  session,
-  startLogin,
+  publicApi,
   subscribeToEvents,
   upload,
   type Attachment,
@@ -88,15 +86,10 @@ const profileRoute = (username: string) =>
 
 export default function App() {
   const { t } = useI18n();
-  const callbackError = consumeLoginCallback();
   const config = useQuery({
     queryKey: ["config"],
-    queryFn: () => api<Config>("/api/config"),
+    queryFn: () => publicApi<Config>("/api/config"),
   });
-
-  useEffect(() => {
-    if (callbackError) toast.error(callbackError);
-  }, [callbackError]);
 
   useEffect(() => {
     if (!window.location.search) return;
@@ -113,7 +106,22 @@ export default function App() {
   if (config.isError)
     return <LoadingScreen>{config.error.message}</LoadingScreen>;
   if (config.data.setup_required) return <Setup />;
-  return <AuthedApp config={config.data} />;
+  if (!config.data.auth_issuer)
+    return <LoadingScreen>{t("app.authIssuerMissing")}</LoadingScreen>;
+  return (
+    <AuthMiniProvider
+      autoRedirectToLogin={true}
+      authMiniBaseUrl={config.data.auth_issuer}
+      callbackUrl={callbackUrl}
+      onAuthError={(error) => toast.error(error.message)}
+    >
+      <AuthedApp />
+    </AuthMiniProvider>
+  );
+}
+
+function callbackUrl() {
+  return window.location.href;
 }
 
 function LoadingScreen({ children }: { children: React.ReactNode }) {
@@ -128,14 +136,55 @@ function LoadingScreen({ children }: { children: React.ReactNode }) {
 }
 
 function Setup() {
-  const { t } = useI18n();
   const [rootUserId, setRootUserId] = useState("");
   const [issuer, setIssuer] = useState("https://auth.ntnl.io");
   const [audience, setAudience] = useState(window.location.hostname);
   const [origin, setOrigin] = useState(window.location.origin);
+  return (
+    <AuthMiniProvider
+      autoRedirectToLogin={false}
+      authMiniBaseUrl={issuer}
+      callbackUrl={callbackUrl}
+      onAuthError={(error) => toast.error(error.message)}
+    >
+      <SetupForm
+        audience={audience}
+        issuer={issuer}
+        onAudienceChange={setAudience}
+        onIssuerChange={setIssuer}
+        onOriginChange={setOrigin}
+        onRootUserIdChange={setRootUserId}
+        origin={origin}
+        rootUserId={rootUserId}
+      />
+    </AuthMiniProvider>
+  );
+}
+
+function SetupForm({
+  audience,
+  issuer,
+  onAudienceChange,
+  onIssuerChange,
+  onOriginChange,
+  onRootUserIdChange,
+  origin,
+  rootUserId,
+}: {
+  audience: string;
+  issuer: string;
+  onAudienceChange: (value: string) => void;
+  onIssuerChange: (value: string) => void;
+  onOriginChange: (value: string) => void;
+  onRootUserIdChange: (value: string) => void;
+  origin: string;
+  rootUserId: string;
+}) {
+  const { t } = useI18n();
+  const { isAuthenticated, isReady, sdk, signIn } = useAuthMini();
   const mutation = useMutation({
     mutationFn: () =>
-      api("/api/setup", {
+      api(sdk!, "/api/setup", {
         method: "POST",
         body: JSON.stringify({
           root_user_id: rootUserId,
@@ -175,7 +224,7 @@ function Setup() {
                   id="root-user-id"
                   required
                   value={rootUserId}
-                  onChange={(event) => setRootUserId(event.target.value)}
+                  onChange={(event) => onRootUserIdChange(event.target.value)}
                 />
                 <FieldDescription>
                   {t("setup.rootUserIdDescription")}
@@ -190,7 +239,7 @@ function Setup() {
                   required
                   type="url"
                   value={issuer}
-                  onChange={(event) => setIssuer(event.target.value)}
+                  onChange={(event) => onIssuerChange(event.target.value)}
                 />
               </Field>
               <Field>
@@ -201,7 +250,7 @@ function Setup() {
                   id="audience"
                   required
                   value={audience}
-                  onChange={(event) => setAudience(event.target.value)}
+                  onChange={(event) => onAudienceChange(event.target.value)}
                 />
               </Field>
               <Field>
@@ -213,20 +262,20 @@ function Setup() {
                   required
                   type="url"
                   value={origin}
-                  onChange={(event) => setOrigin(event.target.value)}
+                  onChange={(event) => onOriginChange(event.target.value)}
                 />
               </Field>
             </FieldGroup>
             <div className="flex flex-wrap gap-2">
+              {!isAuthenticated ? (
+                <Button type="button" variant="outline" onClick={signIn}>
+                  {t("setup.signIn")}
+                </Button>
+              ) : null}
               <Button
-                type="button"
-                variant="outline"
-                onClick={() => startLogin(issuer)}
+                type="submit"
+                disabled={!isReady || !isAuthenticated || mutation.isPending}
               >
-                <LogInIcon data-icon="inline-start" />
-                {t("setup.signIn")}
-              </Button>
-              <Button type="submit" disabled={mutation.isPending}>
                 {mutation.isPending
                   ? t("setup.initializing")
                   : t("setup.initialize")}
@@ -240,56 +289,31 @@ function Setup() {
   );
 }
 
-function AuthedApp({ config }: { config: Config }) {
+function AuthedApp() {
   const { t } = useI18n();
+  const { error, isAuthenticated, isReady, sdk } = useAuthMini();
   const me = useQuery({
     queryKey: ["me"],
-    queryFn: () => api<Me>("/api/me"),
-    enabled: Boolean(session()),
+    queryFn: () => api<Me>(sdk!, "/api/me"),
+    enabled: Boolean(sdk && isAuthenticated),
   });
-  if (!session()) return <SignIn config={config} />;
-  if (me.isPending) return <LoadingScreen>{t("app.restoring")}</LoadingScreen>;
-  if (me.isError) {
-    clearSession();
-    return <SignIn config={config} error={me.error.message} />;
-  }
-  if (!me.data.profile) return <ProfileEditor me={me.data} />;
-  return <Shell me={me.data} />;
+  if (error) return <LoadingScreen>{error.message}</LoadingScreen>;
+  if (!isReady || !isAuthenticated || !sdk || me.isPending)
+    return <LoadingScreen>{t("app.restoring")}</LoadingScreen>;
+  if (me.isError) return <LoadingScreen>{me.error.message}</LoadingScreen>;
+  if (!me.data.profile) return <ProfileEditor me={me.data} sdk={sdk} />;
+  return <Shell me={me.data} sdk={sdk} />;
 }
 
-function SignIn({ config, error }: { config: Config; error?: string }) {
+function Shell({ me, sdk }: { me: Me; sdk: AuthMiniApi }) {
   const { t } = useI18n();
-  return (
-    <main className="relative mx-auto flex min-h-screen max-w-xl items-center px-5 py-10">
-      <div className="absolute top-4 right-4">
-        <LanguageMenu />
-      </div>
-      <Card className="w-full">
-        <CardHeader>
-          <CardTitle>{t("signin.title")}</CardTitle>
-          <CardDescription>{t("signin.description")}</CardDescription>
-        </CardHeader>
-        <CardContent className="flex flex-col gap-4">
-          {error ? <p className="text-sm text-destructive">{error}</p> : null}
-          <Button onClick={() => startLogin(config.auth_issuer!)}>
-            <LogInIcon data-icon="inline-start" />
-            {t("signin.continue")}
-          </Button>
-        </CardContent>
-      </Card>
-      <Toaster richColors />
-    </main>
-  );
-}
-
-function Shell({ me }: { me: Me }) {
-  const { t } = useI18n();
+  const { signOut } = useAuthMini();
   const navigate = useNavigate();
   const location = useLocation();
   const queryClient = useQueryClient();
   const conversations = useQuery({
     queryKey: ["conversations"],
-    queryFn: () => api<Conversation[]>("/api/conversations"),
+    queryFn: () => api<Conversation[]>(sdk, "/api/conversations"),
     refetchInterval: 4_000,
   });
   const [notificationPermission, setNotificationPermission] = useState(
@@ -297,7 +321,7 @@ function Shell({ me }: { me: Me }) {
   );
   useEffect(
     () =>
-      subscribeToEvents((event) => {
+      subscribeToEvents(sdk, (event) => {
         void queryClient.invalidateQueries({ queryKey: ["conversations"] });
         void queryClient.invalidateQueries({
           queryKey: ["messages", event.conversation_id],
@@ -311,7 +335,7 @@ function Shell({ me }: { me: Me }) {
             body: t("notification.body"),
           });
       }),
-    [me.id, notificationPermission, queryClient, t],
+    [me.id, notificationPermission, queryClient, sdk, t],
   );
   const links = [
     ["/inbox", t("navigation.inbox"), MessageCircleIcon],
@@ -377,7 +401,7 @@ function Shell({ me }: { me: Me }) {
           ))}
         </div>
         <div className="mt-auto flex items-center gap-2 border-t pt-4">
-          <ProfileAvatar profile={me.profile} />
+          <ProfileAvatar profile={me.profile} sdk={sdk} />
           <div className="min-w-0 flex-1">
             <p className="truncate text-sm font-medium">
               {me.profile!.display_name}
@@ -405,10 +429,7 @@ function Shell({ me }: { me: Me }) {
             variant="ghost"
             size="icon-sm"
             aria-label={t("auth.signOut")}
-            onClick={() => {
-              clearSession();
-              window.location.assign("/");
-            }}
+            onClick={() => void signOut()}
           >
             <LogOutIcon />
           </Button>
@@ -417,13 +438,19 @@ function Shell({ me }: { me: Me }) {
       <main className="min-w-0">
         <Routes>
           <Route path="/inbox" element={<InboxEmpty />} />
-          <Route path="/inbox/:id" element={<ConversationPage me={me} />} />
-          <Route path="/directory" element={<Directory />} />
-          <Route path="/people/:username" element={<Person />} />
-          <Route path="/compose/:username" element={<Compose />} />
-          <Route path="/groups/new" element={<GroupCreator />} />
-          <Route path="/bots" element={<Bots />} />
-          <Route path="/settings/profile" element={<ProfileEditor me={me} />} />
+          <Route
+            path="/inbox/:id"
+            element={<ConversationPage me={me} sdk={sdk} />}
+          />
+          <Route path="/directory" element={<Directory sdk={sdk} />} />
+          <Route path="/people/:username" element={<Person sdk={sdk} />} />
+          <Route path="/compose/:username" element={<Compose sdk={sdk} />} />
+          <Route path="/groups/new" element={<GroupCreator sdk={sdk} />} />
+          <Route path="/bots" element={<Bots sdk={sdk} />} />
+          <Route
+            path="/settings/profile"
+            element={<ProfileEditor me={me} sdk={sdk} />}
+          />
           <Route path="*" element={<Navigate to="/inbox" replace />} />
         </Routes>
       </main>
@@ -449,7 +476,7 @@ function InboxEmpty() {
   );
 }
 
-function ConversationPage({ me }: { me: Me }) {
+function ConversationPage({ me, sdk }: { me: Me; sdk: AuthMiniApi }) {
   const { t } = useI18n();
   const { id = "" } = useParams();
   const queryClient = useQueryClient();
@@ -460,21 +487,21 @@ function ConversationPage({ me }: { me: Me }) {
   const fileRef = useRef<HTMLInputElement>(null);
   const messages = useQuery({
     queryKey: ["messages", id],
-    queryFn: () => api<Message[]>(`/api/conversations/${id}/messages`),
+    queryFn: () => api<Message[]>(sdk, `/api/conversations/${id}/messages`),
     refetchInterval: 3_000,
   });
   const detail = useQuery({
     queryKey: ["conversation", id],
-    queryFn: () => api<ConversationDetail>(`/api/conversations/${id}`),
+    queryFn: () => api<ConversationDetail>(sdk, `/api/conversations/${id}`),
   });
   const bots = useQuery({
     queryKey: ["bots"],
-    queryFn: () => api<Bot[]>("/api/bots"),
+    queryFn: () => api<Bot[]>(sdk, "/api/bots"),
     enabled: manageOpen,
   });
   const addBot = useMutation({
     mutationFn: () =>
-      api(`/api/bots/${botId}/groups/${id}`, { method: "POST" }),
+      api(sdk, `/api/bots/${botId}/groups/${id}`, { method: "POST" }),
     onSuccess: () => {
       setBotId("");
       setManageOpen(false);
@@ -485,7 +512,7 @@ function ConversationPage({ me }: { me: Me }) {
   });
   const send = useMutation({
     mutationFn: () =>
-      api<Message>(`/api/conversations/${id}/messages`, {
+      api<Message>(sdk, `/api/conversations/${id}/messages`, {
         method: "POST",
         body: JSON.stringify({
           body,
@@ -501,15 +528,15 @@ function ConversationPage({ me }: { me: Me }) {
     onError: (error) => toast.error(error.message),
   });
   useEffect(() => {
-    void api(`/api/conversations/${id}/read`, { method: "POST" }).catch(
+    void api(sdk, `/api/conversations/${id}/read`, { method: "POST" }).catch(
       () => undefined,
     );
-  }, [id]);
+  }, [id, sdk]);
   const chooseFile = async (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
     if (!file) return;
     try {
-      const attachment = await upload(file);
+      const attachment = await upload(sdk, file);
       setAttachments((current) => [...current, attachment]);
     } catch (error) {
       toast.error(
@@ -546,6 +573,7 @@ function ConversationPage({ me }: { me: Me }) {
             key={message.id}
             message={message}
             mine={message.sender_kind === "user" && message.sender_id === me.id}
+            sdk={sdk}
           />
         ))}
       </section>
@@ -645,7 +673,15 @@ function ConversationPage({ me }: { me: Me }) {
   );
 }
 
-function MessageRow({ message, mine }: { message: Message; mine: boolean }) {
+function MessageRow({
+  message,
+  mine,
+  sdk,
+}: {
+  message: Message;
+  mine: boolean;
+  sdk: AuthMiniApi;
+}) {
   const { locale, t } = useI18n();
   return (
     <div className={mine ? "ml-auto max-w-xl" : "max-w-xl"}>
@@ -664,7 +700,11 @@ function MessageRow({ message, mine }: { message: Message; mine: boolean }) {
             <p className="whitespace-pre-wrap text-sm">{message.body}</p>
           ) : null}
           {message.attachments.map((attachment) => (
-            <AttachmentView key={attachment.id} attachment={attachment} />
+            <AttachmentView
+              key={attachment.id}
+              attachment={attachment}
+              sdk={sdk}
+            />
           ))}
         </CardContent>
       </Card>
@@ -672,13 +712,19 @@ function MessageRow({ message, mine }: { message: Message; mine: boolean }) {
   );
 }
 
-function AttachmentView({ attachment }: { attachment: Attachment }) {
+function AttachmentView({
+  attachment,
+  sdk,
+}: {
+  attachment: Attachment;
+  sdk: AuthMiniApi;
+}) {
   const { t } = useI18n();
   const [url, setUrl] = useState("");
   useEffect(() => {
     let active = true;
     let objectUrl = "";
-    void attachmentObjectUrl(attachment.id)
+    void attachmentObjectUrl(sdk, attachment.id)
       .then((next) => {
         objectUrl = next;
         if (active) setUrl(next);
@@ -689,7 +735,7 @@ function AttachmentView({ attachment }: { attachment: Attachment }) {
       active = false;
       if (objectUrl) URL.revokeObjectURL(objectUrl);
     };
-  }, [attachment.id]);
+  }, [attachment.id, sdk]);
   if (attachment.media_type.startsWith("image/"))
     return url ? (
       <a href={url} target="_blank" rel="noreferrer">
@@ -720,13 +766,13 @@ function AttachmentView({ attachment }: { attachment: Attachment }) {
   );
 }
 
-function Directory() {
+function Directory({ sdk }: { sdk: AuthMiniApi }) {
   const { t } = useI18n();
   const [query, setQuery] = useState("");
   const people = useQuery({
     queryKey: ["people", query],
     queryFn: () =>
-      api<Profile[]>(`/api/users?query=${encodeURIComponent(query)}`),
+      api<Profile[]>(sdk, `/api/users?query=${encodeURIComponent(query)}`),
   });
   return (
     <Page title={t("directory.title")} description={t("directory.description")}>
@@ -743,24 +789,24 @@ function Directory() {
       </div>
       <div className="grid gap-3 sm:grid-cols-2">
         {people.data?.map((profile) => (
-          <ProfileCard key={profile.user_id} profile={profile} />
+          <ProfileCard key={profile.user_id} profile={profile} sdk={sdk} />
         ))}
       </div>
     </Page>
   );
 }
 
-function Person() {
+function Person({ sdk }: { sdk: AuthMiniApi }) {
   const { t } = useI18n();
   const { username = "" } = useParams();
   const person = useQuery({
     queryKey: ["person", username],
-    queryFn: () => api<Profile>(`/api/users/${username}`),
+    queryFn: () => api<Profile>(sdk, `/api/users/${username}`),
   });
   const navigate = useNavigate();
   const open = useMutation({
     mutationFn: () =>
-      api<Conversation>(`/api/conversations/direct/${username}`, {
+      api<Conversation>(sdk, `/api/conversations/direct/${username}`, {
         method: "POST",
       }),
     onSuccess: (conversation) => navigate(`/inbox/${conversation.id}`),
@@ -780,7 +826,7 @@ function Person() {
       description={`@${person.data.username}`}
     >
       <div className="flex flex-col gap-5">
-        <ProfileCard profile={person.data} />
+        <ProfileCard profile={person.data} sdk={sdk} />
         <Button className="w-fit" onClick={() => open.mutate()}>
           <MessageCircleIcon data-icon="inline-start" />
           {t("profile.message")}
@@ -790,13 +836,13 @@ function Person() {
   );
 }
 
-function Compose() {
+function Compose({ sdk }: { sdk: AuthMiniApi }) {
   const { t } = useI18n();
   const { username = "" } = useParams();
   const navigate = useNavigate();
   const open = useMutation({
     mutationFn: () =>
-      api<Conversation>(`/api/conversations/direct/${username}`, {
+      api<Conversation>(sdk, `/api/conversations/direct/${username}`, {
         method: "POST",
       }),
     onSuccess: (conversation) => navigate(`/inbox/${conversation.id}`),
@@ -813,14 +859,14 @@ function Compose() {
   );
 }
 
-function GroupCreator() {
+function GroupCreator({ sdk }: { sdk: AuthMiniApi }) {
   const { t } = useI18n();
   const [title, setTitle] = useState("");
   const [usernames, setUsernames] = useState("");
   const navigate = useNavigate();
   const create = useMutation({
     mutationFn: () =>
-      api<Conversation>("/api/conversations", {
+      api<Conversation>(sdk, "/api/conversations", {
         method: "POST",
         body: JSON.stringify({
           title,
@@ -873,12 +919,12 @@ function GroupCreator() {
   );
 }
 
-function Bots() {
+function Bots({ sdk }: { sdk: AuthMiniApi }) {
   const { t } = useI18n();
   const queryClient = useQueryClient();
   const bots = useQuery({
     queryKey: ["bots"],
-    queryFn: () => api<Bot[]>("/api/bots"),
+    queryFn: () => api<Bot[]>(sdk, "/api/bots"),
   });
   const [dialog, setDialog] = useState(false);
   const [name, setName] = useState("");
@@ -887,7 +933,7 @@ function Bots() {
   const [ownerUsername, setOwnerUsername] = useState("");
   const create = useMutation({
     mutationFn: () =>
-      api<{ token: string; id: string }>("/api/bots", {
+      api<{ token: string; id: string }>(sdk, "/api/bots", {
         method: "POST",
         body: JSON.stringify({ name }),
       }),
@@ -899,7 +945,7 @@ function Bots() {
   });
   const update = useMutation({
     mutationFn: ({ body, id }: { id: string; body: object }) =>
-      api<{ token?: string }>(`/api/bots/${id}`, {
+      api<{ token?: string }>(sdk, `/api/bots/${id}`, {
         method: "PATCH",
         body: JSON.stringify(body),
       }),
@@ -1039,7 +1085,7 @@ function Bots() {
   );
 }
 
-function ProfileEditor({ me }: { me: Me }) {
+function ProfileEditor({ me, sdk }: { me: Me; sdk: AuthMiniApi }) {
   const { t } = useI18n();
   const queryClient = useQueryClient();
   const [username, setUsername] = useState(me.profile?.username ?? "");
@@ -1051,7 +1097,7 @@ function ProfileEditor({ me }: { me: Me }) {
   const fileRef = useRef<HTMLInputElement>(null);
   const save = useMutation({
     mutationFn: () =>
-      api<Profile>("/api/profile", {
+      api<Profile>(sdk, "/api/profile", {
         method: "PUT",
         body: JSON.stringify({
           username,
@@ -1070,7 +1116,7 @@ function ProfileEditor({ me }: { me: Me }) {
     const file = event.target.files?.[0];
     if (!file) return;
     try {
-      const attachment = await upload(file);
+      const attachment = await upload(sdk, file);
       if (!attachment.media_type.startsWith("image/"))
         throw new Error(t("profileEditor.avatarError"));
       setAvatar(attachment.id);
@@ -1099,6 +1145,7 @@ function ProfileEditor({ me }: { me: Me }) {
             <FieldLabel>{t("profileEditor.avatar")}</FieldLabel>
             <div className="flex items-center gap-3">
               <ProfileAvatar
+                sdk={sdk}
                 profile={
                   avatar
                     ? { ...me.profile, avatar_attachment_id: avatar }
@@ -1162,12 +1209,12 @@ function ProfileEditor({ me }: { me: Me }) {
   );
 }
 
-function ProfileCard({ profile }: { profile: Profile }) {
+function ProfileCard({ profile, sdk }: { profile: Profile; sdk: AuthMiniApi }) {
   return (
     <Link to={profileRoute(profile.username)}>
       <Card className="h-full hover:bg-muted/50">
         <CardContent className="flex items-center gap-3 p-4">
-          <ProfileAvatar profile={profile} />
+          <ProfileAvatar profile={profile} sdk={sdk} />
           <div className="min-w-0">
             <p className="truncate font-medium">{profile.display_name}</p>
             <p className="truncate text-sm text-muted-foreground">
@@ -1183,7 +1230,13 @@ function ProfileCard({ profile }: { profile: Profile }) {
   );
 }
 
-function ProfileAvatar({ profile }: { profile?: Partial<Profile> }) {
+function ProfileAvatar({
+  profile,
+  sdk,
+}: {
+  profile?: Partial<Profile>;
+  sdk: AuthMiniApi;
+}) {
   const fallback = profile?.display_name?.slice(0, 1).toUpperCase() ?? "?";
   const [url, setUrl] = useState("");
   useEffect(() => {
@@ -1194,7 +1247,7 @@ function ProfileAvatar({ profile }: { profile?: Partial<Profile> }) {
     }
     let active = true;
     let objectUrl = "";
-    void attachmentObjectUrl(id)
+    void attachmentObjectUrl(sdk, id)
       .then((next) => {
         objectUrl = next;
         if (active) setUrl(next);
@@ -1205,7 +1258,7 @@ function ProfileAvatar({ profile }: { profile?: Partial<Profile> }) {
       active = false;
       if (objectUrl) URL.revokeObjectURL(objectUrl);
     };
-  }, [profile?.avatar_attachment_id]);
+  }, [profile?.avatar_attachment_id, sdk]);
   return (
     <Avatar>
       <AvatarImage src={url || undefined} alt={profile?.display_name ?? ""} />
@@ -1222,7 +1275,7 @@ function Page({
 }: {
   title: string;
   description: string;
-  children?: React.ReactNode;
+  children?: ReactNode;
   localeControl?: boolean;
 }) {
   return (

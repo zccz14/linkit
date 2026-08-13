@@ -3,6 +3,8 @@
 @import "shadcn/tailwind.css";
 @import "@fontsource-variable/geist";
 
+@source "../node_modules/auth-mini-react-components/dist";
+
 @custom-variant dark (&:is(.dark *));
 
 @theme inline {

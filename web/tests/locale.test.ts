@@ -7,6 +7,7 @@ import {
   translate,
   translations,
 } from "../src/lib/locale.ts";
+import { openPagePath } from "../src/lib/api.ts";
 
 test("every supported locale has every translation", () => {
   const keys = Object.keys(translations.en).sort();
@@ -25,4 +26,13 @@ test("translations interpolate named values", () => {
     translate("zh-CN", "compose.description", { username: "0xCZ" }),
     "正在与 @0xCZ 发起私信…",
   );
+});
+
+test("open-page requests preserve their authenticated destination", () => {
+  assert.equal(openPagePath("?open=profile"), "#/settings/profile");
+  assert.equal(
+    openPagePath("?open=message&username=alice%2Fsmith"),
+    "#/compose/alice%2Fsmith",
+  );
+  assert.equal(openPagePath("?open=message"), "#/inbox");
 });
