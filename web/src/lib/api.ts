@@ -21,6 +21,7 @@ export type Conversation = {
   id: string;
   kind: "direct" | "group";
   title: string;
+  counterpart_name?: string;
   created_by: string;
   created_at: number;
   latest_body?: string;
