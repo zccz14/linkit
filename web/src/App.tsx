@@ -14,6 +14,7 @@ import {
 import {
   BellIcon,
   BotIcon,
+  ChevronLeftIcon,
   FileIcon,
   ImageIcon,
   LogOutIcon,
@@ -26,6 +27,7 @@ import {
   ShieldCheckIcon,
   UserRoundIcon,
   UsersRoundIcon,
+  XIcon,
 } from "lucide-react";
 import { toast } from "sonner";
 
@@ -49,6 +51,13 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import {
+  Drawer,
+  DrawerContent,
+  DrawerFooter,
+  DrawerHeader,
+  DrawerTitle,
+} from "@/components/ui/drawer";
+import {
   Empty,
   EmptyDescription,
   EmptyHeader,
@@ -62,9 +71,18 @@ import {
   FieldLabel,
 } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
+import {
+  Select,
+  SelectContent,
+  SelectGroup,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { Separator } from "@/components/ui/separator";
 import { Toaster } from "@/components/ui/sonner";
 import { Textarea } from "@/components/ui/textarea";
+import { useIsMobile } from "@/hooks/use-mobile";
 import {
   api,
   attachmentObjectUrl,
@@ -316,6 +334,7 @@ function Shell({ me, sdk }: { me: Me; sdk: AuthMiniApi }) {
   const { signOut } = useAuthMini();
   const navigate = useNavigate();
   const location = useLocation();
+  const isMobile = useIsMobile();
   const queryClient = useQueryClient();
   const conversations = useQuery({
     queryKey: ["conversations"],
@@ -353,7 +372,6 @@ function Shell({ me, sdk }: { me: Me; sdk: AuthMiniApi }) {
     [me.id, queryClient, sdk, t],
   );
   const links = [
-    ["/inbox", t("navigation.inbox"), MessageCircleIcon],
     ["/directory", t("navigation.directory"), UsersRoundIcon],
     ["/bots", t("navigation.bots"), BotIcon],
     ["/settings/profile", t("navigation.profile"), SettingsIcon],
@@ -362,12 +380,25 @@ function Shell({ me, sdk }: { me: Me; sdk: AuthMiniApi }) {
       : []),
   ] as const;
 
+  const conversationRoute = (id: string) => `/conversations/${id}`;
+  const mobileNavigationVisible =
+    isMobile &&
+    !/^\/conversations\/[^/]+(?:\/manage)?$/.test(location.pathname);
+  const conversationList = (
+    <ConversationList
+      conversations={conversations.data ?? []}
+      currentPath={location.pathname}
+      sdk={sdk}
+      onOpen={(conversation) => navigate(conversationRoute(conversation.id))}
+    />
+  );
+
   return (
-    <div className="grid min-h-screen grid-cols-[17rem_1fr] bg-muted/30 max-md:grid-cols-1">
-      <aside className="flex min-h-screen flex-col gap-4 border-r bg-background p-4 max-md:min-h-0">
+    <div className="grid min-h-dvh grid-cols-[17rem_1fr] bg-muted/30 max-md:grid-cols-1">
+      <aside className="flex min-h-dvh flex-col gap-4 border-r bg-background p-4 max-md:hidden">
         <Link
           className="flex items-center gap-2 px-2 text-lg font-semibold"
-          to="/inbox"
+          to="/conversations"
         >
           <MessageCircleIcon />
           Linkit
@@ -397,29 +428,7 @@ function Shell({ me, sdk }: { me: Me; sdk: AuthMiniApi }) {
             <PlusIcon />
           </Button>
         </div>
-        <div className="flex flex-col gap-1 overflow-y-auto">
-          {conversations.data?.map((conversation) => (
-            <Button
-              key={conversation.id}
-              variant={
-                location.pathname === `/inbox/${conversation.id}`
-                  ? "secondary"
-                  : "ghost"
-              }
-              className="justify-between"
-              onClick={() => navigate(`/inbox/${conversation.id}`)}
-            >
-              <span className="truncate">
-                {conversation.title ||
-                  conversation.counterpart_name ||
-                  t("conversation.direct")}
-              </span>
-              {conversation.unread_count ? (
-                <Badge>{conversation.unread_count}</Badge>
-              ) : null}
-            </Button>
-          ))}
-        </div>
+        <div className="min-h-0 flex-1 overflow-y-auto">{conversationList}</div>
         <div className="mt-auto flex items-center gap-2 border-t pt-4">
           <ProfileAvatar profile={me.profile} sdk={sdk} />
           <div className="min-w-0 flex-1">
@@ -457,10 +466,22 @@ function Shell({ me, sdk }: { me: Me; sdk: AuthMiniApi }) {
       </aside>
       <main className="min-w-0">
         <Routes>
-          <Route path="/inbox" element={<InboxEmpty />} />
           <Route
-            path="/inbox/:id"
+            path="/conversations"
+            element={
+              <ConversationIndex
+                conversations={conversations.data ?? []}
+                sdk={sdk}
+              />
+            }
+          />
+          <Route
+            path="/conversations/:id"
             element={<ConversationPage me={me} sdk={sdk} />}
+          />
+          <Route
+            path="/conversations/:id/manage"
+            element={<MobileGroupManager me={me} sdk={sdk} />}
           />
           <Route path="/directory" element={<Directory sdk={sdk} />} />
           <Route path="/people/:username" element={<Person sdk={sdk} />} />
@@ -472,15 +493,34 @@ function Shell({ me, sdk }: { me: Me; sdk: AuthMiniApi }) {
             element={<ProfileEditor me={me} sdk={sdk} />}
           />
           <Route path="/admin/system" element={<SystemDashboard sdk={sdk} />} />
-          <Route path="*" element={<Navigate to="/inbox" replace />} />
+          <Route path="*" element={<Navigate to="/conversations" replace />} />
         </Routes>
       </main>
+      {mobileNavigationVisible ? <MobileNavigator /> : null}
       <Toaster richColors />
     </div>
   );
 }
 
-function InboxEmpty() {
+function ConversationIndex({
+  conversations,
+  sdk,
+}: {
+  conversations: Conversation[];
+  sdk: AuthMiniApi;
+}) {
+  const isMobile = useIsMobile();
+  const { t } = useI18n();
+  if (!isMobile) return <ConversationEmpty />;
+  return (
+    <div className="min-h-dvh bg-background">
+      <MobileAppHeader title={t("conversation.listTitle")} />
+      <ConversationListPage conversations={conversations} sdk={sdk} />
+    </div>
+  );
+}
+
+function ConversationEmpty() {
   const { t } = useI18n();
   return (
     <div className="grid min-h-screen place-items-center p-6">
@@ -489,11 +529,193 @@ function InboxEmpty() {
           <EmptyMedia variant="icon">
             <MessageCircleIcon />
           </EmptyMedia>
-          <EmptyTitle>{t("inbox.title")}</EmptyTitle>
-          <EmptyDescription>{t("inbox.description")}</EmptyDescription>
+          <EmptyTitle>{t("conversation.emptyTitle")}</EmptyTitle>
+          <EmptyDescription>
+            {t("conversation.emptyDescription")}
+          </EmptyDescription>
         </EmptyHeader>
       </Empty>
     </div>
+  );
+}
+
+function ConversationList({
+  conversations,
+  currentPath,
+  sdk,
+  onOpen,
+}: {
+  conversations: Conversation[];
+  currentPath: string;
+  sdk: AuthMiniApi;
+  onOpen: (conversation: Conversation) => void;
+}) {
+  const { t } = useI18n();
+  return (
+    <div className="flex flex-col gap-1">
+      {conversations.map((conversation) => {
+        const label =
+          conversation.title ||
+          conversation.counterpart_name ||
+          t("conversation.direct");
+        return (
+          <Button
+            key={conversation.id}
+            variant={
+              currentPath === `/conversations/${conversation.id}`
+                ? "secondary"
+                : "ghost"
+            }
+            className="h-auto justify-start gap-3 px-2 py-2 text-left"
+            onClick={() => onOpen(conversation)}
+          >
+            <ConversationAvatar conversation={conversation} sdk={sdk} />
+            <span className="min-w-0 flex-1">
+              <span className="block truncate font-medium">{label}</span>
+              {conversation.latest_body ? (
+                <span className="block truncate text-xs font-normal text-muted-foreground">
+                  {conversation.latest_body}
+                </span>
+              ) : null}
+            </span>
+            {conversation.unread_count ? (
+              <Badge>{conversation.unread_count}</Badge>
+            ) : null}
+          </Button>
+        );
+      })}
+    </div>
+  );
+}
+
+function ConversationListPage({
+  conversations,
+  sdk,
+}: {
+  conversations: Conversation[];
+  sdk: AuthMiniApi;
+}) {
+  const { t } = useI18n();
+  const navigate = useNavigate();
+  const location = useLocation();
+  return (
+    <div className="flex min-h-[calc(100dvh-3.5rem)] flex-col p-3 pb-20">
+      <div className="mb-3 flex items-center justify-between px-1">
+        <p className="text-sm text-muted-foreground">
+          {t("navigation.conversations")}
+        </p>
+        <Button size="sm" onClick={() => navigate("/groups/new")}>
+          <PlusIcon data-icon="inline-start" />
+          {t("navigation.newGroup")}
+        </Button>
+      </div>
+      {conversations.length ? (
+        <ConversationList
+          conversations={conversations}
+          currentPath={location.pathname}
+          sdk={sdk}
+          onOpen={(conversation) =>
+            navigate(`/conversations/${conversation.id}`)
+          }
+        />
+      ) : (
+        <div className="grid flex-1 place-items-center">
+          <Empty>
+            <EmptyHeader>
+              <EmptyMedia variant="icon">
+                <MessageCircleIcon />
+              </EmptyMedia>
+              <EmptyTitle>{t("conversation.emptyTitle")}</EmptyTitle>
+              <EmptyDescription>
+                {t("conversation.emptyDescription")}
+              </EmptyDescription>
+            </EmptyHeader>
+          </Empty>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ConversationAvatar({
+  conversation,
+  sdk,
+}: {
+  conversation: Conversation;
+  sdk: AuthMiniApi;
+}) {
+  const { t } = useI18n();
+  if (conversation.kind === "group")
+    return (
+      <Avatar>
+        <AvatarFallback aria-label={t("group.title")}>
+          <UsersRoundIcon />
+        </AvatarFallback>
+      </Avatar>
+    );
+  return (
+    <ProfileAvatar
+      sdk={sdk}
+      profile={{
+        display_name: conversation.counterpart_name,
+        avatar_attachment_id: conversation.counterpart_avatar_attachment_id,
+      }}
+    />
+  );
+}
+
+function MobileAppHeader({
+  title,
+  onBack,
+  action,
+}: {
+  title: string;
+  onBack?: () => void;
+  action?: ReactNode;
+}) {
+  const { t } = useI18n();
+  return (
+    <header className="flex min-h-14 items-center gap-2 border-b px-3">
+      {onBack ? (
+        <Button
+          variant="ghost"
+          size="icon"
+          aria-label={t("conversation.back")}
+          onClick={onBack}
+        >
+          <ChevronLeftIcon />
+        </Button>
+      ) : null}
+      <h1 className="min-w-0 flex-1 truncate font-semibold">{title}</h1>
+      {action}
+    </header>
+  );
+}
+
+function MobileNavigator() {
+  const { t } = useI18n();
+  const location = useLocation();
+  const navigate = useNavigate();
+  const items = [
+    ["/conversations", t("navigation.inbox"), MessageCircleIcon],
+    ["/directory", t("navigation.directory"), UsersRoundIcon],
+    ["/bots", t("navigation.bots"), BotIcon],
+    ["/settings/profile", t("navigation.profile"), SettingsIcon],
+  ] as const;
+  return (
+    <nav className="fixed right-0 bottom-0 left-0 z-40 grid grid-cols-4 border-t bg-background/95 px-2 py-1 backdrop-blur md:hidden">
+      {items.map(([to, label, Icon]) => (
+        <Button
+          key={to}
+          variant={location.pathname === to ? "secondary" : "ghost"}
+          className="h-12 flex-col gap-0.5 px-1 text-[0.7rem]"
+          onClick={() => navigate(to)}
+        >
+          <Icon />
+          {label}
+        </Button>
+      ))}
+    </nav>
   );
 }
 
@@ -607,11 +829,12 @@ function byteRate(bytes: number) {
 function ConversationPage({ me, sdk }: { me: Me; sdk: AuthMiniApi }) {
   const { t } = useI18n();
   const { id = "" } = useParams();
+  const navigate = useNavigate();
+  const isMobile = useIsMobile();
   const queryClient = useQueryClient();
   const [body, setBody] = useState("");
   const [attachments, setAttachments] = useState<Attachment[]>([]);
   const [manageOpen, setManageOpen] = useState(false);
-  const [botId, setBotId] = useState("");
   const fileRef = useRef<HTMLInputElement>(null);
   const messages = useQuery({
     queryKey: ["messages", id],
@@ -621,22 +844,6 @@ function ConversationPage({ me, sdk }: { me: Me; sdk: AuthMiniApi }) {
   const detail = useQuery({
     queryKey: ["conversation", id],
     queryFn: () => api<ConversationDetail>(sdk, `/api/conversations/${id}`),
-  });
-  const bots = useQuery({
-    queryKey: ["bots"],
-    queryFn: () => api<Bot[]>(sdk, "/api/bots"),
-    enabled: manageOpen,
-  });
-  const addBot = useMutation({
-    mutationFn: () =>
-      api(sdk, `/api/bots/${botId}/groups/${id}`, { method: "POST" }),
-    onSuccess: () => {
-      setBotId("");
-      setManageOpen(false);
-      void detail.refetch();
-      toast.success(t("conversation.addBotSuccess"));
-    },
-    onError: (error) => toast.error(error.message),
   });
   const send = useMutation({
     mutationFn: () =>
@@ -673,43 +880,69 @@ function ConversationPage({ me, sdk }: { me: Me; sdk: AuthMiniApi }) {
     }
     event.target.value = "";
   };
-  const availableBots =
-    bots.data?.map((bot) => `${bot.name} (${bot.id})`).join(", ") ||
-    t("conversation.noBots");
+  const sendMessage = () => {
+    if (send.isPending || (!body.trim() && !attachments.length)) return;
+    send.mutate();
+  };
+  const title =
+    detail.data?.title ||
+    detail.data?.counterpart_name ||
+    t("conversation.direct");
+  const manageGroup = () => {
+    if (isMobile) navigate(`/conversations/${id}/manage`);
+    else setManageOpen(true);
+  };
 
   return (
-    <div className="flex min-h-screen flex-col">
-      <header className="flex items-center gap-2 border-b bg-background px-6 py-4">
-        <MessageCircleIcon />
-        <h1 className="flex-1 font-semibold">
-          {detail.data?.title || t("conversation.direct")}
-        </h1>
-        {detail.data?.kind === "group" ? (
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => setManageOpen(true)}
-          >
-            <UsersRoundIcon data-icon="inline-start" />
-            {t("conversation.members")}
-          </Button>
-        ) : null}
-      </header>
-      <section className="flex flex-1 flex-col gap-4 overflow-y-auto p-6">
-        {messages.data?.map((message) => (
-          <MessageRow
-            key={message.id}
-            message={message}
-            mine={message.sender_kind === "user" && message.sender_id === me.id}
-            sdk={sdk}
-          />
-        ))}
+    <div className="flex h-dvh min-h-0 flex-col bg-background">
+      {isMobile ? (
+        <MobileAppHeader
+          title={title}
+          onBack={() => navigate("/conversations")}
+          action={
+            detail.data?.kind === "group" ? (
+              <Button
+                variant="ghost"
+                size="icon"
+                aria-label={t("conversation.members")}
+                onClick={manageGroup}
+              >
+                <UsersRoundIcon />
+              </Button>
+            ) : undefined
+          }
+        />
+      ) : (
+        <header className="flex min-h-14 items-center gap-2 border-b px-6">
+          <MessageCircleIcon />
+          <h1 className="min-w-0 flex-1 truncate font-semibold">{title}</h1>
+          {detail.data?.kind === "group" ? (
+            <Button variant="outline" size="sm" onClick={manageGroup}>
+              <UsersRoundIcon data-icon="inline-start" />
+              {t("conversation.members")}
+            </Button>
+          ) : null}
+        </header>
+      )}
+      <section className="min-h-0 flex-1 overflow-auto p-4 md:p-6">
+        <div className="flex flex-col gap-4">
+          {messages.data?.map((message) => (
+            <MessageRow
+              key={message.id}
+              message={message}
+              mine={
+                message.sender_kind === "user" && message.sender_id === me.id
+              }
+              sdk={sdk}
+            />
+          ))}
+        </div>
       </section>
       <form
-        className="border-t bg-background p-4"
+        className="shrink-0 border-t p-3 md:p-4"
         onSubmit={(event) => {
           event.preventDefault();
-          send.mutate();
+          sendMessage();
         }}
       >
         {attachments.length ? (
@@ -738,8 +971,16 @@ function ConversationPage({ me, sdk }: { me: Me; sdk: AuthMiniApi }) {
             <PaperclipIcon />
           </Button>
           <Textarea
+            rows={1}
+            className="min-h-9 max-h-36 resize-none"
             value={body}
             onChange={(event) => setBody(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === "Enter" && !event.shiftKey) {
+                event.preventDefault();
+                sendMessage();
+              }
+            }}
             placeholder={t("conversation.writeMessage")}
           />
           <Button
@@ -751,52 +992,261 @@ function ConversationPage({ me, sdk }: { me: Me; sdk: AuthMiniApi }) {
           </Button>
         </div>
       </form>
-      <Dialog open={manageOpen} onOpenChange={setManageOpen}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>{t("conversation.manageTitle")}</DialogTitle>
-          </DialogHeader>
-          <div className="flex flex-col gap-3">
-            <div>
-              {detail.data?.members.map((member) => (
-                <p key={member.user_id} className="text-sm">
-                  {member.display_name}{" "}
-                  <span className="text-muted-foreground">
+      <Drawer
+        open={manageOpen}
+        onOpenChange={setManageOpen}
+        swipeDirection="right"
+      >
+        <DrawerContent className="[--drawer-content-width:28rem]">
+          <DrawerHeader>
+            <DrawerTitle>{t("conversation.manageTitle")}</DrawerTitle>
+          </DrawerHeader>
+          {detail.data ? (
+            <GroupManagementContent detail={detail.data} me={me} sdk={sdk} />
+          ) : null}
+          <DrawerFooter>
+            <Button variant="outline" onClick={() => setManageOpen(false)}>
+              {t("bots.done")}
+            </Button>
+          </DrawerFooter>
+        </DrawerContent>
+      </Drawer>
+    </div>
+  );
+}
+
+function MobileGroupManager({ me, sdk }: { me: Me; sdk: AuthMiniApi }) {
+  const { id = "" } = useParams();
+  const navigate = useNavigate();
+  const { t } = useI18n();
+  const detail = useQuery({
+    queryKey: ["conversation", id],
+    queryFn: () => api<ConversationDetail>(sdk, `/api/conversations/${id}`),
+  });
+  if (detail.isPending)
+    return <LoadingScreen>{t("profile.loading")}</LoadingScreen>;
+  if (detail.isError)
+    return <LoadingScreen>{detail.error.message}</LoadingScreen>;
+  if (detail.data.kind !== "group")
+    return <Navigate to={`/conversations/${id}`} replace />;
+  return (
+    <div className="flex min-h-dvh flex-col bg-background">
+      <MobileAppHeader
+        title={t("conversation.manageTitle")}
+        onBack={() => navigate(`/conversations/${id}`)}
+      />
+      <GroupManagementContent detail={detail.data} me={me} sdk={sdk} />
+    </div>
+  );
+}
+
+function GroupManagementContent({
+  detail,
+  me,
+  sdk,
+}: {
+  detail: ConversationDetail;
+  me: Me;
+  sdk: AuthMiniApi;
+}) {
+  const { t } = useI18n();
+  const queryClient = useQueryClient();
+  const [username, setUsername] = useState("");
+  const [botId, setBotId] = useState("");
+  const bots = useQuery({
+    queryKey: ["bots"],
+    queryFn: () => api<Bot[]>(sdk, "/api/bots"),
+  });
+  const refresh = () =>
+    void queryClient.invalidateQueries({
+      queryKey: ["conversation", detail.id],
+    });
+  const addMember = useMutation({
+    mutationFn: () =>
+      api(sdk, `/api/conversations/${detail.id}/members`, {
+        method: "POST",
+        body: JSON.stringify({ username }),
+      }),
+    onSuccess: () => {
+      setUsername("");
+      refresh();
+    },
+    onError: (error) => toast.error(error.message),
+  });
+  const removeMember = useMutation({
+    mutationFn: (memberUsername: string) =>
+      api(sdk, `/api/conversations/${detail.id}/members`, {
+        method: "DELETE",
+        body: JSON.stringify({ username: memberUsername }),
+      }),
+    onSuccess: () => {
+      refresh();
+      toast.success(t("conversation.removeMemberSuccess"));
+    },
+    onError: (error) => toast.error(error.message),
+  });
+  const addBot = useMutation({
+    mutationFn: () =>
+      api(sdk, `/api/bots/${botId}/groups/${detail.id}`, { method: "POST" }),
+    onSuccess: () => {
+      setBotId("");
+      refresh();
+      toast.success(t("conversation.addBotSuccess"));
+    },
+    onError: (error) => toast.error(error.message),
+  });
+  const removeBot = useMutation({
+    mutationFn: (id: string) =>
+      api(sdk, `/api/bots/${id}/groups/${detail.id}`, { method: "DELETE" }),
+    onSuccess: () => {
+      refresh();
+      toast.success(t("conversation.removeBotSuccess"));
+    },
+    onError: (error) => toast.error(error.message),
+  });
+  const isOwner = detail.members.some(
+    (member) => member.user_id === me.id && member.role === "owner",
+  );
+  const availableBots = (bots.data ?? []).filter(
+    (bot) => !detail.bots.some((member) => member.id === bot.id),
+  );
+
+  return (
+    <div className="min-h-0 flex-1 overflow-auto p-4">
+      <div className="flex flex-col gap-6">
+        <section className="flex flex-col gap-3">
+          <div className="flex items-center justify-between">
+            <h2 className="font-medium">{t("conversation.members")}</h2>
+            <Badge variant="secondary">{detail.members.length}</Badge>
+          </div>
+          <div className="flex flex-col gap-1">
+            {detail.members.map((member) => (
+              <div
+                key={member.user_id}
+                className="flex items-center gap-3 rounded-lg px-2 py-2"
+              >
+                <Avatar>
+                  <AvatarFallback>
+                    {member.display_name.slice(0, 1)}
+                  </AvatarFallback>
+                </Avatar>
+                <div className="min-w-0 flex-1">
+                  <p className="truncate text-sm font-medium">
+                    {member.display_name}
+                  </p>
+                  <p className="truncate text-xs text-muted-foreground">
                     @{member.username}
-                  </span>{" "}
-                  {member.role === "owner" ? (
-                    <Badge variant="secondary">{t("conversation.owner")}</Badge>
+                  </p>
+                </div>
+                {member.role === "owner" ? (
+                  <Badge variant="secondary">{t("conversation.owner")}</Badge>
+                ) : null}
+                {isOwner && member.role !== "owner" ? (
+                  <Button
+                    variant="ghost"
+                    size="icon-sm"
+                    aria-label={t("conversation.removeMember")}
+                    disabled={removeMember.isPending}
+                    onClick={() => removeMember.mutate(member.username)}
+                  >
+                    <XIcon />
+                  </Button>
+                ) : null}
+              </div>
+            ))}
+          </div>
+          {isOwner ? (
+            <form
+              className="flex gap-2"
+              onSubmit={(event) => {
+                event.preventDefault();
+                if (username.trim()) addMember.mutate();
+              }}
+            >
+              <Input
+                value={username}
+                onChange={(event) => setUsername(event.target.value)}
+                placeholder={t("conversation.memberPlaceholder")}
+              />
+              <Button
+                type="submit"
+                disabled={!username.trim() || addMember.isPending}
+              >
+                <PlusIcon data-icon="inline-start" />
+                {t("conversation.addMember")}
+              </Button>
+            </form>
+          ) : null}
+        </section>
+        <Separator />
+        <section className="flex flex-col gap-3">
+          <div className="flex items-center justify-between">
+            <h2 className="font-medium">{t("navigation.bots")}</h2>
+            <Badge variant="secondary">{detail.bots.length}</Badge>
+          </div>
+          {detail.bots.length ? (
+            <div className="flex flex-col gap-1">
+              {detail.bots.map((bot) => (
+                <div
+                  key={bot.id}
+                  className="flex items-center gap-3 rounded-lg px-2 py-2"
+                >
+                  <Avatar>
+                    <AvatarFallback>
+                      <BotIcon />
+                    </AvatarFallback>
+                  </Avatar>
+                  <p className="min-w-0 flex-1 truncate text-sm font-medium">
+                    {bot.name}
+                  </p>
+                  {isOwner ? (
+                    <Button
+                      variant="ghost"
+                      size="icon-sm"
+                      aria-label={t("conversation.removeBot")}
+                      disabled={removeBot.isPending}
+                      onClick={() => removeBot.mutate(bot.id)}
+                    >
+                      <XIcon />
+                    </Button>
                   ) : null}
-                </p>
+                </div>
               ))}
             </div>
-            <Separator />
+          ) : null}
+          {isOwner ? (
             <Field>
-              <FieldLabel htmlFor="group-bot">
-                {t("conversation.addBot")}
-              </FieldLabel>
-              <Input
-                id="group-bot"
-                value={botId}
-                onChange={(event) => setBotId(event.target.value)}
-                placeholder={t("conversation.botPlaceholder")}
-              />
-              <FieldDescription>
-                {t("conversation.availableBots", { bots: availableBots })}
-              </FieldDescription>
+              <FieldLabel>{t("conversation.addBot")}</FieldLabel>
+              <div className="flex gap-2">
+                <Select
+                  value={botId || null}
+                  onValueChange={(value) => setBotId(value ?? "")}
+                >
+                  <SelectTrigger className="min-w-0 flex-1">
+                    <SelectValue placeholder={t("conversation.selectBot")} />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectGroup>
+                      {availableBots.map((bot) => (
+                        <SelectItem key={bot.id} value={bot.id}>
+                          {bot.name}
+                        </SelectItem>
+                      ))}
+                    </SelectGroup>
+                  </SelectContent>
+                </Select>
+                <Button
+                  disabled={!botId || addBot.isPending}
+                  onClick={() => addBot.mutate()}
+                >
+                  <BotIcon data-icon="inline-start" />
+                  {t("conversation.addBot")}
+                </Button>
+              </div>
             </Field>
-          </div>
-          <DialogFooter>
-            <Button
-              disabled={!botId || addBot.isPending}
-              onClick={() => addBot.mutate()}
-            >
-              <BotIcon data-icon="inline-start" />
-              {t("conversation.addBot")}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+          ) : null}
+        </section>
+      </div>
     </div>
   );
 }
@@ -937,7 +1387,7 @@ function Person({ sdk }: { sdk: AuthMiniApi }) {
       api<Conversation>(sdk, `/api/conversations/direct/${username}`, {
         method: "POST",
       }),
-    onSuccess: (conversation) => navigate(`/inbox/${conversation.id}`),
+    onSuccess: (conversation) => navigate(`/conversations/${conversation.id}`),
     onError: (error) => toast.error(error.message),
   });
   if (person.isPending)
@@ -973,7 +1423,7 @@ function Compose({ sdk }: { sdk: AuthMiniApi }) {
       api<Conversation>(sdk, `/api/conversations/direct/${username}`, {
         method: "POST",
       }),
-    onSuccess: (conversation) => navigate(`/inbox/${conversation.id}`),
+    onSuccess: (conversation) => navigate(`/conversations/${conversation.id}`),
     onError: (error) => toast.error(error.message),
   });
   useEffect(() => {
@@ -1004,7 +1454,7 @@ function GroupCreator({ sdk }: { sdk: AuthMiniApi }) {
             .filter(Boolean),
         }),
       }),
-    onSuccess: (conversation) => navigate(`/inbox/${conversation.id}`),
+    onSuccess: (conversation) => navigate(`/conversations/${conversation.id}`),
     onError: (error) => toast.error(error.message),
   });
   return (
@@ -1407,7 +1857,7 @@ function Page({
   localeControl?: boolean;
 }) {
   return (
-    <div className="mx-auto w-full max-w-4xl p-6">
+    <div className="mx-auto w-full max-w-4xl p-6 pb-20 md:pb-6">
       <header className="mb-6 flex items-start justify-between gap-4">
         <div>
           <h1 className="text-2xl font-semibold">{title}</h1>

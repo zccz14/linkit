@@ -34,8 +34,8 @@ use crate::{
 };
 
 const MAX_UPLOAD_BYTES: usize = 52_428_800;
-const LIST_CONVERSATIONS_QUERY: &str = "SELECT c.id,c.kind,c.title,c.created_by,c.created_at,CASE WHEN c.kind='direct' THEN COALESCE((SELECT p.display_name FROM conversation_members cm_peer JOIN profiles p ON p.user_id=cm_peer.user_id WHERE cm_peer.conversation_id=c.id AND cm_peer.user_id<>? LIMIT 1),(SELECT b.name FROM conversation_bots cb JOIN bots b ON b.id=cb.bot_id WHERE cb.conversation_id=c.id LIMIT 1)) END counterpart_name,(SELECT body FROM messages WHERE conversation_id=c.id ORDER BY created_at DESC LIMIT 1) latest_body,(SELECT created_at FROM messages WHERE conversation_id=c.id ORDER BY created_at DESC LIMIT 1) latest_at,(SELECT COUNT(*) FROM messages WHERE conversation_id=c.id AND created_at>cm.last_read_at AND sender_id<>?) unread_count FROM conversations c JOIN conversation_members cm ON cm.conversation_id=c.id WHERE cm.user_id=? ORDER BY COALESCE(latest_at,c.created_at) DESC";
-const CONVERSATION_QUERY: &str = "SELECT c.id,c.kind,c.title,c.created_by,c.created_at,CASE WHEN c.kind='direct' THEN COALESCE((SELECT p.display_name FROM conversation_members cm_peer JOIN profiles p ON p.user_id=cm_peer.user_id WHERE cm_peer.conversation_id=c.id AND cm_peer.user_id<>? LIMIT 1),(SELECT b.name FROM conversation_bots cb JOIN bots b ON b.id=cb.bot_id WHERE cb.conversation_id=c.id LIMIT 1)) END counterpart_name,(SELECT body FROM messages WHERE conversation_id=c.id ORDER BY created_at DESC LIMIT 1) latest_body,(SELECT created_at FROM messages WHERE conversation_id=c.id ORDER BY created_at DESC LIMIT 1) latest_at,(SELECT COUNT(*) FROM messages WHERE conversation_id=c.id AND created_at>cm.last_read_at AND sender_id<>?) unread_count FROM conversations c JOIN conversation_members cm ON cm.conversation_id=c.id WHERE c.id=? AND cm.user_id=?";
+const LIST_CONVERSATIONS_QUERY: &str = "SELECT c.id,c.kind,c.title,c.created_by,c.created_at,CASE WHEN c.kind='direct' THEN COALESCE((SELECT p.display_name FROM conversation_members cm_peer JOIN profiles p ON p.user_id=cm_peer.user_id WHERE cm_peer.conversation_id=c.id AND cm_peer.user_id<>? LIMIT 1),(SELECT b.name FROM conversation_bots cb JOIN bots b ON b.id=cb.bot_id WHERE cb.conversation_id=c.id LIMIT 1)) END counterpart_name,CASE WHEN c.kind='direct' THEN (SELECT p.avatar_attachment_id FROM conversation_members cm_peer JOIN profiles p ON p.user_id=cm_peer.user_id WHERE cm_peer.conversation_id=c.id AND cm_peer.user_id<>? LIMIT 1) END counterpart_avatar_attachment_id,(SELECT body FROM messages WHERE conversation_id=c.id ORDER BY created_at DESC LIMIT 1) latest_body,(SELECT created_at FROM messages WHERE conversation_id=c.id ORDER BY created_at DESC LIMIT 1) latest_at,(SELECT COUNT(*) FROM messages WHERE conversation_id=c.id AND created_at>cm.last_read_at AND sender_id<>?) unread_count FROM conversations c JOIN conversation_members cm ON cm.conversation_id=c.id WHERE cm.user_id=? ORDER BY COALESCE(latest_at,c.created_at) DESC";
+const CONVERSATION_QUERY: &str = "SELECT c.id,c.kind,c.title,c.created_by,c.created_at,CASE WHEN c.kind='direct' THEN COALESCE((SELECT p.display_name FROM conversation_members cm_peer JOIN profiles p ON p.user_id=cm_peer.user_id WHERE cm_peer.conversation_id=c.id AND cm_peer.user_id<>? LIMIT 1),(SELECT b.name FROM conversation_bots cb JOIN bots b ON b.id=cb.bot_id WHERE cb.conversation_id=c.id LIMIT 1)) END counterpart_name,CASE WHEN c.kind='direct' THEN (SELECT p.avatar_attachment_id FROM conversation_members cm_peer JOIN profiles p ON p.user_id=cm_peer.user_id WHERE cm_peer.conversation_id=c.id AND cm_peer.user_id<>? LIMIT 1) END counterpart_avatar_attachment_id,(SELECT body FROM messages WHERE conversation_id=c.id ORDER BY created_at DESC LIMIT 1) latest_body,(SELECT created_at FROM messages WHERE conversation_id=c.id ORDER BY created_at DESC LIMIT 1) latest_at,(SELECT COUNT(*) FROM messages WHERE conversation_id=c.id AND created_at>cm.last_read_at AND sender_id<>?) unread_count FROM conversations c JOIN conversation_members cm ON cm.conversation_id=c.id WHERE c.id=? AND cm.user_id=?";
 
 #[derive(Clone)]
 pub struct AppState {
@@ -82,7 +82,10 @@ pub fn router(state: AppState) -> Router {
         )
         .route("/api/conversations/{id}", get(conversation_detail))
         .route("/api/conversations/direct/{username}", post(open_direct))
-        .route("/api/conversations/{id}/members", post(add_member))
+        .route(
+            "/api/conversations/{id}/members",
+            post(add_member).delete(remove_member),
+        )
         .route(
             "/api/conversations/{id}/messages",
             get(list_messages).post(send_message),
@@ -97,7 +100,7 @@ pub fn router(state: AppState) -> Router {
         .route("/api/bots/{id}", patch(update_bot))
         .route(
             "/api/bots/{id}/groups/{conversation_id}",
-            post(add_bot_to_group),
+            post(add_bot_to_group).delete(remove_bot_from_group),
         )
         .route(
             "/api/notification-subscriptions",
@@ -539,6 +542,7 @@ struct Conversation {
     created_by: String,
     created_at: i64,
     counterpart_name: Option<String>,
+    counterpart_avatar_attachment_id: Option<String>,
     latest_body: Option<String>,
     latest_at: Option<i64>,
     unread_count: i64,
@@ -549,6 +553,7 @@ async fn list_conversations(
     axum::Extension(user): axum::Extension<UserIdentity>,
 ) -> Result<axum::Json<Vec<Conversation>>, AppError> {
     let rows = sqlx::query_as(LIST_CONVERSATIONS_QUERY)
+        .bind(&user.id)
         .bind(&user.id)
         .bind(&user.id)
         .bind(&user.id)
@@ -671,6 +676,32 @@ async fn add_member(
     let mut tx = state.db.begin().await?;
     add_member_by_username(&mut tx, &id, &input.username, now).await?;
     tx.commit().await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn remove_member(
+    State(state): State<AppState>,
+    axum::Extension(user): axum::Extension<UserIdentity>,
+    Path(id): Path<String>,
+    axum::Json(input): axum::Json<MemberInput>,
+) -> Result<StatusCode, AppError> {
+    require_group_owner(&state.db, &id, &user.id).await?;
+    let member_id = user_id_from_username(&state.db, &input.username).await?;
+    if member_id == user.id {
+        return Err(AppError::bad_request(
+            "a group owner cannot remove themselves",
+        ));
+    }
+    let result = sqlx::query(
+        "DELETE FROM conversation_members WHERE conversation_id=? AND user_id=? AND role='member'",
+    )
+    .bind(&id)
+    .bind(member_id)
+    .execute(&state.db)
+    .await?;
+    if result.rows_affected() == 0 {
+        return Err(AppError::not_found("group member not found"));
+    }
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -812,7 +843,7 @@ async fn download_attachment(
     axum::Extension(user): axum::Extension<UserIdentity>,
     Path(id): Path<String>,
 ) -> Result<Response, AppError> {
-    let row: Option<(String, String, String, Option<String>)> = sqlx::query_as("SELECT a.storage_name,a.file_name,a.media_type,a.message_id FROM attachments a WHERE a.id=? AND (a.owner_user_id=? OR EXISTS(SELECT 1 FROM messages m JOIN conversation_members cm ON cm.conversation_id=m.conversation_id WHERE m.id=a.message_id AND cm.user_id=?))").bind(&id).bind(&user.id).bind(&user.id).fetch_optional(&state.db).await?;
+    let row: Option<(String, String, String, Option<String>)> = sqlx::query_as("SELECT a.storage_name,a.file_name,a.media_type,a.message_id FROM attachments a WHERE a.id=? AND (a.owner_user_id=? OR EXISTS(SELECT 1 FROM messages m JOIN conversation_members cm ON cm.conversation_id=m.conversation_id WHERE m.id=a.message_id AND cm.user_id=?) OR EXISTS(SELECT 1 FROM profiles p WHERE p.avatar_attachment_id=a.id))").bind(&id).bind(&user.id).bind(&user.id).fetch_optional(&state.db).await?;
     let Some((storage_name, file_name, media_type, _)) = row else {
         return Err(AppError::not_found("attachment not found"));
     };
@@ -965,6 +996,23 @@ async fn add_bot_to_group(
     Ok(StatusCode::NO_CONTENT)
 }
 
+async fn remove_bot_from_group(
+    State(state): State<AppState>,
+    axum::Extension(user): axum::Extension<UserIdentity>,
+    Path((id, conversation_id)): Path<(String, String)>,
+) -> Result<StatusCode, AppError> {
+    require_group_owner(&state.db, &conversation_id, &user.id).await?;
+    let result = sqlx::query("DELETE FROM conversation_bots WHERE conversation_id=? AND bot_id=?")
+        .bind(&conversation_id)
+        .bind(&id)
+        .execute(&state.db)
+        .await?;
+    if result.rows_affected() == 0 {
+        return Err(AppError::not_found("group bot not found"));
+    }
+    Ok(StatusCode::NO_CONTENT)
+}
+
 #[derive(Deserialize)]
 struct BotMessageInput {
     conversation_id: Option<String>,
@@ -1101,6 +1149,7 @@ async fn attachments_for(db: &SqlitePool, message_id: &str) -> Result<Vec<Attach
 
 async fn conversation(db: &SqlitePool, id: &str, user_id: &str) -> Result<Conversation, AppError> {
     sqlx::query_as(CONVERSATION_QUERY)
+        .bind(user_id)
         .bind(user_id)
         .bind(user_id)
         .bind(id)
@@ -1404,10 +1453,11 @@ mod tests {
                 .execute(&pool)
                 .await
                 .unwrap();
-            sqlx::query("INSERT INTO profiles(user_id,username,display_name,motto,updated_at) VALUES(?,?,?,'',0)")
+            sqlx::query("INSERT INTO profiles(user_id,username,display_name,motto,avatar_attachment_id,updated_at) VALUES(?,?,?,'',?,0)")
                 .bind(id)
                 .bind(username)
                 .bind(display_name)
+                .bind((id == "bob").then_some("bob-avatar"))
                 .execute(&pool)
                 .await
                 .unwrap();
@@ -1427,6 +1477,58 @@ mod tests {
         let direct = conversation(&pool, "direct", "alice").await.unwrap();
 
         assert_eq!(direct.counterpart_name.as_deref(), Some("Bob"));
+        assert_eq!(
+            direct.counterpart_avatar_attachment_id.as_deref(),
+            Some("bob-avatar")
+        );
+    }
+
+    #[tokio::test]
+    async fn profile_avatars_are_available_to_other_conversation_members() {
+        let pool = db::connect_memory().await.unwrap();
+        for (id, username, display_name, avatar) in [
+            ("alice", "alice", "Alice", None),
+            ("bob", "bob", "Bob", Some("bob-avatar")),
+        ] {
+            sqlx::query("INSERT INTO users(id,created_at) VALUES(?,0)")
+                .bind(id)
+                .execute(&pool)
+                .await
+                .unwrap();
+            sqlx::query("INSERT INTO profiles(user_id,username,display_name,motto,avatar_attachment_id,updated_at) VALUES(?,?,?,'',?,0)")
+                .bind(id)
+                .bind(username)
+                .bind(display_name)
+                .bind(avatar)
+                .execute(&pool)
+                .await
+                .unwrap();
+        }
+        sqlx::query("INSERT INTO conversations(id,kind,title,created_by,created_at) VALUES('group','group','Team','alice',0)")
+            .execute(&pool)
+            .await
+            .unwrap();
+        for user_id in ["alice", "bob"] {
+            sqlx::query("INSERT INTO conversation_members(conversation_id,user_id,role,joined_at) VALUES('group',?,'member',0)")
+                .bind(user_id)
+                .execute(&pool)
+                .await
+                .unwrap();
+        }
+        sqlx::query("INSERT INTO attachments(id,owner_user_id,file_name,media_type,byte_size,storage_name,created_at) VALUES('bob-avatar','bob','avatar.png','image/png',1,'avatar-file',0)")
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        let visible: Option<String> = sqlx::query_scalar("SELECT a.id FROM attachments a WHERE a.id=? AND (a.owner_user_id=? OR EXISTS(SELECT 1 FROM messages m JOIN conversation_members cm ON cm.conversation_id=m.conversation_id WHERE m.id=a.message_id AND cm.user_id=?) OR EXISTS(SELECT 1 FROM profiles p WHERE p.avatar_attachment_id=a.id))")
+            .bind("bob-avatar")
+            .bind("alice")
+            .bind("alice")
+            .fetch_optional(&pool)
+            .await
+            .unwrap();
+
+        assert_eq!(visible.as_deref(), Some("bob-avatar"));
     }
 
     #[test]
