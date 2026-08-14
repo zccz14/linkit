@@ -39,6 +39,16 @@ import { toast } from "sonner";
 
 import { LanguageMenu } from "@/components/language-menu";
 import { useI18n } from "@/components/use-i18n";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -1315,7 +1325,11 @@ function MessageRow({
   return (
     <div className={mine ? "ml-auto max-w-xl" : "max-w-xl"}>
       <div className="mb-1 flex items-center gap-2 text-xs text-muted-foreground">
-        <span>{message.sender_name}</span>
+        <span>
+          {message.sender_deleted
+            ? t("conversation.deletedBot")
+            : message.sender_name}
+        </span>
         {message.sender_kind === "bot" ? (
           <Badge variant="secondary">{t("conversation.bot")}</Badge>
         ) : null}
@@ -1559,6 +1573,7 @@ function Bots({ sdk }: { sdk: AuthMiniApi }) {
   const [name, setName] = useState("");
   const [token, setToken] = useState("");
   const [selected, setSelected] = useState<Bot>();
+  const [deleteConfirmation, setDeleteConfirmation] = useState(false);
   const [ownerUsername, setOwnerUsername] = useState("");
   const create = useMutation({
     mutationFn: () =>
@@ -1574,14 +1589,28 @@ function Bots({ sdk }: { sdk: AuthMiniApi }) {
   });
   const update = useMutation({
     mutationFn: ({ body, id }: { id: string; body: object }) =>
-      api<{ token?: string }>(sdk, `/api/bots/${id}`, {
+      api<Bot & { token?: string }>(sdk, `/api/bots/${id}`, {
         method: "PATCH",
         body: JSON.stringify(body),
       }),
     onSuccess: (result) => {
       if (result.token) setToken(result.token);
+      setSelected(result);
+      setName(result.name);
       void queryClient.invalidateQueries({ queryKey: ["bots"] });
       toast.success(t("bots.updated"));
+    },
+    onError: (error) => toast.error(error.message),
+  });
+  const remove = useMutation({
+    mutationFn: (id: string) =>
+      api<void>(sdk, `/api/bots/${id}`, { method: "DELETE" }),
+    onSuccess: () => {
+      setDeleteConfirmation(false);
+      setDialog(false);
+      setSelected(undefined);
+      void queryClient.invalidateQueries({ queryKey: ["bots"] });
+      toast.success(t("bots.deleted"));
     },
     onError: (error) => toast.error(error.message),
   });
@@ -1622,6 +1651,7 @@ function Bots({ sdk }: { sdk: AuthMiniApi }) {
                   setSelected(bot);
                   setOwnerUsername("");
                   setToken("");
+                  setName(bot.name);
                   setDialog(true);
                 }}
               >
@@ -1646,6 +1676,14 @@ function Bots({ sdk }: { sdk: AuthMiniApi }) {
               <Field>
                 <FieldLabel>{t("bots.uuid")}</FieldLabel>
                 <Input readOnly value={selected.id} />
+              </Field>
+              <Field>
+                <FieldLabel htmlFor="bot-name">{t("bots.name")}</FieldLabel>
+                <Input
+                  id="bot-name"
+                  value={name}
+                  onChange={(event) => setName(event.target.value)}
+                />
               </Field>
               <Field>
                 <FieldLabel htmlFor="bot-owner">
@@ -1676,6 +1714,17 @@ function Bots({ sdk }: { sdk: AuthMiniApi }) {
               <>
                 <Button
                   variant="outline"
+                  disabled={
+                    !name.trim() || name === selected.name || update.isPending
+                  }
+                  onClick={() =>
+                    update.mutate({ id: selected.id, body: { name } })
+                  }
+                >
+                  {t("bots.saveName")}
+                </Button>
+                <Button
+                  variant="outline"
                   disabled={update.isPending}
                   onClick={() =>
                     update.mutate({
@@ -1697,6 +1746,13 @@ function Bots({ sdk }: { sdk: AuthMiniApi }) {
                 >
                   {t("bots.transferOwner")}
                 </Button>
+                <Button
+                  variant="destructive"
+                  disabled={update.isPending}
+                  onClick={() => setDeleteConfirmation(true)}
+                >
+                  {t("bots.delete")}
+                </Button>
               </>
             ) : (
               <Button
@@ -1710,6 +1766,35 @@ function Bots({ sdk }: { sdk: AuthMiniApi }) {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+      <AlertDialog
+        open={deleteConfirmation}
+        onOpenChange={setDeleteConfirmation}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>
+              {selected
+                ? t("bots.deleteTitle", { name: selected.name })
+                : t("bots.delete")}
+            </AlertDialogTitle>
+            <AlertDialogDescription>
+              {t("bots.deleteDescription")}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={remove.isPending}>
+              {t("bots.cancel")}
+            </AlertDialogCancel>
+            <AlertDialogAction
+              variant="destructive"
+              disabled={!selected || remove.isPending}
+              onClick={() => selected && remove.mutate(selected.id)}
+            >
+              {t("bots.delete")}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </Page>
   );
 }

@@ -46,6 +46,7 @@ export type Message = {
   sender_kind: "user" | "bot";
   sender_id: string;
   sender_name: string;
+  sender_deleted: boolean;
   body: string;
   created_at: number;
   attachments: Attachment[];
