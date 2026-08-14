@@ -98,7 +98,7 @@ pub fn router(state: AppState) -> Router {
         )
         .route("/api/attachments/{id}/content", get(download_attachment))
         .route("/api/bots", get(list_bots).post(create_bot))
-        .route("/api/bots/{id}", patch(update_bot))
+        .route("/api/bots/{id}", patch(update_bot).delete(delete_bot))
         .route(
             "/api/bots/{id}/groups/{conversation_id}",
             post(add_bot_to_group).delete(remove_bot_from_group),
@@ -723,6 +723,7 @@ struct StoredMessage {
     sender_kind: String,
     sender_id: String,
     sender_name: String,
+    sender_deleted: bool,
     body: String,
     created_at: i64,
     #[serde(skip_serializing)]
@@ -997,6 +998,27 @@ async fn update_bot(
     Ok(axum::Json(UpdatedBot { bot, token }))
 }
 
+async fn delete_bot(
+    State(state): State<AppState>,
+    axum::Extension(user): axum::Extension<UserIdentity>,
+    Path(id): Path<String>,
+) -> Result<StatusCode, AppError> {
+    delete_owned_bot(&state.db, &id, &user.id).await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn delete_owned_bot(db: &SqlitePool, id: &str, owner_user_id: &str) -> Result<(), AppError> {
+    let result = sqlx::query("DELETE FROM bots WHERE id=? AND owner_user_id=?")
+        .bind(id)
+        .bind(owner_user_id)
+        .execute(db)
+        .await?;
+    if result.rows_affected() == 0 {
+        return Err(AppError::not_found("bot not found"));
+    }
+    Ok(())
+}
+
 async fn add_bot_to_group(
     State(state): State<AppState>,
     axum::Extension(user): axum::Extension<UserIdentity>,
@@ -1201,7 +1223,7 @@ async fn messages_for(
 
     let (mut rows, direction) = if let Some(cursor) = before_cursor {
         let (created_at, sequence) = parse_message_cursor(&cursor)?;
-        let rows = sqlx::query_as("SELECT m.id,m.conversation_id,m.sender_kind,m.sender_id,COALESCE(p.display_name,b.name,m.sender_id) sender_name,m.body,m.created_at,m.sequence FROM messages m LEFT JOIN profiles p ON m.sender_kind='user' AND p.user_id=m.sender_id LEFT JOIN bots b ON m.sender_kind='bot' AND b.id=m.sender_id WHERE m.conversation_id=? AND (m.created_at<? OR (m.created_at=? AND m.sequence<?)) ORDER BY m.created_at DESC,m.sequence DESC LIMIT ?")
+        let rows = sqlx::query_as("SELECT m.id,m.conversation_id,m.sender_kind,m.sender_id,COALESCE(p.display_name,b.name,m.sender_id) sender_name,(m.sender_kind='bot' AND b.id IS NULL) sender_deleted,m.body,m.created_at,m.sequence FROM messages m LEFT JOIN profiles p ON m.sender_kind='user' AND p.user_id=m.sender_id LEFT JOIN bots b ON m.sender_kind='bot' AND b.id=m.sender_id WHERE m.conversation_id=? AND (m.created_at<? OR (m.created_at=? AND m.sequence<?)) ORDER BY m.created_at DESC,m.sequence DESC LIMIT ?")
                 .bind(conversation_id)
                 .bind(created_at)
                 .bind(created_at)
@@ -1212,7 +1234,7 @@ async fn messages_for(
         (rows, PageDirection::Older)
     } else if let Some(cursor) = after_cursor {
         let (created_at, sequence) = parse_message_cursor(&cursor)?;
-        let rows = sqlx::query_as("SELECT m.id,m.conversation_id,m.sender_kind,m.sender_id,COALESCE(p.display_name,b.name,m.sender_id) sender_name,m.body,m.created_at,m.sequence FROM messages m LEFT JOIN profiles p ON m.sender_kind='user' AND p.user_id=m.sender_id LEFT JOIN bots b ON m.sender_kind='bot' AND b.id=m.sender_id WHERE m.conversation_id=? AND (m.created_at>? OR (m.created_at=? AND m.sequence>?)) ORDER BY m.created_at,m.sequence LIMIT ?")
+        let rows = sqlx::query_as("SELECT m.id,m.conversation_id,m.sender_kind,m.sender_id,COALESCE(p.display_name,b.name,m.sender_id) sender_name,(m.sender_kind='bot' AND b.id IS NULL) sender_deleted,m.body,m.created_at,m.sequence FROM messages m LEFT JOIN profiles p ON m.sender_kind='user' AND p.user_id=m.sender_id LEFT JOIN bots b ON m.sender_kind='bot' AND b.id=m.sender_id WHERE m.conversation_id=? AND (m.created_at>? OR (m.created_at=? AND m.sequence>?)) ORDER BY m.created_at,m.sequence LIMIT ?")
                 .bind(conversation_id)
                 .bind(created_at)
                 .bind(created_at)
@@ -1222,7 +1244,7 @@ async fn messages_for(
                 .await?;
         (rows, PageDirection::Newer)
     } else {
-        let rows = sqlx::query_as("SELECT m.id,m.conversation_id,m.sender_kind,m.sender_id,COALESCE(p.display_name,b.name,m.sender_id) sender_name,m.body,m.created_at,m.sequence FROM messages m LEFT JOIN profiles p ON m.sender_kind='user' AND p.user_id=m.sender_id LEFT JOIN bots b ON m.sender_kind='bot' AND b.id=m.sender_id WHERE m.conversation_id=? ORDER BY m.created_at DESC,m.sequence DESC LIMIT ?")
+        let rows = sqlx::query_as("SELECT m.id,m.conversation_id,m.sender_kind,m.sender_id,COALESCE(p.display_name,b.name,m.sender_id) sender_name,(m.sender_kind='bot' AND b.id IS NULL) sender_deleted,m.body,m.created_at,m.sequence FROM messages m LEFT JOIN profiles p ON m.sender_kind='user' AND p.user_id=m.sender_id LEFT JOIN bots b ON m.sender_kind='bot' AND b.id=m.sender_id WHERE m.conversation_id=? ORDER BY m.created_at DESC,m.sequence DESC LIMIT ?")
                 .bind(conversation_id)
                 .bind(MESSAGE_PAGE_SIZE + 1)
                 .fetch_all(db)
@@ -1253,7 +1275,7 @@ async fn messages_for(
 }
 
 async fn message(db: &SqlitePool, id: &str) -> Result<Message, AppError> {
-    let row: StoredMessage = sqlx::query_as("SELECT m.id,m.conversation_id,m.sender_kind,m.sender_id,COALESCE(p.display_name,b.name,m.sender_id) sender_name,m.body,m.created_at,m.sequence FROM messages m LEFT JOIN profiles p ON m.sender_kind='user' AND p.user_id=m.sender_id LEFT JOIN bots b ON m.sender_kind='bot' AND b.id=m.sender_id WHERE m.id=?").bind(id).fetch_optional(db).await?.ok_or_else(|| AppError::not_found("message not found"))?;
+    let row: StoredMessage = sqlx::query_as("SELECT m.id,m.conversation_id,m.sender_kind,m.sender_id,COALESCE(p.display_name,b.name,m.sender_id) sender_name,(m.sender_kind='bot' AND b.id IS NULL) sender_deleted,m.body,m.created_at,m.sequence FROM messages m LEFT JOIN profiles p ON m.sender_kind='user' AND p.user_id=m.sender_id LEFT JOIN bots b ON m.sender_kind='bot' AND b.id=m.sender_id WHERE m.id=?").bind(id).fetch_optional(db).await?.ok_or_else(|| AppError::not_found("message not found"))?;
     message_from_row(db, row).await
 }
 
@@ -1690,6 +1712,62 @@ mod tests {
             direct.counterpart_avatar_attachment_id.as_deref(),
             Some("bob-avatar")
         );
+    }
+
+    #[tokio::test]
+    async fn deleting_a_bot_keeps_its_messages_and_marks_the_sender_deleted() {
+        let pool = db::connect_memory().await.unwrap();
+        sqlx::query("INSERT INTO users(id,created_at) VALUES('owner',0)")
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query("INSERT INTO bots(id,owner_user_id,name,token_prefix,token_hash,created_at,updated_at) VALUES('bot','owner','Support Bot','sk-support','hash',0,0)")
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query("INSERT INTO conversations(id,kind,title,created_by,created_at) VALUES('conversation','group','Support','owner',0)")
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query("INSERT INTO conversation_bots(conversation_id,bot_id,added_at) VALUES('conversation','bot',0)")
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query("INSERT INTO message_sequences(sequence) VALUES(1)")
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query("INSERT INTO messages(id,conversation_id,sender_kind,sender_id,body,created_at,sequence) VALUES('message','conversation','bot','bot','I can help',0,1)")
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        delete_owned_bot(&pool, "bot", "owner").await.unwrap();
+
+        let message_count: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM messages WHERE id='message'")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        let group_membership_count: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM conversation_bots WHERE bot_id='bot'")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        let messages = messages_for(
+            &pool,
+            "conversation",
+            MessagePageQuery {
+                before_cursor: None,
+                after_cursor: None,
+            },
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(message_count, 1);
+        assert_eq!(group_membership_count, 0);
+        assert!(messages.messages[0].message.sender_deleted);
     }
 
     #[tokio::test]
