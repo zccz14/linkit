@@ -29,6 +29,5 @@ jobs:
       - name: Validate Rust
         run: |
           cargo fmt --check
-          cargo clippy --all-targets --all-features -- -D warnings
+          cargo clippy --all-targets --all-features --locked -- -D warnings
           cargo test --all-targets --all-features --locked
-
