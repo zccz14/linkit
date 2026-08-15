@@ -230,6 +230,9 @@ impl PushInput {
             if let Some(group) = self.extra.get("group").and_then(Value::as_str) {
                 aps.insert("thread-id".to_owned(), json!(group));
             }
+            if let Some(level) = self.apns_interruption_level() {
+                aps.insert("interruption-level".to_owned(), json!(level));
+            }
         }
         let mut payload = Map::new();
         payload.insert("aps".to_owned(), Value::Object(aps));
@@ -247,6 +250,16 @@ impl PushInput {
             bail!("notification exceeds the APNs 4 KiB payload limit");
         }
         Ok(payload)
+    }
+
+    fn apns_interruption_level(&self) -> Option<&'static str> {
+        match self.extra.get("level").and_then(Value::as_str) {
+            Some("critical") => Some("critical"),
+            Some("active") => Some("active"),
+            Some("timeSensitive" | "timesensitive") => Some("time-sensitive"),
+            Some("passive") => Some("passive"),
+            _ => None,
+        }
     }
 }
 
@@ -436,6 +449,7 @@ mod tests {
             "body": "New message",
             "sound": "minuet",
             "group": "conversation-1",
+            "level": "timeSensitive",
             "badge": 3,
             "url": "https://linkit.ntnl.io/"
         }))
@@ -445,6 +459,7 @@ mod tests {
         assert_eq!(payload["aps"]["alert"]["title"], "Linkit");
         assert_eq!(payload["aps"]["sound"], "minuet.caf");
         assert_eq!(payload["aps"]["thread-id"], "conversation-1");
+        assert_eq!(payload["aps"]["interruption-level"], "time-sensitive");
         assert_eq!(payload["group"], "conversation-1");
         assert_eq!(payload["badge"], "3");
         assert_eq!(payload["url"], "https://linkit.ntnl.io/");
@@ -455,7 +470,8 @@ mod tests {
         let params = serde_json::from_value(json!({
             "device_key": "key",
             "delete": 1,
-            "level": "critical"
+            "level": "critical",
+            "group": "urgent"
         }))
         .unwrap();
         let push = PushInput::from_params(params);
@@ -463,11 +479,33 @@ mod tests {
         assert_eq!(payload["aps"]["content-available"], 1);
         assert_eq!(payload["delete"], "1");
         assert_eq!(payload["level"], "critical");
+        assert!(payload["aps"].get("interruption-level").is_none());
 
         let push =
             PushInput::from_params(serde_json::from_value(json!({"device_key":"key"})).unwrap());
         let payload: Value = serde_json::from_slice(&push.apns_payload().unwrap()).unwrap();
         assert_eq!(payload["aps"]["sound"], "1107.caf");
         assert_eq!(payload["aps"]["alert"]["body"], "Empty Message");
+    }
+
+    #[test]
+    fn push_payload_keeps_grouping_and_critical_alerts_in_the_apns_envelope() {
+        let push = PushInput::from_params(
+            serde_json::from_value(json!({
+                "device_key": "key",
+                "body": "Action required",
+                "group": "operations",
+                "level": "critical",
+                "volume": 10
+            }))
+            .unwrap(),
+        );
+        let payload: Value = serde_json::from_slice(&push.apns_payload().unwrap()).unwrap();
+
+        assert_eq!(payload["aps"]["thread-id"], "operations");
+        assert_eq!(payload["aps"]["interruption-level"], "critical");
+        assert_eq!(payload["group"], "operations");
+        assert_eq!(payload["level"], "critical");
+        assert_eq!(payload["volume"], "10");
     }
 }
