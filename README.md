@@ -17,6 +17,9 @@ tokens.
 - **PWA and notifications** — installable manifest, service worker, and an API
   for signed-in browsers to register push subscriptions. A push provider can
   later deliver to those stored subscriptions without changing the client API.
+- **Private Bark gateway** — an iPhone running Bark may use this Linkit instance
+  as its Bark server, keeping the device registration and notification request
+  away from the public Bark service.
 - **Bilingual UI** — English and Chinese interfaces, with an in-app language
   picker and browser-language default on first visit.
 - **Native Bots** — each Bot has a durable UUID, one human owner, an `sk-…`
@@ -55,6 +58,38 @@ For a group, add the Bot in the owner-managed group path and supply its
 
 See [the Bot direct-message guide](docs/bot-direct-messages.md) for the full
 creation flow, token handling, response contract, and error handling.
+
+## Private Bark gateway
+
+Install [Bark](https://github.com/Finb/Bark) on an iPhone and add this custom
+server URL in Bark:
+
+```
+https://linkit.ntnl.io/api/bark
+```
+
+Bark registers its APNs device token directly with Linkit and displays the
+resulting **Your Key**. Treat that key as a notification-send credential. Send
+a notification through the standard Bark V2 API:
+
+```bash
+curl --fail-with-body https://linkit.ntnl.io/api/bark/push \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "device_key": "YOUR_KEY",
+    "title": "Linkit",
+    "body": "You have a new message.",
+    "group": "messages",
+    "url": "https://linkit.ntnl.io/"
+  }'
+```
+
+The gateway keeps device-token registrations in Linkit's private SQLite data
+directory and only uses APNs to deliver the push. It implements Bark's current
+registration protocol and V2 JSON push API; legacy URL-shaped push requests are
+intentionally not supported. Linkit deploys the APNs identity used by the
+upstream self-hosted `bark-server` v2.3.5 into a root-owned runtime file; it is
+not included in this repository or release archive.
 
 ## Development
 
