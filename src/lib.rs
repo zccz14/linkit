@@ -60,11 +60,15 @@ impl AppState {
             auth.configure(&issuer, &audience).await?;
         }
         let (events, _) = tokio::sync::broadcast::channel(256);
+        let bark = bark::BarkGateway::load().unwrap_or_else(|error| {
+            tracing::error!(%error, "Bark gateway disabled because its APNs configuration is invalid");
+            bark::BarkGateway::disabled()
+        });
         Ok(Self {
             db,
             auth,
             uploads: Arc::new(bootstrap.upload_dir),
-            bark: bark::BarkGateway::load()?,
+            bark,
             database_path: Arc::new(bootstrap.database_path),
             system_monitor: Arc::new(Mutex::new(SystemMonitor::new())),
             events,

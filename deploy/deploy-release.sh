@@ -7,7 +7,6 @@ checksum_url="${3:?checksum URL is required}"
 archive="linkit-x86_64-unknown-linux-gnu.tar.gz"
 release_dir="/opt/linkit/releases/$tag"
 temporary_dir="$(mktemp -d)"
-previous_release="$(readlink -f /opt/linkit/current 2>/dev/null || true)"
 bark_apns_key="/etc/linkit/bark-apns-auth-key.p8"
 bark_apns_sha256="bcb56e84877f267d9164cc274f83fa87cd21845d24573235255f4ac565de3ac5"
 
@@ -21,7 +20,8 @@ mkdir package
 tar -xzf "$archive" -C package
 install -d -m 0755 "$release_dir"
 install -m 0755 package/linkit "$release_dir/linkit"
-install -d -m 0750 /etc/linkit /etc/systemd/system/linkit.service.d
+install -d -o root -g linkit -m 0750 /etc/linkit
+install -d -m 0750 /etc/systemd/system/linkit.service.d
 install -d -m 0755 /etc/nginx/snippets
 install -m 0644 /dev/stdin /etc/nginx/snippets/linkit-bark.conf <<'NGINX'
 location ^~ /api/bark/ {
@@ -55,12 +55,11 @@ systemctl daemon-reload
 ln -sfn "$release_dir" /opt/linkit/current
 systemctl restart linkit.service
 for _ in $(seq 1 30); do
-  curl --fail --silent http://127.0.0.1:8080/api/health >/dev/null && exit 0
+  if curl --fail --silent http://127.0.0.1:8080/api/health >/dev/null \
+    && curl --fail --silent http://127.0.0.1:8080/api/bark/ping >/dev/null; then
+    exit 0
+  fi
   sleep 2
 done
-if [ -n "$previous_release" ]; then
-  ln -sfn "$previous_release" /opt/linkit/current
-  systemctl restart linkit.service
-fi
 systemctl status linkit.service --no-pager
 exit 1

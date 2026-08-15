@@ -64,16 +64,18 @@ pub struct PushInput {
 }
 
 impl BarkGateway {
+    pub fn disabled() -> Self {
+        Self {
+            client: reqwest::Client::new(),
+            config: None,
+        }
+    }
+
     pub fn load() -> Result<Self> {
         let client = reqwest::Client::builder().build()?;
         let auth_key_path = match env::var("BARK_APNS_AUTH_KEY_PATH") {
             Ok(path) => path,
-            Err(env::VarError::NotPresent) => {
-                return Ok(Self {
-                    client,
-                    config: None,
-                });
-            }
+            Err(env::VarError::NotPresent) => return Ok(Self::disabled()),
             Err(error) => return Err(error.into()),
         };
         let key_id = required_env("BARK_APNS_KEY_ID")?;
