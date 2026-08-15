@@ -103,6 +103,11 @@ are forwarded to the iOS app, including `level`, `volume`, `badge`, `call`,
 `autoCopy`, `copy`, `sound`, `icon`, `image`, `group`, `ciphertext`,
 `isArchive`, `ttl`, `url`, `action`, and `delete`.
 
+`group` is sent as the APNs thread identifier. iOS controls whether threaded
+notifications are visibly grouped, so set Bark's **Notification Grouping** to
+**Automatic** or **By App** rather than **Off**. A `level` of `critical` also
+requires the system **Critical Alerts** permission for Bark to be enabled.
+
 The standard diagnostics are available at `/`, `/ping`, `/healthz`, and
 `/info` beneath the configured Bark base URL. The registration endpoint accepts
 the current `device_key`/`device_token` names and the legacy `key`/
