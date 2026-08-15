@@ -1318,7 +1318,7 @@ dependencies = [
 
 [[package]]
 name = "linkit"
-version = "0.1.15"
+version = "0.1.16"
 dependencies = [
  "anyhow",
  "async-stream",
@@ -1329,6 +1329,7 @@ dependencies = [
  "dirs",
  "futures-util",
  "http-body-util",
+ "multer",
  "rand 0.9.5",
  "reqwest",
  "ring",

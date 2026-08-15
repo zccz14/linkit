@@ -84,23 +84,38 @@ curl --fail-with-body https://linkit.ntnl.io/api/bark/push \
   }'
 ```
 
-The standard Bark V1 URL forms are also supported for GET requests:
+The Bark-compatible HTTP API follows the upstream self-hosted
+`bark-server` v2.3.5 core contract:
 
 ```bash
 curl --fail-with-body 'https://linkit.ntnl.io/api/bark/YOUR_KEY/Your%20message?group=alerts&sound=alarm'
 ```
 
 `/:key/:body`, `/:key/:title/:body`, and
-`/:key/:title/:subtitle/:body` are accepted. Query options such as `group`,
-`sound`, `badge`, `url`, and `level` work as in Bark; a value supplied in the
-path takes precedence over the matching query parameter.
+`/:key/:title/:subtitle/:body` accept both GET and POST. V1 query,
+`application/x-www-form-urlencoded`, and multipart fields are supported; V2
+JSON works at `/push` and at the Key-shaped endpoints. Path values take
+precedence over matching query or body values.
+
+V2 also accepts `device_keys` as a comma-separated string or JSON array for a
+batch push and returns one Bark result per device. All documented Bark fields
+are forwarded to the iOS app, including `level`, `volume`, `badge`, `call`,
+`autoCopy`, `copy`, `sound`, `icon`, `image`, `group`, `ciphertext`,
+`isArchive`, `ttl`, `url`, `action`, and `delete`.
+
+The standard diagnostics are available at `/`, `/ping`, `/healthz`, and
+`/info` beneath the configured Bark base URL. The registration endpoint accepts
+the current `device_key`/`device_token` names and the legacy `key`/
+`devicetoken` names used by the Bark app.
+
+The upstream MCP HTTP endpoints are available at `/mcp` and `/mcp/:key` beneath
+the same base URL. They expose Bark's `notify` tool; the Key-bound endpoint
+does not require `device_key` in tool arguments.
 
 The gateway keeps device-token registrations in Linkit's private SQLite data
-directory and only uses APNs to deliver the push. It implements Bark's current
-registration protocol plus V1 URL and V2 JSON push APIs. Linkit deploys the
-APNs identity used by the upstream self-hosted `bark-server` v2.3.5 into a
-root-owned runtime file; it is not included in this repository or release
-archive.
+directory and only uses APNs to deliver the push. It deploys the APNs identity
+used by the upstream self-hosted `bark-server` v2.3.5 into a root-owned runtime
+file; it is not included in this repository or release archive.
 
 ## Development
 

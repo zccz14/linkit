@@ -38,28 +38,20 @@ struct ApnsConfig {
 
 #[derive(Debug, Deserialize)]
 pub struct RegisterInput {
-    #[serde(alias = "devicetoken")]
+    #[serde(default, alias = "devicetoken")]
     pub device_token: String,
-    #[serde(default)]
+    #[serde(default, alias = "device_key")]
     pub key: String,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Clone, Debug)]
 pub struct PushInput {
     pub device_key: String,
-    #[serde(default)]
     pub title: String,
-    #[serde(default)]
     pub subtitle: String,
-    #[serde(default)]
     pub body: String,
-    pub sound: Option<String>,
-    pub group: Option<String>,
-    pub badge: Option<i64>,
+    pub sound: String,
     pub id: Option<String>,
-    #[serde(rename = "delete")]
-    pub delete_notification: Option<Value>,
-    #[serde(flatten)]
     pub extra: Map<String, Value>,
 }
 
@@ -143,7 +135,13 @@ impl BarkGateway {
                 "alert"
             }),
         );
-        headers.insert("apns-expiration", HeaderValue::from_static("0"));
+        let expiration = (chrono::Utc::now() + chrono::Duration::hours(24))
+            .timestamp()
+            .to_string();
+        headers.insert(
+            "apns-expiration",
+            HeaderValue::from_str(&expiration).context("invalid APNs expiration")?,
+        );
         if let Some(id) = push.id.as_deref() {
             headers.insert(
                 "apns-collapse-id",
@@ -159,16 +157,15 @@ impl BarkGateway {
             .send()
             .await
             .context("APNs request failed")?;
-        if response.status().is_success() {
+        let status = response.status();
+        if status.is_success() {
             return Ok(Delivery::Delivered);
         }
-        if response.status().as_u16() == 410 {
+        let reason = response.text().await.unwrap_or_default();
+        if status.as_u16() == 410 || (status.as_u16() == 400 && reason.contains("BadDeviceToken")) {
             return Ok(Delivery::InvalidDeviceToken);
         }
-        bail!(
-            "APNs rejected the notification with HTTP {}",
-            response.status()
-        )
+        bail!("APNs rejected the notification with HTTP {status}")
     }
 }
 
@@ -178,20 +175,34 @@ pub enum Delivery {
 }
 
 impl PushInput {
+    pub fn from_params(mut params: Map<String, Value>) -> Self {
+        let device_key = take_string(&mut params, "device_key").unwrap_or_default();
+        let title = take_string(&mut params, "title").unwrap_or_default();
+        let subtitle = take_string(&mut params, "subtitle").unwrap_or_default();
+        let body = take_string(&mut params, "body").unwrap_or_default();
+        let sound = take_string(&mut params, "sound").unwrap_or_else(|| "1107".to_owned());
+        let id = params.get("id").and_then(Value::as_str).map(str::to_owned);
+        Self {
+            device_key,
+            title,
+            subtitle,
+            body,
+            sound,
+            id,
+            extra: params,
+        }
+    }
+
     pub fn validate(&self) -> Result<()> {
-        if self.device_key.is_empty() || self.device_key.len() > 128 {
+        if self.device_key.is_empty() {
             bail!("device key is invalid");
         }
-        if self.title.len() > 512 || self.subtitle.len() > 512 || self.body.len() > 4096 {
-            bail!("notification content is too long");
-        }
-        self.apns_payload()?;
         Ok(())
     }
 
     fn is_delete(&self) -> bool {
-        matches!(self.delete_notification, Some(Value::String(ref value)) if value == "1")
-            || matches!(self.delete_notification, Some(Value::Number(ref value)) if value.as_i64() == Some(1))
+        matches!(self.extra.get("delete"), Some(Value::String(value)) if value == "1")
+            || matches!(self.extra.get("delete"), Some(Value::Number(value)) if value.as_i64() == Some(1))
     }
 
     fn apns_payload(&self) -> Result<Vec<u8>> {
@@ -211,35 +222,25 @@ impl PushInput {
                 json!({"title": self.title, "subtitle": self.subtitle, "body": body}),
             );
             aps.insert("category".to_owned(), json!("myNotificationCategory"));
-            if let Some(sound) = self.sound.as_deref() {
-                let sound = sound
-                    .strip_suffix(".caf")
-                    .map_or_else(|| format!("{sound}.caf"), ToOwned::to_owned);
-                aps.insert("sound".to_owned(), json!(sound));
-            }
-            if let Some(group) = self.group.as_ref() {
+            let sound = self
+                .sound
+                .strip_suffix(".caf")
+                .map_or_else(|| format!("{}.caf", self.sound), ToOwned::to_owned);
+            aps.insert("sound".to_owned(), json!(sound));
+            if let Some(group) = self.extra.get("group").and_then(Value::as_str) {
                 aps.insert("thread-id".to_owned(), json!(group));
-            }
-            if let Some(badge) = self.badge {
-                aps.insert("badge".to_owned(), json!(badge));
             }
         }
         let mut payload = Map::new();
         payload.insert("aps".to_owned(), Value::Object(aps));
-        if let Some(group) = self.group.as_ref() {
-            payload.insert("group".to_owned(), json!(group));
-        }
-        if let Some(badge) = self.badge {
-            payload.insert("badge".to_owned(), json!(badge.to_string()));
-        }
-        if let Some(id) = self.id.as_ref() {
-            payload.insert("id".to_owned(), json!(id));
-        }
-        if let Some(delete) = self.delete_notification.as_ref() {
-            payload.insert("delete".to_owned(), delete.clone());
-        }
         for (key, value) in &self.extra {
-            payload.insert(key.to_ascii_lowercase(), value.clone());
+            if let Value::Object(values) = value {
+                for (key, value) in values {
+                    payload.insert(key.to_ascii_lowercase(), bark_value(value));
+                }
+            } else {
+                payload.insert(key.to_ascii_lowercase(), bark_value(value));
+            }
         }
         let payload = serde_json::to_vec(&payload)?;
         if payload.len() > APNS_PAYLOAD_MAX_BYTES {
@@ -249,18 +250,33 @@ impl PushInput {
     }
 }
 
+fn take_string(params: &mut Map<String, Value>, key: &str) -> Option<String> {
+    let value = params.get(key)?.as_str()?.to_owned();
+    params.remove(key);
+    Some(value)
+}
+
+fn bark_value(value: &Value) -> Value {
+    Value::String(match value {
+        Value::String(value) => value.clone(),
+        Value::Number(value) => value.to_string(),
+        Value::Bool(value) => value.to_string(),
+        Value::Null => "<nil>".to_owned(),
+        Value::Array(_) | Value::Object(_) => value.to_string(),
+    })
+}
+
 pub async fn register_device(
     db: &SqlitePool,
     requested_key: &str,
     device_token: &str,
 ) -> Result<String> {
     validate_device_token(device_token)?;
-    let key =
-        if requested_key.is_empty() || device_token_for_key(db, requested_key).await?.is_none() {
-            new_device_key()
-        } else {
-            requested_key.to_owned()
-        };
+    let key = if requested_key.is_empty() || !device_key_exists(db, requested_key).await? {
+        new_device_key()
+    } else {
+        requested_key.to_owned()
+    };
     let now = chrono::Utc::now().timestamp();
     sqlx::query("INSERT INTO bark_devices(key_hash,device_token,created_at,updated_at) VALUES(?,?,?,?) ON CONFLICT(key_hash) DO UPDATE SET device_token=excluded.device_token,updated_at=excluded.updated_at")
         .bind(hash_key(&key))
@@ -277,16 +293,34 @@ pub async fn device_token_for_key(db: &SqlitePool, key: &str) -> Result<Option<S
         sqlx::query_scalar("SELECT device_token FROM bark_devices WHERE key_hash=?")
             .bind(hash_key(key))
             .fetch_optional(db)
-            .await?,
+            .await?
+            .filter(|token: &String| !token.is_empty()),
     )
 }
 
-pub async fn forget_device_key(db: &SqlitePool, key: &str) -> Result<()> {
-    sqlx::query("DELETE FROM bark_devices WHERE key_hash=?")
+pub async fn device_key_exists(db: &SqlitePool, key: &str) -> Result<bool> {
+    Ok(
+        sqlx::query_scalar::<_, i64>("SELECT 1 FROM bark_devices WHERE key_hash=?")
+            .bind(hash_key(key))
+            .fetch_optional(db)
+            .await?
+            .is_some(),
+    )
+}
+
+pub async fn invalidate_device_key(db: &SqlitePool, key: &str) -> Result<()> {
+    sqlx::query("UPDATE bark_devices SET device_token='',updated_at=? WHERE key_hash=?")
+        .bind(chrono::Utc::now().timestamp())
         .bind(hash_key(key))
         .execute(db)
         .await?;
     Ok(())
+}
+
+pub async fn device_count(db: &SqlitePool) -> Result<i64> {
+    Ok(sqlx::query_scalar("SELECT COUNT(*) FROM bark_devices")
+        .fetch_one(db)
+        .await?)
 }
 
 fn required_env(name: &str) -> Result<String> {
@@ -351,10 +385,7 @@ fn hash_key(key: &str) -> String {
 }
 
 pub fn validate_device_token(device_token: &str) -> Result<()> {
-    if device_token.is_empty()
-        || device_token.len() > 160
-        || !device_token.bytes().all(|byte| byte.is_ascii_hexdigit())
-    {
+    if device_token.is_empty() || device_token.len() > 160 {
         bail!("device token is invalid");
     }
     Ok(())
@@ -385,11 +416,21 @@ mod tests {
             .await
             .unwrap();
         assert_ne!(stored_hash, key);
+
+        invalidate_device_key(&db, &key).await.unwrap();
+        assert!(device_token_for_key(&db, &key).await.unwrap().is_none());
+        assert!(device_key_exists(&db, &key).await.unwrap());
+        let restored_key = register_device(&db, &key, "deleted").await.unwrap();
+        assert_eq!(restored_key, key);
+        assert_eq!(
+            device_token_for_key(&db, &key).await.unwrap().as_deref(),
+            Some("deleted")
+        );
     }
 
     #[test]
     fn push_payload_matches_bark_alert_shape() {
-        let push: PushInput = serde_json::from_value(json!({
+        let params = serde_json::from_value(json!({
             "device_key": "key",
             "title": "Linkit",
             "body": "New message",
@@ -399,6 +440,7 @@ mod tests {
             "url": "https://linkit.ntnl.io/"
         }))
         .unwrap();
+        let push = PushInput::from_params(params);
         let payload: Value = serde_json::from_slice(&push.apns_payload().unwrap()).unwrap();
         assert_eq!(payload["aps"]["alert"]["title"], "Linkit");
         assert_eq!(payload["aps"]["sound"], "minuet.caf");
@@ -406,5 +448,26 @@ mod tests {
         assert_eq!(payload["group"], "conversation-1");
         assert_eq!(payload["badge"], "3");
         assert_eq!(payload["url"], "https://linkit.ntnl.io/");
+    }
+
+    #[test]
+    fn push_payload_uses_bark_defaults_and_delete_shape() {
+        let params = serde_json::from_value(json!({
+            "device_key": "key",
+            "delete": 1,
+            "level": "critical"
+        }))
+        .unwrap();
+        let push = PushInput::from_params(params);
+        let payload: Value = serde_json::from_slice(&push.apns_payload().unwrap()).unwrap();
+        assert_eq!(payload["aps"]["content-available"], 1);
+        assert_eq!(payload["delete"], "1");
+        assert_eq!(payload["level"], "critical");
+
+        let push =
+            PushInput::from_params(serde_json::from_value(json!({"device_key":"key"})).unwrap());
+        let payload: Value = serde_json::from_slice(&push.apns_payload().unwrap()).unwrap();
+        assert_eq!(payload["aps"]["sound"], "1107.caf");
+        assert_eq!(payload["aps"]["alert"]["body"], "Empty Message");
     }
 }
