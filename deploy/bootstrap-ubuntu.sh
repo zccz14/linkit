@@ -7,6 +7,18 @@ apt-get install --yes ca-certificates certbot curl nginx python3-certbot-nginx
 id linkit >/dev/null 2>&1 || useradd --system --home-dir /var/lib/linkit --shell /usr/sbin/nologin linkit
 install -d -m 0755 /opt/linkit/releases
 install -d -o linkit -g linkit -m 0700 /var/lib/linkit
+install -d -m 0755 /etc/nginx/snippets
+
+install -m 0644 /dev/stdin /etc/nginx/snippets/linkit-bark.conf <<'NGINX'
+location ^~ /api/bark/ {
+    access_log off;
+    proxy_pass http://127.0.0.1:8080;
+    proxy_http_version 1.1;
+    proxy_set_header Host $host;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
+}
+NGINX
 
 install -m 0644 /dev/stdin /etc/systemd/system/linkit.service <<'UNIT'
 [Unit]
@@ -40,6 +52,7 @@ server {
     listen [::]:80;
     server_name linkit.ntnl.io;
     client_max_body_size 52m;
+    include /etc/nginx/snippets/linkit-bark.conf;
     location / {
         proxy_pass http://127.0.0.1:8080;
         proxy_http_version 1.1;
@@ -56,4 +69,3 @@ systemctl daemon-reload
 systemctl enable linkit.service
 nginx -t
 systemctl restart nginx
-

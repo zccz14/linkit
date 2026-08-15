@@ -1,4 +1,5 @@
 pub mod auth;
+pub mod bark;
 pub mod config;
 pub mod db;
 
@@ -43,6 +44,7 @@ pub struct AppState {
     pub db: SqlitePool,
     pub auth: AuthManager,
     pub uploads: Arc<PathBuf>,
+    bark: bark::BarkGateway,
     database_path: Arc<PathBuf>,
     system_monitor: Arc<Mutex<SystemMonitor>>,
     events: tokio::sync::broadcast::Sender<ConversationEvent>,
@@ -62,6 +64,7 @@ impl AppState {
             db,
             auth,
             uploads: Arc::new(bootstrap.upload_dir),
+            bark: bark::BarkGateway::load()?,
             database_path: Arc::new(bootstrap.database_path),
             system_monitor: Arc::new(Mutex::new(SystemMonitor::new())),
             events,
@@ -113,12 +116,30 @@ pub fn router(state: AppState) -> Router {
         .route("/api/health", get(health))
         .route("/api/config", get(public_config))
         .route("/api/setup", get(setup_status).post(setup))
+        .route("/api/bark/ping", get(bark_ping))
+        .route(
+            "/api/bark/register",
+            get(bark_register).post(bark_register_json),
+        )
+        .route("/api/bark/register/{key}", get(bark_register_check))
+        .route(
+            "/api/bark/push",
+            post(bark_push).layer(RequestBodyLimitLayer::new(16 * 1024)),
+        )
         .route("/bot/v1/messages", post(bot_send_message))
         .merge(signed_in)
         .fallback(static_asset)
         .layer(axum::extract::DefaultBodyLimit::disable())
         .layer(CompressionLayer::new())
-        .layer(TraceLayer::new_for_http())
+        .layer(
+            TraceLayer::new_for_http().make_span_with(|request: &axum::http::Request<_>| {
+                tracing::info_span!(
+                    "http_request",
+                    method = %request.method(),
+                    path = request.uri().path(),
+                )
+            }),
+        )
         .with_state(state)
 }
 
@@ -236,6 +257,131 @@ async fn events(
 
 async fn health() -> axum::Json<Health> {
     axum::Json(Health { status: "ok" })
+}
+
+#[derive(Serialize)]
+struct BarkResponse {
+    code: u16,
+    message: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    data: Option<serde_json::Value>,
+    timestamp: i64,
+}
+
+fn bark_response(
+    status: StatusCode,
+    message: impl Into<String>,
+    data: Option<serde_json::Value>,
+) -> Response {
+    (
+        status,
+        axum::Json(BarkResponse {
+            code: status.as_u16(),
+            message: message.into(),
+            data,
+            timestamp: chrono::Utc::now().timestamp(),
+        }),
+    )
+        .into_response()
+}
+
+fn bark_unavailable(state: &AppState) -> Option<Response> {
+    (!state.bark.configured()).then(|| {
+        bark_response(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "Bark APNs is not configured",
+            None,
+        )
+    })
+}
+
+async fn bark_ping(State(state): State<AppState>) -> Response {
+    bark_unavailable(&state).unwrap_or_else(|| bark_response(StatusCode::OK, "pong", None))
+}
+
+async fn bark_register(
+    State(state): State<AppState>,
+    Query(input): Query<bark::RegisterInput>,
+) -> Response {
+    register_bark_device(state, input).await
+}
+
+async fn bark_register_json(
+    State(state): State<AppState>,
+    axum::Json(input): axum::Json<bark::RegisterInput>,
+) -> Response {
+    register_bark_device(state, input).await
+}
+
+async fn register_bark_device(state: AppState, input: bark::RegisterInput) -> Response {
+    if let Some(response) = bark_unavailable(&state) {
+        return response;
+    }
+    if bark::validate_device_token(&input.device_token).is_err() {
+        return bark_response(StatusCode::BAD_REQUEST, "device token is invalid", None);
+    }
+    match bark::register_device(&state.db, &input.key, &input.device_token).await {
+        Ok(key) => bark_response(
+            StatusCode::OK,
+            "success",
+            Some(json!({
+                "key": key.clone(),
+                "device_key": key,
+                "device_token": input.device_token,
+            })),
+        ),
+        Err(_) => bark_response(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "device registration failed",
+            None,
+        ),
+    }
+}
+
+async fn bark_register_check(State(state): State<AppState>, Path(key): Path<String>) -> Response {
+    if let Some(response) = bark_unavailable(&state) {
+        return response;
+    }
+    match bark::device_token_for_key(&state.db, &key).await {
+        Ok(Some(_)) => bark_response(StatusCode::OK, "success", None),
+        Ok(None) => bark_response(StatusCode::BAD_REQUEST, "device key is invalid", None),
+        Err(_) => bark_response(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "device lookup failed",
+            None,
+        ),
+    }
+}
+
+async fn bark_push(
+    State(state): State<AppState>,
+    axum::Json(input): axum::Json<bark::PushInput>,
+) -> Response {
+    if let Some(response) = bark_unavailable(&state) {
+        return response;
+    }
+    if input.validate().is_err() {
+        return bark_response(StatusCode::BAD_REQUEST, "push payload is invalid", None);
+    }
+    let device_token = match bark::device_token_for_key(&state.db, &input.device_key).await {
+        Ok(Some(token)) => token,
+        Ok(None) => return bark_response(StatusCode::BAD_REQUEST, "device key is invalid", None),
+        Err(_) => {
+            return bark_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "device lookup failed",
+                None,
+            );
+        }
+    };
+    match state.bark.deliver(&device_token, &input).await {
+        Ok(bark::Delivery::Delivered) => bark_response(StatusCode::OK, "success", None),
+        Ok(bark::Delivery::InvalidDeviceToken) => {
+            let _ = bark::forget_device_key(&state.db, &input.device_key).await;
+            bark_response(StatusCode::GONE, "device token is invalid", None)
+        }
+        Err(_) => bark_response(StatusCode::BAD_GATEWAY, "APNs delivery failed", None),
+    }
 }
 
 #[derive(Serialize)]
@@ -1545,6 +1691,21 @@ async fn static_asset(uri: axum::http::Uri) -> Response {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use http_body_util::BodyExt;
+    use tower::ServiceExt;
+
+    fn test_state(db: SqlitePool) -> AppState {
+        let (events, _) = tokio::sync::broadcast::channel(1);
+        AppState {
+            db,
+            auth: AuthManager::default(),
+            uploads: Arc::new(std::env::temp_dir()),
+            bark: bark::BarkGateway::test_gateway(),
+            database_path: Arc::new(std::env::temp_dir().join("linkit-test.sqlite3")),
+            system_monitor: Arc::new(Mutex::new(SystemMonitor::new())),
+            events,
+        }
+    }
 
     #[test]
     fn direct_key_is_stable_for_both_members() {
@@ -1560,6 +1721,47 @@ mod tests {
     async fn migrations_create_setup_defaults() {
         let pool = db::connect_memory().await.unwrap();
         assert_eq!(meta(&pool, "setup_complete").await.unwrap(), "false");
+    }
+
+    #[tokio::test]
+    async fn bark_app_registration_protocol_is_public_and_compatible() {
+        let app = router(test_state(db::connect_memory().await.unwrap()));
+        let ping = app
+            .clone()
+            .oneshot(
+                axum::http::Request::builder()
+                    .uri("/api/bark/ping")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(ping.status(), StatusCode::OK);
+        let registered = app
+            .clone()
+            .oneshot(
+                axum::http::Request::builder()
+                    .uri("/api/bark/register?devicetoken=aabbccdd")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(registered.status(), StatusCode::OK);
+        let body = registered.into_body().collect().await.unwrap().to_bytes();
+        let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        let key = value["data"]["key"].as_str().unwrap();
+        assert_eq!(key.len(), 32);
+        let checked = app
+            .oneshot(
+                axum::http::Request::builder()
+                    .uri(format!("/api/bark/register/{key}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(checked.status(), StatusCode::OK);
     }
 
     #[tokio::test]
