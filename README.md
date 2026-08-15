@@ -84,12 +84,23 @@ curl --fail-with-body https://linkit.ntnl.io/api/bark/push \
   }'
 ```
 
+The standard Bark V1 URL forms are also supported for GET requests:
+
+```bash
+curl --fail-with-body 'https://linkit.ntnl.io/api/bark/YOUR_KEY/Your%20message?group=alerts&sound=alarm'
+```
+
+`/:key/:body`, `/:key/:title/:body`, and
+`/:key/:title/:subtitle/:body` are accepted. Query options such as `group`,
+`sound`, `badge`, `url`, and `level` work as in Bark; a value supplied in the
+path takes precedence over the matching query parameter.
+
 The gateway keeps device-token registrations in Linkit's private SQLite data
 directory and only uses APNs to deliver the push. It implements Bark's current
-registration protocol and V2 JSON push API; legacy URL-shaped push requests are
-intentionally not supported. Linkit deploys the APNs identity used by the
-upstream self-hosted `bark-server` v2.3.5 into a root-owned runtime file; it is
-not included in this repository or release archive.
+registration protocol plus V1 URL and V2 JSON push APIs. Linkit deploys the
+APNs identity used by the upstream self-hosted `bark-server` v2.3.5 into a
+root-owned runtime file; it is not included in this repository or release
+archive.
 
 ## Development
 
