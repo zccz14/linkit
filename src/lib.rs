@@ -22,7 +22,7 @@ use axum::{
 use rand::{Rng, distr::Alphanumeric};
 use rust_embed::RustEmbed;
 use serde::{Deserialize, Serialize};
-use serde_json::json;
+use serde_json::{Map, Value, json};
 use sha2::{Digest, Sha256};
 use sqlx::{FromRow, SqlitePool};
 use sysinfo::{Disks, Networks, System};
@@ -130,6 +130,19 @@ pub fn router(state: AppState) -> Router {
             "/api/bark/push",
             post(bark_push).layer(RequestBodyLimitLayer::new(16 * 1024)),
         )
+        .route("/api/bark/{device_key}", get(bark_push_url))
+        .route(
+            "/api/bark/{device_key}/{body}",
+            get(bark_push_url_with_body),
+        )
+        .route(
+            "/api/bark/{device_key}/{title}/{body}",
+            get(bark_push_url_with_title_and_body),
+        )
+        .route(
+            "/api/bark/{device_key}/{title}/{subtitle}/{body}",
+            get(bark_push_url_with_title_subtitle_and_body),
+        )
         .route("/bot/v1/messages", post(bot_send_message))
         .merge(signed_in)
         .fallback(static_asset)
@@ -140,7 +153,7 @@ pub fn router(state: AppState) -> Router {
                 tracing::info_span!(
                     "http_request",
                     method = %request.method(),
-                    path = request.uri().path(),
+                    path = request_log_path(request.uri().path()),
                 )
             }),
         )
@@ -357,10 +370,101 @@ async fn bark_register_check(State(state): State<AppState>, Path(key): Path<Stri
     }
 }
 
+#[derive(Debug, Deserialize)]
+struct BarkUrlPushQuery {
+    #[serde(default)]
+    title: String,
+    #[serde(default)]
+    subtitle: String,
+    #[serde(default)]
+    body: String,
+    sound: Option<String>,
+    group: Option<String>,
+    badge: Option<i64>,
+    id: Option<String>,
+    #[serde(rename = "delete")]
+    delete_notification: Option<String>,
+    #[serde(rename = "device_key", default)]
+    _device_key: String,
+    #[serde(flatten)]
+    extra: std::collections::HashMap<String, String>,
+}
+
+impl BarkUrlPushQuery {
+    fn into_push(
+        self,
+        device_key: String,
+        path_title: Option<String>,
+        path_subtitle: Option<String>,
+        path_body: Option<String>,
+    ) -> bark::PushInput {
+        bark::PushInput {
+            device_key,
+            title: path_title.unwrap_or(self.title),
+            subtitle: path_subtitle.unwrap_or(self.subtitle),
+            body: path_body.unwrap_or(self.body),
+            sound: self.sound,
+            group: self.group,
+            badge: self.badge,
+            id: self.id,
+            delete_notification: self.delete_notification.map(Value::String),
+            extra: self
+                .extra
+                .into_iter()
+                .map(|(key, value)| (key, Value::String(value)))
+                .collect::<Map<_, _>>(),
+        }
+    }
+}
+
 async fn bark_push(
     State(state): State<AppState>,
     axum::Json(input): axum::Json<bark::PushInput>,
 ) -> Response {
+    deliver_bark_push(state, input).await
+}
+
+async fn bark_push_url(
+    State(state): State<AppState>,
+    Path(device_key): Path<String>,
+    Query(input): Query<BarkUrlPushQuery>,
+) -> Response {
+    deliver_bark_push(state, input.into_push(device_key, None, None, None)).await
+}
+
+async fn bark_push_url_with_body(
+    State(state): State<AppState>,
+    Path((device_key, body)): Path<(String, String)>,
+    Query(input): Query<BarkUrlPushQuery>,
+) -> Response {
+    deliver_bark_push(state, input.into_push(device_key, None, None, Some(body))).await
+}
+
+async fn bark_push_url_with_title_and_body(
+    State(state): State<AppState>,
+    Path((device_key, title, body)): Path<(String, String, String)>,
+    Query(input): Query<BarkUrlPushQuery>,
+) -> Response {
+    deliver_bark_push(
+        state,
+        input.into_push(device_key, Some(title), None, Some(body)),
+    )
+    .await
+}
+
+async fn bark_push_url_with_title_subtitle_and_body(
+    State(state): State<AppState>,
+    Path((device_key, title, subtitle, body)): Path<(String, String, String, String)>,
+    Query(input): Query<BarkUrlPushQuery>,
+) -> Response {
+    deliver_bark_push(
+        state,
+        input.into_push(device_key, Some(title), Some(subtitle), Some(body)),
+    )
+    .await
+}
+
+async fn deliver_bark_push(state: AppState, input: bark::PushInput) -> Response {
     if let Some(response) = bark_unavailable(&state) {
         return response;
     }
@@ -385,6 +489,14 @@ async fn bark_push(
             bark_response(StatusCode::GONE, "device token is invalid", None)
         }
         Err(_) => bark_response(StatusCode::BAD_GATEWAY, "APNs delivery failed", None),
+    }
+}
+
+fn request_log_path(path: &str) -> &str {
+    if path == "/api/bark" || path.starts_with("/api/bark/") {
+        "/api/bark/[redacted]"
+    } else {
+        path
     }
 }
 
@@ -1766,6 +1878,62 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(checked.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn bark_v1_url_push_is_routed_and_supports_query_options() {
+        let app = router(test_state(db::connect_memory().await.unwrap()));
+        let response = app
+            .oneshot(
+                axum::http::Request::builder()
+                    .uri("/api/bark/not-a-device-key/%E6%B5%8B%E8%AF%95?group=alerts&sound=alarm&badge=3&url=https%3A%2F%2Flinkit.ntnl.io%2F")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let body = response.into_body().collect().await.unwrap().to_bytes();
+        let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(value["message"], "device key is invalid");
+    }
+
+    #[test]
+    fn bark_v1_path_fields_override_query_fields() {
+        let push = BarkUrlPushQuery {
+            title: "query title".to_owned(),
+            subtitle: "query subtitle".to_owned(),
+            body: "query body".to_owned(),
+            sound: Some("alarm".to_owned()),
+            group: Some("alerts".to_owned()),
+            badge: Some(3),
+            id: None,
+            delete_notification: None,
+            _device_key: String::new(),
+            extra: [("level".to_owned(), "timeSensitive".to_owned())].into(),
+        }
+        .into_push(
+            "key".to_owned(),
+            Some("path title".to_owned()),
+            None,
+            Some("path body".to_owned()),
+        );
+        assert_eq!(push.title, "path title");
+        assert_eq!(push.subtitle, "query subtitle");
+        assert_eq!(push.body, "path body");
+        assert_eq!(
+            push.extra["level"],
+            Value::String("timeSensitive".to_owned())
+        );
+    }
+
+    #[test]
+    fn bark_request_paths_are_redacted_from_tracing() {
+        assert_eq!(
+            request_log_path("/api/bark/key/body"),
+            "/api/bark/[redacted]"
+        );
+        assert_eq!(request_log_path("/api/health"), "/api/health");
     }
 
     #[tokio::test]
