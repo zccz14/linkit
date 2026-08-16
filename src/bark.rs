@@ -1,6 +1,6 @@
 use std::{
     env, fs,
-    sync::Arc,
+    sync::{Arc, Mutex},
     time::{SystemTime, UNIX_EPOCH},
 };
 
@@ -22,6 +22,7 @@ use uuid::Uuid;
 
 const APNS_ENDPOINT: &str = "https://api.push.apple.com/3/device/";
 const APNS_PAYLOAD_MAX_BYTES: usize = 4096;
+const APNS_JWT_TTL_SECONDS: u64 = 3_000;
 const BARK_KEY_ALPHABET: &[u8] = b"23456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
 const BARK_KEY_MIN_LENGTH: usize = 13;
 
@@ -38,6 +39,12 @@ struct ApnsConfig {
     team_id: String,
     topic: String,
     private_key_der: Vec<u8>,
+    jwt_cache: Mutex<Option<CachedApnsJwt>>,
+}
+
+struct CachedApnsJwt {
+    bearer: String,
+    issued_at: u64,
 }
 
 struct BarkBasicAuth {
@@ -110,6 +117,7 @@ impl BarkGateway {
                 team_id,
                 topic,
                 private_key_der,
+                jwt_cache: Mutex::new(None),
             })),
             basic_auth,
             max_batch_push_count,
@@ -154,6 +162,7 @@ impl BarkGateway {
                 team_id: "test-team".to_owned(),
                 topic: "me.fin.bark".to_owned(),
                 private_key_der: Vec::new(),
+                jwt_cache: Mutex::new(None),
             })),
             basic_auth: basic_auth.map(|(username, password)| {
                 Arc::new(BarkBasicAuth {
@@ -175,7 +184,7 @@ impl BarkGateway {
         if config.private_key_der.is_empty() {
             return Ok(Delivery::Delivered);
         }
-        let authorization = format!("bearer {}", apns_jwt(config)?);
+        let authorization = format!("bearer {}", cached_apns_jwt(config)?);
         let mut headers = HeaderMap::new();
         headers.insert(
             AUTHORIZATION,
@@ -450,12 +459,38 @@ fn decode_pem_private_key(pem: &[u8]) -> Result<Vec<u8>> {
         .context("Bark APNs key is not valid PEM")
 }
 
-fn apns_jwt(config: &ApnsConfig) -> Result<String> {
+fn cached_apns_jwt(config: &ApnsConfig) -> Result<String> {
+    cached_apns_jwt_at(config, unix_timestamp()?)
+}
+
+fn cached_apns_jwt_at(config: &ApnsConfig, now: u64) -> Result<String> {
+    let mut cache = config
+        .jwt_cache
+        .lock()
+        .map_err(|_| anyhow!("Bark APNs JWT cache lock is poisoned"))?;
+    if let Some(cached) = cache
+        .as_ref()
+        .filter(|cached| now >= cached.issued_at && now - cached.issued_at < APNS_JWT_TTL_SECONDS)
+    {
+        return Ok(cached.bearer.clone());
+    }
+    let bearer = apns_jwt(config, now)?;
+    *cache = Some(CachedApnsJwt {
+        bearer: bearer.clone(),
+        issued_at: now,
+    });
+    Ok(bearer)
+}
+
+fn unix_timestamp() -> Result<u64> {
+    Ok(SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs())
+}
+
+fn apns_jwt(config: &ApnsConfig, issued_at: u64) -> Result<String> {
     let header = URL_SAFE_NO_PAD.encode(serde_json::to_vec(&json!({
         "alg": "ES256",
         "kid": config.key_id,
     }))?);
-    let issued_at = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs();
     let claims = URL_SAFE_NO_PAD.encode(serde_json::to_vec(&json!({
         "iss": config.team_id,
         "iat": issued_at,
@@ -506,6 +541,56 @@ pub fn validate_device_token(device_token: &str) -> Result<()> {
 mod tests {
     use super::*;
     use crate::db;
+
+    fn apns_config_for_jwt_tests() -> ApnsConfig {
+        let private_key_der =
+            EcdsaKeyPair::generate_pkcs8(&ECDSA_P256_SHA256_FIXED_SIGNING, &SystemRandom::new())
+                .unwrap();
+        ApnsConfig {
+            key_id: "test-key".to_owned(),
+            team_id: "test-team".to_owned(),
+            topic: "me.fin.bark".to_owned(),
+            private_key_der: private_key_der.as_ref().to_vec(),
+            jwt_cache: Mutex::new(None),
+        }
+    }
+
+    #[test]
+    fn apns_provider_jwt_is_reused_for_fifty_minutes_then_refreshed() {
+        let config = apns_config_for_jwt_tests();
+        let issued_at = 1_700_000_000;
+
+        let first = cached_apns_jwt_at(&config, issued_at).unwrap();
+        let cached = cached_apns_jwt_at(&config, issued_at + APNS_JWT_TTL_SECONDS - 1).unwrap();
+        let refreshed = cached_apns_jwt_at(&config, issued_at + APNS_JWT_TTL_SECONDS).unwrap();
+
+        assert_eq!(cached, first);
+        assert_ne!(refreshed, first);
+    }
+
+    #[test]
+    fn apns_provider_jwt_cache_is_safe_for_concurrent_pushes() {
+        let config = Arc::new(apns_config_for_jwt_tests());
+        let start = Arc::new(std::sync::Barrier::new(8));
+        let issued_at = 1_700_000_000;
+        let tokens = std::thread::scope(|scope| {
+            (0..8)
+                .map(|_| {
+                    let config = Arc::clone(&config);
+                    let start = Arc::clone(&start);
+                    scope.spawn(move || {
+                        start.wait();
+                        cached_apns_jwt_at(&config, issued_at).unwrap()
+                    })
+                })
+                .collect::<Vec<_>>()
+                .into_iter()
+                .map(|thread| thread.join().unwrap())
+                .collect::<Vec<_>>()
+        });
+
+        assert!(tokens.windows(2).all(|tokens| tokens[0] == tokens[1]));
+    }
 
     #[tokio::test]
     async fn registration_returns_a_capability_key_and_updates_its_device_token() {
