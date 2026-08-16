@@ -15,7 +15,7 @@ use axum::{
     body::{Body, to_bytes},
     extract::{Multipart, Path, Query, Request, State},
     http::{HeaderMap, StatusCode, header},
-    middleware::from_fn_with_state,
+    middleware::{Next, from_fn_with_state},
     response::{IntoResponse, Response},
     routing::{any, get, patch, post, put},
 };
@@ -78,6 +78,7 @@ impl AppState {
 }
 
 pub fn router(state: AppState) -> Router {
+    let bark_routes = bark_router(state.clone());
     let signed_in = Router::new()
         .route("/api/me", get(me))
         .route("/api/admin/system", get(system_overview))
@@ -121,6 +122,26 @@ pub fn router(state: AppState) -> Router {
         .route("/api/health", get(health))
         .route("/api/config", get(public_config))
         .route("/api/setup", get(setup_status).post(setup))
+        .route("/bot/v1/messages", post(bot_send_message))
+        .merge(bark_routes)
+        .merge(signed_in)
+        .fallback(static_asset)
+        .layer(axum::extract::DefaultBodyLimit::disable())
+        .layer(CompressionLayer::new())
+        .layer(
+            TraceLayer::new_for_http().make_span_with(|request: &axum::http::Request<_>| {
+                tracing::info_span!(
+                    "http_request",
+                    method = %request.method(),
+                    path = request_log_path(request.uri().path()),
+                )
+            }),
+        )
+        .with_state(state)
+}
+
+fn bark_router(state: AppState) -> Router<AppState> {
+    Router::new()
         .route("/api/bark", get(bark_root))
         .route("/api/bark/", get(bark_root))
         .route("/api/bark/ping", get(bark_ping))
@@ -163,21 +184,7 @@ pub fn router(state: AppState) -> Router {
                 .post(bark_push_url_with_title_subtitle_and_body)
                 .layer(RequestBodyLimitLayer::new(BARK_REQUEST_MAX_BYTES)),
         )
-        .route("/bot/v1/messages", post(bot_send_message))
-        .merge(signed_in)
-        .fallback(static_asset)
-        .layer(axum::extract::DefaultBodyLimit::disable())
-        .layer(CompressionLayer::new())
-        .layer(
-            TraceLayer::new_for_http().make_span_with(|request: &axum::http::Request<_>| {
-                tracing::info_span!(
-                    "http_request",
-                    method = %request.method(),
-                    path = request_log_path(request.uri().path()),
-                )
-            }),
-        )
-        .with_state(state)
+        .route_layer(from_fn_with_state(state, bark_basic_authenticate))
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -322,6 +329,28 @@ fn bark_response(
         .into_response()
 }
 
+async fn bark_basic_authenticate(
+    State(state): State<AppState>,
+    request: Request,
+    next: Next,
+) -> Response {
+    let path = request.uri().path();
+    let authorization = request
+        .headers()
+        .get(header::AUTHORIZATION)
+        .and_then(|value| value.to_str().ok());
+    if bark_auth_free_path(path) || state.bark.allows_request(authorization) {
+        return next.run(request).await;
+    }
+    (StatusCode::IM_A_TEAPOT, "I'm a teapot").into_response()
+}
+
+fn bark_auth_free_path(path: &str) -> bool {
+    ["/api/bark/ping", "/api/bark/register", "/api/bark/healthz"]
+        .into_iter()
+        .any(|free_path| path.starts_with(free_path))
+}
+
 fn bark_unavailable(state: &AppState) -> Option<Response> {
     (!state.bark.configured()).then(|| {
         bark_response(
@@ -406,14 +435,12 @@ async fn bark_register_check(State(state): State<AppState>, Path(key): Path<Stri
     if let Some(response) = bark_unavailable(&state) {
         return response;
     }
-    match bark::device_token_for_key(&state.db, &key).await {
-        Ok(Some(_)) => bark_response(StatusCode::OK, "success", None),
-        Ok(None) => bark_response(StatusCode::BAD_REQUEST, "device key is invalid", None),
-        Err(_) => bark_response(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "device lookup failed",
-            None,
-        ),
+    if key.is_empty() {
+        return bark_response(StatusCode::BAD_REQUEST, "device key is empty", None);
+    }
+    match bark::device_token_by_key(&state.db, &key).await {
+        Ok(_) => bark_response(StatusCode::OK, "success", None),
+        Err(error) => bark_response(StatusCode::BAD_REQUEST, error.to_string(), None),
     }
 }
 
@@ -528,6 +555,13 @@ async fn bark_push_request(state: AppState, path: BarkPath, request: Request) ->
     let BarkPushRequest { input, device_keys } = request;
     if device_keys.is_empty() {
         return deliver_bark_push(state, input).await;
+    }
+    if !state.bark.allows_batch_push_count(device_keys.len()) {
+        return bark_response(
+            StatusCode::BAD_REQUEST,
+            "batch push count exceeds the maximum limit",
+            None,
+        );
     }
     let results = futures_util::future::join_all(device_keys.into_iter().map(|device_key| {
         let state = state.clone();
@@ -689,7 +723,7 @@ struct BarkBatchResult {
 
 struct BarkPushError {
     status: StatusCode,
-    message: &'static str,
+    message: String,
 }
 
 async fn deliver_bark_push(state: AppState, input: bark::PushInput) -> Response {
@@ -706,22 +740,18 @@ async fn try_deliver_bark_push(
     if !state.bark.configured() {
         return Err(BarkPushError {
             status: StatusCode::SERVICE_UNAVAILABLE,
-            message: "Bark APNs is not configured",
+            message: "Bark APNs is not configured".to_owned(),
         });
     }
-    input.validate().map_err(|_| BarkPushError {
+    input.validate().map_err(|error| BarkPushError {
         status: StatusCode::BAD_REQUEST,
-        message: "device key is invalid",
+        message: error.to_string(),
     })?;
-    let device_token = bark::device_token_for_key(&state.db, &input.device_key)
+    let device_token = bark::device_token_by_key(&state.db, &input.device_key)
         .await
-        .map_err(|_| BarkPushError {
-            status: StatusCode::INTERNAL_SERVER_ERROR,
-            message: "device lookup failed",
-        })?
-        .ok_or(BarkPushError {
+        .map_err(|error| BarkPushError {
             status: StatusCode::BAD_REQUEST,
-            message: "device key is invalid",
+            message: error.to_string(),
         })?;
     match state.bark.deliver(&device_token, input).await {
         Ok(bark::Delivery::Delivered) => Ok(()),
@@ -729,12 +759,12 @@ async fn try_deliver_bark_push(
             let _ = bark::invalidate_device_key(&state.db, &input.device_key).await;
             Err(BarkPushError {
                 status: StatusCode::INTERNAL_SERVER_ERROR,
-                message: "push failed",
+                message: "push failed: device token invalid".to_owned(),
             })
         }
-        Err(_) => Err(BarkPushError {
+        Err(error) => Err(BarkPushError {
             status: StatusCode::INTERNAL_SERVER_ERROR,
-            message: "push failed",
+            message: format!("push failed: {error}"),
         }),
     }
 }
@@ -2237,12 +2267,16 @@ mod tests {
     use tower::ServiceExt;
 
     fn test_state(db: SqlitePool) -> AppState {
+        test_state_with_bark(db, bark::BarkGateway::test_gateway())
+    }
+
+    fn test_state_with_bark(db: SqlitePool, bark: bark::BarkGateway) -> AppState {
         let (events, _) = tokio::sync::broadcast::channel(1);
         AppState {
             db,
             auth: AuthManager::default(),
             uploads: Arc::new(std::env::temp_dir()),
-            bark: bark::BarkGateway::test_gateway(),
+            bark,
             database_path: Arc::new(std::env::temp_dir().join("linkit-test.sqlite3")),
             system_monitor: Arc::new(Mutex::new(SystemMonitor::new())),
             events,
@@ -2293,7 +2327,7 @@ mod tests {
         let body = registered.into_body().collect().await.unwrap().to_bytes();
         let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
         let key = value["data"]["key"].as_str().unwrap();
-        assert_eq!(key.len(), 32);
+        assert!((13..=22).contains(&key.len()));
         let checked = app
             .clone()
             .oneshot(
@@ -2343,7 +2377,10 @@ mod tests {
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
         let body = response.into_body().collect().await.unwrap().to_bytes();
         let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
-        assert_eq!(value["message"], "device key is invalid");
+        assert_eq!(
+            value["message"],
+            "failed to get [not-a-device-key] device token from database"
+        );
     }
 
     #[test]
@@ -2395,7 +2432,10 @@ mod tests {
         assert_eq!(form.status(), StatusCode::BAD_REQUEST);
         let body = form.into_body().collect().await.unwrap().to_bytes();
         let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
-        assert_eq!(value["message"], "device key is invalid");
+        assert_eq!(
+            value["message"],
+            "failed to get [not-a-device-key] device token from database"
+        );
 
         let multipart = app
             .clone()
@@ -2414,7 +2454,10 @@ mod tests {
         assert_eq!(multipart.status(), StatusCode::BAD_REQUEST);
         let body = multipart.into_body().collect().await.unwrap().to_bytes();
         let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
-        assert_eq!(value["message"], "device key is invalid");
+        assert_eq!(
+            value["message"],
+            "failed to get [not-a-device-key] device token from database"
+        );
 
         let batch = app
             .oneshot(
@@ -2434,6 +2477,163 @@ mod tests {
         let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(value["data"][0]["code"], StatusCode::BAD_REQUEST.as_u16());
         assert_eq!(value["data"][1]["code"], StatusCode::BAD_REQUEST.as_u16());
+    }
+
+    #[tokio::test]
+    async fn bark_delivers_registered_v1_v2_and_batch_pushes() {
+        let db = db::connect_memory().await.unwrap();
+        let key = bark::register_device(&db, "", "test-device-token")
+            .await
+            .unwrap();
+        let app = router(test_state(db));
+
+        let v1 = app
+            .clone()
+            .oneshot(
+                axum::http::Request::builder()
+                    .uri(format!(
+                        "/api/bark/{key}/V1%20message?icon=https%3A%2F%2Fexample.test%2Favatar.jpg&level=critical"
+                    ))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(v1.status(), StatusCode::OK);
+        let body = v1.into_body().collect().await.unwrap().to_bytes();
+        let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(value["code"], StatusCode::OK.as_u16());
+
+        let v2 = app
+            .clone()
+            .oneshot(
+                axum::http::Request::builder()
+                    .method("POST")
+                    .uri("/api/bark/push")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(format!(
+                        r#"{{"device_key":"{key}","ciphertext":"encrypted","isArchive":"1"}}"#
+                    )))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(v2.status(), StatusCode::OK);
+
+        let batch = app
+            .oneshot(
+                axum::http::Request::builder()
+                    .method("POST")
+                    .uri("/api/bark/push")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(format!(
+                        r#"{{"body":"Batch","device_keys":["{key}","{key}"]}}"#
+                    )))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(batch.status(), StatusCode::OK);
+        let body = batch.into_body().collect().await.unwrap().to_bytes();
+        let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(value["data"][0]["code"], StatusCode::OK.as_u16());
+        assert_eq!(value["data"][1]["code"], StatusCode::OK.as_u16());
+    }
+
+    #[tokio::test]
+    async fn bark_basic_auth_and_batch_limit_match_the_upstream_contract() {
+        let db = db::connect_memory().await.unwrap();
+        let gateway = bark::BarkGateway::test_gateway_with(Some(("bark", "pass")), 1);
+        let app = router(test_state_with_bark(db, gateway));
+
+        let root = app
+            .clone()
+            .oneshot(
+                axum::http::Request::builder()
+                    .uri("/api/bark")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(root.status(), StatusCode::IM_A_TEAPOT);
+        assert_eq!(
+            root.into_body().collect().await.unwrap().to_bytes(),
+            "I'm a teapot"
+        );
+
+        let ping = app
+            .clone()
+            .oneshot(
+                axum::http::Request::builder()
+                    .uri("/api/bark/ping")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(ping.status(), StatusCode::OK);
+
+        let registered = app
+            .clone()
+            .oneshot(
+                axum::http::Request::builder()
+                    .uri("/api/bark/register?devicetoken=test-device-token")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let body = registered.into_body().collect().await.unwrap().to_bytes();
+        let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        let key = value["data"]["key"].as_str().unwrap();
+
+        let unauthorized = app
+            .clone()
+            .oneshot(
+                axum::http::Request::builder()
+                    .uri(format!("/api/bark/{key}/Message"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(unauthorized.status(), StatusCode::IM_A_TEAPOT);
+
+        let authorized = app
+            .clone()
+            .oneshot(
+                axum::http::Request::builder()
+                    .uri(format!("/api/bark/{key}/Message"))
+                    .header(header::AUTHORIZATION, "Basic YmFyazpwYXNz")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(authorized.status(), StatusCode::OK);
+
+        let limited = app
+            .oneshot(
+                axum::http::Request::builder()
+                    .method("POST")
+                    .uri("/api/bark/push")
+                    .header(header::AUTHORIZATION, "Basic YmFyazpwYXNz")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(format!(
+                        r#"{{"body":"Batch","device_keys":["{key}","{key}"]}}"#
+                    )))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(limited.status(), StatusCode::BAD_REQUEST);
+        let body = limited.into_body().collect().await.unwrap().to_bytes();
+        let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(
+            value["message"],
+            "batch push count exceeds the maximum limit"
+        );
     }
 
     #[tokio::test]
@@ -2474,7 +2674,11 @@ mod tests {
 
     #[tokio::test]
     async fn bark_mcp_matches_the_upstream_notify_surface() {
-        let app = router(test_state(db::connect_memory().await.unwrap()));
+        let db = db::connect_memory().await.unwrap();
+        let key = bark::register_device(&db, "", "test-device-token")
+            .await
+            .unwrap();
+        let app = router(test_state(db));
         let initialize = app
             .clone()
             .oneshot(
@@ -2539,6 +2743,7 @@ mod tests {
         );
 
         let notify = app
+            .clone()
             .oneshot(
                 axum::http::Request::builder()
                     .method("POST")
@@ -2559,6 +2764,28 @@ mod tests {
                 .unwrap()
                 .contains("code 400")
         );
+
+        let sent = app
+            .oneshot(
+                axum::http::Request::builder()
+                    .method("POST")
+                    .uri(format!("/api/bark/mcp/{key}"))
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(
+                        r#"{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"notify","arguments":{"body":"Message","icon":"https://example.test/avatar.jpg","level":"critical"}}}"#,
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(sent.status(), StatusCode::OK);
+        let body = sent.into_body().collect().await.unwrap().to_bytes();
+        let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(
+            value["result"]["content"][0]["text"],
+            "Notification sent successfully"
+        );
+        assert_eq!(value["result"]["isError"], false);
     }
 
     #[test]
