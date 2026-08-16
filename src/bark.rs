@@ -9,7 +9,6 @@ use base64::{
     Engine as _,
     engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD},
 };
-use rand::{Rng, distr::Alphanumeric};
 use reqwest::header::{AUTHORIZATION, CONTENT_TYPE, HeaderMap, HeaderValue};
 use ring::{
     rand::SystemRandom,
@@ -19,14 +18,19 @@ use serde::Deserialize;
 use serde_json::{Map, Value, json};
 use sha2::{Digest, Sha256};
 use sqlx::SqlitePool;
+use uuid::Uuid;
 
 const APNS_ENDPOINT: &str = "https://api.push.apple.com/3/device/";
 const APNS_PAYLOAD_MAX_BYTES: usize = 4096;
+const BARK_KEY_ALPHABET: &[u8] = b"23456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
+const BARK_KEY_MIN_LENGTH: usize = 13;
 
 #[derive(Clone)]
 pub struct BarkGateway {
     client: reqwest::Client,
     config: Option<Arc<ApnsConfig>>,
+    basic_auth: Option<Arc<BarkBasicAuth>>,
+    max_batch_push_count: i64,
 }
 
 struct ApnsConfig {
@@ -34,6 +38,11 @@ struct ApnsConfig {
     team_id: String,
     topic: String,
     private_key_der: Vec<u8>,
+}
+
+struct BarkBasicAuth {
+    username: String,
+    password: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -60,14 +69,25 @@ impl BarkGateway {
         Self {
             client: reqwest::Client::new(),
             config: None,
+            basic_auth: bark_basic_auth(),
+            max_batch_push_count: bark_max_batch_push_count().unwrap_or(-1),
         }
     }
 
     pub fn load() -> Result<Self> {
         let client = reqwest::Client::builder().build()?;
+        let basic_auth = bark_basic_auth();
+        let max_batch_push_count = bark_max_batch_push_count()?;
         let auth_key_path = match env::var("BARK_APNS_AUTH_KEY_PATH") {
-            Ok(path) => path,
-            Err(env::VarError::NotPresent) => return Ok(Self::disabled()),
+            Ok(value) => value,
+            Err(env::VarError::NotPresent) => {
+                return Ok(Self {
+                    client,
+                    config: None,
+                    basic_auth,
+                    max_batch_push_count,
+                });
+            }
             Err(error) => return Err(error.into()),
         };
         let key_id = required_env("BARK_APNS_KEY_ID")?;
@@ -91,6 +111,8 @@ impl BarkGateway {
                 topic,
                 private_key_der,
             })),
+            basic_auth,
+            max_batch_push_count,
         })
     }
 
@@ -98,8 +120,33 @@ impl BarkGateway {
         self.config.is_some()
     }
 
+    pub fn allows_batch_push_count(&self, count: usize) -> bool {
+        self.max_batch_push_count == -1 || (count as i64) <= self.max_batch_push_count
+    }
+
+    pub fn allows_request(&self, authorization: Option<&str>) -> bool {
+        let Some(basic_auth) = &self.basic_auth else {
+            return true;
+        };
+        let Some(encoded) = authorization.and_then(|value| value.strip_prefix("Basic ")) else {
+            return false;
+        };
+        let Ok(credentials) = STANDARD.decode(encoded) else {
+            return false;
+        };
+        credentials == format!("{}:{}", basic_auth.username, basic_auth.password).as_bytes()
+    }
+
     #[cfg(test)]
     pub(crate) fn test_gateway() -> Self {
+        Self::test_gateway_with(None, -1)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn test_gateway_with(
+        basic_auth: Option<(&str, &str)>,
+        max_batch_push_count: i64,
+    ) -> Self {
         Self {
             client: reqwest::Client::new(),
             config: Some(Arc::new(ApnsConfig {
@@ -108,6 +155,13 @@ impl BarkGateway {
                 topic: "me.fin.bark".to_owned(),
                 private_key_der: Vec::new(),
             })),
+            basic_auth: basic_auth.map(|(username, password)| {
+                Arc::new(BarkBasicAuth {
+                    username: username.to_owned(),
+                    password: password.to_owned(),
+                })
+            }),
+            max_batch_push_count,
         }
     }
 
@@ -117,6 +171,10 @@ impl BarkGateway {
             .as_ref()
             .ok_or_else(|| anyhow!("Bark APNs is not configured"))?;
         let payload = push.apns_payload()?;
+        #[cfg(test)]
+        if config.private_key_der.is_empty() {
+            return Ok(Delivery::Delivered);
+        }
         let authorization = format!("bearer {}", apns_jwt(config)?);
         let mut headers = HeaderMap::new();
         headers.insert(
@@ -165,7 +223,10 @@ impl BarkGateway {
         if status.as_u16() == 410 || (status.as_u16() == 400 && reason.contains("BadDeviceToken")) {
             return Ok(Delivery::InvalidDeviceToken);
         }
-        bail!("APNs rejected the notification with HTTP {status}")
+        if reason.is_empty() {
+            bail!("APNs rejected the notification with HTTP {status}")
+        }
+        bail!(reason)
     }
 }
 
@@ -195,14 +256,14 @@ impl PushInput {
 
     pub fn validate(&self) -> Result<()> {
         if self.device_key.is_empty() {
-            bail!("device key is invalid");
+            bail!("device key is empty");
         }
         Ok(())
     }
 
     fn is_delete(&self) -> bool {
         matches!(self.extra.get("delete"), Some(Value::String(value)) if value == "1")
-            || matches!(self.extra.get("delete"), Some(Value::Number(value)) if value.as_i64() == Some(1))
+            || matches!(self.extra.get("delete"), Some(Value::Number(value)) if value.as_f64() == Some(1.0))
     }
 
     fn apns_payload(&self) -> Result<Vec<u8>> {
@@ -311,6 +372,19 @@ pub async fn device_token_for_key(db: &SqlitePool, key: &str) -> Result<Option<S
     )
 }
 
+pub async fn device_token_by_key(db: &SqlitePool, key: &str) -> Result<String> {
+    let token: String =
+        sqlx::query_scalar("SELECT device_token FROM bark_devices WHERE key_hash=?")
+            .bind(hash_key(key))
+            .fetch_optional(db)
+            .await?
+            .ok_or_else(|| anyhow!("failed to get [{key}] device token from database"))?;
+    if token.is_empty() {
+        bail!("device token invalid");
+    }
+    Ok(token)
+}
+
 pub async fn device_key_exists(db: &SqlitePool, key: &str) -> Result<bool> {
     Ok(
         sqlx::query_scalar::<_, i64>("SELECT 1 FROM bark_devices WHERE key_hash=?")
@@ -343,6 +417,23 @@ fn required_env(name: &str) -> Result<String> {
         bail!("{name} must not be empty");
     }
     Ok(value)
+}
+
+fn bark_basic_auth() -> Option<Arc<BarkBasicAuth>> {
+    let username = env::var("BARK_SERVER_BASIC_AUTH_USER").unwrap_or_default();
+    let password = env::var("BARK_SERVER_BASIC_AUTH_PASSWORD").unwrap_or_default();
+    (!(username.is_empty() && password.is_empty()))
+        .then(|| Arc::new(BarkBasicAuth { username, password }))
+}
+
+fn bark_max_batch_push_count() -> Result<i64> {
+    match env::var("BARK_SERVER_MAX_BATCH_PUSH_COUNT") {
+        Ok(value) => value
+            .parse()
+            .with_context(|| "BARK_SERVER_MAX_BATCH_PUSH_COUNT must be an integer"),
+        Err(env::VarError::NotPresent) => Ok(-1),
+        Err(error) => Err(error.into()),
+    }
 }
 
 fn decode_pem_private_key(pem: &[u8]) -> Result<Vec<u8>> {
@@ -386,11 +477,18 @@ fn apns_jwt(config: &ApnsConfig) -> Result<String> {
 }
 
 fn new_device_key() -> String {
-    rand::rng()
-        .sample_iter(&Alphanumeric)
-        .take(32)
-        .map(char::from)
-        .collect()
+    let mut value = u128::from_be_bytes(*Uuid::new_v4().as_bytes());
+    let mut key = String::with_capacity(22);
+    while value > 0 {
+        key.push(char::from(
+            BARK_KEY_ALPHABET[(value % BARK_KEY_ALPHABET.len() as u128) as usize],
+        ));
+        value /= BARK_KEY_ALPHABET.len() as u128;
+    }
+    while key.len() < BARK_KEY_MIN_LENGTH {
+        key.push(char::from(BARK_KEY_ALPHABET[0]));
+    }
+    key
 }
 
 fn hash_key(key: &str) -> String {
@@ -413,11 +511,13 @@ mod tests {
     async fn registration_returns_a_capability_key_and_updates_its_device_token() {
         let db = db::connect_memory().await.unwrap();
         let key = register_device(&db, "", "aabbccdd").await.unwrap();
-        assert_eq!(key.len(), 32);
+        assert!((BARK_KEY_MIN_LENGTH..=22).contains(&key.len()));
+        assert!(key.bytes().all(|byte| BARK_KEY_ALPHABET.contains(&byte)));
         assert_eq!(
             device_token_for_key(&db, &key).await.unwrap().as_deref(),
             Some("aabbccdd")
         );
+        assert_eq!(device_token_by_key(&db, &key).await.unwrap(), "aabbccdd");
         let same_key = register_device(&db, &key, "11223344").await.unwrap();
         assert_eq!(same_key, key);
         assert_eq!(
@@ -507,5 +607,33 @@ mod tests {
         assert_eq!(payload["group"], "operations");
         assert_eq!(payload["level"], "critical");
         assert_eq!(payload["volume"], "10");
+    }
+
+    #[test]
+    fn push_payload_keeps_the_bark_icon_field_for_the_ios_service_extension() {
+        let push = PushInput::from_params(
+            serde_json::from_value(json!({
+                "device_key": "key",
+                "body": "Icon message",
+                "icon": "https://example.test/avatar.jpg"
+            }))
+            .unwrap(),
+        );
+        let payload: Value = serde_json::from_slice(&push.apns_payload().unwrap()).unwrap();
+
+        assert_eq!(payload["aps"]["mutable-content"], 1);
+        assert_eq!(payload["aps"]["category"], "myNotificationCategory");
+        assert_eq!(payload["icon"], "https://example.test/avatar.jpg");
+    }
+
+    #[test]
+    fn bark_server_settings_match_basic_auth_and_batch_rules() {
+        let gateway = BarkGateway::test_gateway_with(Some(("bark", "pass")), 2);
+
+        assert!(!gateway.allows_request(None));
+        assert!(!gateway.allows_request(Some("Basic YmFjazpiYWQ=")));
+        assert!(gateway.allows_request(Some("Basic YmFyazpwYXNz")));
+        assert!(gateway.allows_batch_push_count(2));
+        assert!(!gateway.allows_batch_push_count(3));
     }
 }

@@ -85,7 +85,8 @@ curl --fail-with-body https://linkit.ntnl.io/api/bark/push \
 ```
 
 The Bark-compatible HTTP API follows the upstream self-hosted
-`bark-server` v2.3.5 core contract:
+`bark-server` v2.3.5 contract, including registration, V1 and V2 pushes,
+batch results, diagnostics, Basic Auth, and MCP:
 
 ```bash
 curl --fail-with-body 'https://linkit.ntnl.io/api/bark/YOUR_KEY/Your%20message?group=alerts&sound=alarm'
@@ -118,9 +119,23 @@ the same base URL. They expose Bark's `notify` tool; the Key-bound endpoint
 does not require `device_key` in tool arguments.
 
 The gateway keeps device-token registrations in Linkit's private SQLite data
-directory and only uses APNs to deliver the push. It deploys the APNs identity
+directory, which runs in WAL mode, and only uses APNs to deliver the push. It
+does not use bark-server's MySQL, Bbolt, in-memory, or environment-backed
+storage modes. It deploys the APNs identity
 used by the upstream self-hosted `bark-server` v2.3.5 into a root-owned runtime
 file; it is not included in this repository or release archive.
+
+The upstream server's optional runtime settings are available with the same
+environment variable names where they apply to this embedded surface:
+
+```bash
+# Protect all Bark routes except /ping, /register, and /healthz.
+BARK_SERVER_BASIC_AUTH_USER=bark
+BARK_SERVER_BASIC_AUTH_PASSWORD=change-me
+
+# -1 is unlimited, matching bark-server's default.
+BARK_SERVER_MAX_BATCH_PUSH_COUNT=100
+```
 
 ## Development
 
