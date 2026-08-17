@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import {
   type InfiniteData,
   useInfiniteQuery,
@@ -878,6 +878,8 @@ function ConversationPage({ me, sdk }: { me: Me; sdk: AuthMiniApi }) {
   const [attachments, setAttachments] = useState<Attachment[]>([]);
   const [manageOpen, setManageOpen] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
+  const messageListRef = useRef<HTMLElement>(null);
+  const openedConversationRef = useRef("");
   const messages = useInfiniteQuery({
     queryKey: ["messages", id],
     initialPageParam: "",
@@ -920,6 +922,13 @@ function ConversationPage({ me, sdk }: { me: Me; sdk: AuthMiniApi }) {
       () => undefined,
     );
   }, [id, sdk]);
+  useLayoutEffect(() => {
+    if (!messages.data || openedConversationRef.current === id) return;
+    const messageList = messageListRef.current;
+    if (!messageList) return;
+    messageList.scrollTop = messageList.scrollHeight;
+    openedConversationRef.current = id;
+  }, [id, messages.data]);
   const chooseFile = async (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
     if (!file) return;
@@ -977,7 +986,10 @@ function ConversationPage({ me, sdk }: { me: Me; sdk: AuthMiniApi }) {
           ) : null}
         </header>
       )}
-      <section className="min-h-0 flex-1 overflow-auto p-4 md:p-6">
+      <section
+        ref={messageListRef}
+        className="min-h-0 flex-1 overflow-auto p-4 md:p-6"
+      >
         <div className="flex flex-col gap-4">
           {messages.hasPreviousPage ? (
             <Button
