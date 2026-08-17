@@ -36,6 +36,7 @@ use crate::{
 
 const MAX_UPLOAD_BYTES: usize = 52_428_800;
 const BARK_REQUEST_MAX_BYTES: usize = 16 * 1024;
+const BARK_NOTIFICATION_BODY_MAX_BYTES: usize = 3_000;
 const MESSAGE_PAGE_SIZE: i64 = 50;
 const LIST_CONVERSATIONS_QUERY: &str = "SELECT c.id,c.kind,c.title,c.created_by,c.created_at,CASE WHEN c.kind='direct' THEN COALESCE((SELECT p.display_name FROM conversation_members cm_peer JOIN profiles p ON p.user_id=cm_peer.user_id WHERE cm_peer.conversation_id=c.id AND cm_peer.user_id<>? LIMIT 1),(SELECT b.name FROM conversation_bots cb JOIN bots b ON b.id=cb.bot_id WHERE cb.conversation_id=c.id LIMIT 1)) END counterpart_name,CASE WHEN c.kind='direct' THEN (SELECT p.avatar_attachment_id FROM conversation_members cm_peer JOIN profiles p ON p.user_id=cm_peer.user_id WHERE cm_peer.conversation_id=c.id AND cm_peer.user_id<>? LIMIT 1) END counterpart_avatar_attachment_id,(SELECT body FROM messages WHERE conversation_id=c.id ORDER BY created_at DESC LIMIT 1) latest_body,(SELECT created_at FROM messages WHERE conversation_id=c.id ORDER BY created_at DESC LIMIT 1) latest_at,(SELECT COUNT(*) FROM messages WHERE conversation_id=c.id AND created_at>cm.last_read_at AND sender_id<>?) unread_count FROM conversations c JOIN conversation_members cm ON cm.conversation_id=c.id WHERE cm.user_id=? ORDER BY COALESCE(latest_at,c.created_at) DESC";
 const CONVERSATION_QUERY: &str = "SELECT c.id,c.kind,c.title,c.created_by,c.created_at,CASE WHEN c.kind='direct' THEN COALESCE((SELECT p.display_name FROM conversation_members cm_peer JOIN profiles p ON p.user_id=cm_peer.user_id WHERE cm_peer.conversation_id=c.id AND cm_peer.user_id<>? LIMIT 1),(SELECT b.name FROM conversation_bots cb JOIN bots b ON b.id=cb.bot_id WHERE cb.conversation_id=c.id LIMIT 1)) END counterpart_name,CASE WHEN c.kind='direct' THEN (SELECT p.avatar_attachment_id FROM conversation_members cm_peer JOIN profiles p ON p.user_id=cm_peer.user_id WHERE cm_peer.conversation_id=c.id AND cm_peer.user_id<>? LIMIT 1) END counterpart_avatar_attachment_id,(SELECT body FROM messages WHERE conversation_id=c.id ORDER BY created_at DESC LIMIT 1) latest_body,(SELECT created_at FROM messages WHERE conversation_id=c.id ORDER BY created_at DESC LIMIT 1) latest_at,(SELECT COUNT(*) FROM messages WHERE conversation_id=c.id AND created_at>cm.last_read_at AND sender_id<>?) unread_count FROM conversations c JOIN conversation_members cm ON cm.conversation_id=c.id WHERE c.id=? AND cm.user_id=?";
@@ -84,6 +85,12 @@ pub fn router(state: AppState) -> Router {
         .route("/api/admin/system", get(system_overview))
         .route("/api/events", get(events))
         .route("/api/profile", put(update_profile))
+        .route(
+            "/api/settings/bark",
+            get(bark_notification_settings)
+                .put(save_bark_notification_settings)
+                .delete(delete_bark_notification_settings),
+        )
         .route("/api/users", get(list_users))
         .route("/api/users/{username}", get(read_user))
         .route(
@@ -1503,10 +1510,11 @@ async fn send_message(
     )
     .await?;
     let _ = state.events.send(ConversationEvent {
-        conversation_id: id,
-        sender_id: user.id,
+        conversation_id: id.clone(),
+        sender_id: user.id.clone(),
         message: message.clone(),
     });
+    dispatch_bark_notifications(state, id, Some(user.id), message.clone());
     Ok(axum::Json(message))
 }
 
@@ -1811,11 +1819,141 @@ async fn bot_send_message(
     )
     .await?;
     let _ = state.events.send(ConversationEvent {
-        conversation_id,
+        conversation_id: conversation_id.clone(),
         sender_id: bot.id,
         message: message.clone(),
     });
+    dispatch_bark_notifications(state, conversation_id, None, message.clone());
     Ok(axum::Json(message))
+}
+
+#[derive(Serialize)]
+struct BarkNotificationSettings {
+    configured: bool,
+}
+
+#[derive(Deserialize)]
+struct BarkNotificationSettingsInput {
+    push_url: String,
+}
+
+#[derive(FromRow)]
+struct BarkNotificationDestination {
+    user_id: String,
+    endpoint: String,
+    device_key: String,
+}
+
+async fn bark_notification_settings(
+    State(state): State<AppState>,
+    axum::Extension(user): axum::Extension<UserIdentity>,
+) -> Result<axum::Json<BarkNotificationSettings>, AppError> {
+    let configured: Option<i64> =
+        sqlx::query_scalar("SELECT 1 FROM bark_notification_settings WHERE user_id=?")
+            .bind(user.id)
+            .fetch_optional(&state.db)
+            .await?;
+    Ok(axum::Json(BarkNotificationSettings {
+        configured: configured.is_some(),
+    }))
+}
+
+async fn save_bark_notification_settings(
+    State(state): State<AppState>,
+    axum::Extension(user): axum::Extension<UserIdentity>,
+    axum::Json(input): axum::Json<BarkNotificationSettingsInput>,
+) -> Result<StatusCode, AppError> {
+    let (endpoint, device_key) = bark_push_endpoint(&input.push_url)?;
+    sqlx::query("INSERT INTO bark_notification_settings(user_id,endpoint,device_key,updated_at) VALUES(?,?,?,?) ON CONFLICT(user_id) DO UPDATE SET endpoint=excluded.endpoint,device_key=excluded.device_key,updated_at=excluded.updated_at")
+        .bind(user.id)
+        .bind(endpoint)
+        .bind(device_key)
+        .bind(chrono::Utc::now().timestamp())
+        .execute(&state.db)
+        .await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn delete_bark_notification_settings(
+    State(state): State<AppState>,
+    axum::Extension(user): axum::Extension<UserIdentity>,
+) -> Result<StatusCode, AppError> {
+    sqlx::query("DELETE FROM bark_notification_settings WHERE user_id=?")
+        .bind(user.id)
+        .execute(&state.db)
+        .await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+fn dispatch_bark_notifications(
+    state: AppState,
+    conversation_id: String,
+    sender_user_id: Option<String>,
+    message: Message,
+) {
+    tokio::spawn(deliver_bark_notifications(
+        state,
+        conversation_id,
+        sender_user_id,
+        message,
+    ));
+}
+
+async fn deliver_bark_notifications(
+    state: AppState,
+    conversation_id: String,
+    sender_user_id: Option<String>,
+    message: Message,
+) {
+    let destinations: Result<Vec<BarkNotificationDestination>, sqlx::Error> = sqlx::query_as(
+        "SELECT s.user_id,s.endpoint,s.device_key FROM bark_notification_settings s JOIN conversation_members cm ON cm.user_id=s.user_id WHERE cm.conversation_id=?",
+    )
+    .bind(&conversation_id)
+    .fetch_all(&state.db)
+    .await;
+    let destinations = match destinations {
+        Ok(destinations) => destinations,
+        Err(error) => {
+            tracing::error!(%error, "could not load Bark message notification settings");
+            return;
+        }
+    };
+    let title = format!("Linkit · {}", message.message.sender_name);
+    let body = if message.message.body.is_empty() {
+        "Sent an attachment".to_owned()
+    } else {
+        bark_notification_body(&message.message.body)
+    };
+    for destination in destinations {
+        if sender_user_id.as_deref() == Some(destination.user_id.as_str()) {
+            continue;
+        }
+        if let Err(error) = state
+            .bark
+            .notify(
+                &destination.endpoint,
+                &destination.device_key,
+                &title,
+                &body,
+                &conversation_id,
+            )
+            .await
+        {
+            tracing::warn!(user_id = %destination.user_id, %error, "Bark message notification failed");
+        }
+    }
+}
+
+fn bark_notification_body(body: &str) -> String {
+    let mut end = 0;
+    for (index, character) in body.char_indices() {
+        let next = index + character.len_utf8();
+        if next > BARK_NOTIFICATION_BODY_MAX_BYTES {
+            break;
+        }
+        end = next;
+    }
+    body[..end].to_owned()
 }
 
 #[derive(Deserialize)]
@@ -2192,6 +2330,40 @@ fn valid_origin(value: &str, label: &str) -> Result<String, AppError> {
     Ok(parsed.as_str().trim_end_matches('/').to_owned())
 }
 
+fn bark_push_endpoint(value: &str) -> Result<(String, String), AppError> {
+    let mut url = url::Url::parse(value.trim())
+        .map_err(|_| AppError::bad_request("Bark push link must be a valid URL"))?;
+    let local = matches!(
+        url.host_str(),
+        Some("localhost") | Some("127.0.0.1") | Some("::1")
+    );
+    if !matches!(url.scheme(), "https" | "http")
+        || url.host_str().is_none()
+        || (url.scheme() == "http" && !local)
+        || url.query().is_some()
+        || url.fragment().is_some()
+        || !url.username().is_empty()
+        || url.password().is_some()
+    {
+        return Err(AppError::bad_request(
+            "Bark push link must be an HTTPS URL ending in Your Key",
+        ));
+    }
+    let mut segments = url
+        .path_segments()
+        .ok_or_else(|| AppError::bad_request("Bark push link must end in Your Key"))?
+        .filter(|segment| !segment.is_empty())
+        .collect::<Vec<_>>();
+    let device_key = segments
+        .pop()
+        .filter(|key| (13..=128).contains(&key.len()) && !key.chars().any(char::is_whitespace))
+        .ok_or_else(|| AppError::bad_request("Bark push link must end in a valid Your Key"))?
+        .to_owned();
+    segments.push("push");
+    url.set_path(&format!("/{}", segments.join("/")));
+    Ok((url.to_string(), device_key))
+}
+
 fn valid_audience(value: &str) -> Result<String, AppError> {
     let value = value.trim().to_ascii_lowercase();
     if value.is_empty() || value.contains(['/', ':', '?', '#', '@']) {
@@ -2291,6 +2463,176 @@ mod tests {
     #[test]
     fn bot_tokens_have_an_unambiguous_public_prefix() {
         assert!(new_bot_token().starts_with("sk-"));
+    }
+
+    #[test]
+    fn bark_push_links_keep_the_key_separate_from_the_push_endpoint() {
+        let key = "testBarkKey987654321";
+        assert_eq!(
+            bark_push_endpoint(&format!("https://api.day.app/{key}/")).unwrap(),
+            ("https://api.day.app/push".to_owned(), key.to_owned())
+        );
+        assert_eq!(
+            bark_push_endpoint(&format!("https://linkit.ntnl.io/api/bark/{key}/")).unwrap(),
+            (
+                "https://linkit.ntnl.io/api/bark/push".to_owned(),
+                key.to_owned()
+            )
+        );
+        assert!(bark_push_endpoint("https://api.day.app/not-a-key").is_err());
+    }
+
+    #[test]
+    fn bark_notification_body_stays_within_the_apns_payload_budget() {
+        let body = "中".repeat(BARK_NOTIFICATION_BODY_MAX_BYTES);
+        let shortened = bark_notification_body(&body);
+        assert!(shortened.len() <= BARK_NOTIFICATION_BODY_MAX_BYTES);
+        assert!(shortened.is_char_boundary(shortened.len()));
+    }
+
+    #[tokio::test]
+    async fn bark_notification_settings_are_bound_to_the_signed_in_user() {
+        let db = db::connect_memory().await.unwrap();
+        sqlx::query("INSERT INTO users(id,created_at) VALUES('alice',0)")
+            .execute(&db)
+            .await
+            .unwrap();
+        let state = test_state(db.clone());
+        let user = UserIdentity {
+            id: "alice".to_owned(),
+        };
+        let key = "testBarkKey987654321";
+
+        assert_eq!(
+            save_bark_notification_settings(
+                State(state.clone()),
+                axum::Extension(user.clone()),
+                axum::Json(BarkNotificationSettingsInput {
+                    push_url: format!("https://api.day.app/{key}/"),
+                }),
+            )
+            .await
+            .unwrap(),
+            StatusCode::NO_CONTENT
+        );
+        let saved: (String, String) = sqlx::query_as(
+            "SELECT endpoint,device_key FROM bark_notification_settings WHERE user_id='alice'",
+        )
+        .fetch_one(&db)
+        .await
+        .unwrap();
+        assert_eq!(saved.0, "https://api.day.app/push");
+        assert_eq!(saved.1, key);
+        assert!(
+            bark_notification_settings(State(state.clone()), axum::Extension(user.clone()))
+                .await
+                .unwrap()
+                .0
+                .configured
+        );
+        delete_bark_notification_settings(State(state), axum::Extension(user))
+            .await
+            .unwrap();
+        let remaining: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM bark_notification_settings")
+            .fetch_one(&db)
+            .await
+            .unwrap();
+        assert_eq!(remaining, 0);
+    }
+
+    #[tokio::test]
+    async fn new_messages_are_delivered_to_configured_bark_recipients() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let endpoint = format!("http://{}/push", listener.local_addr().unwrap());
+        let (sent, mut received) = tokio::sync::mpsc::unbounded_channel();
+        let app = Router::new().route(
+            "/push",
+            post({
+                let sent = sent.clone();
+                move |axum::Json(payload): axum::Json<Value>| {
+                    let sent = sent.clone();
+                    async move {
+                        let _ = sent.send(payload);
+                        StatusCode::NO_CONTENT
+                    }
+                }
+            }),
+        );
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+
+        let db = db::connect_memory().await.unwrap();
+        for user_id in ["alice", "bob"] {
+            sqlx::query("INSERT INTO users(id,created_at) VALUES(?,0)")
+                .bind(user_id)
+                .execute(&db)
+                .await
+                .unwrap();
+        }
+        sqlx::query("INSERT INTO conversations(id,kind,title,created_by,created_at) VALUES('conversation','direct','', 'alice',0)")
+            .execute(&db)
+            .await
+            .unwrap();
+        for user_id in ["alice", "bob"] {
+            sqlx::query("INSERT INTO conversation_members(conversation_id,user_id,role,joined_at) VALUES('conversation',?,'member',0)")
+                .bind(user_id)
+                .execute(&db)
+                .await
+                .unwrap();
+        }
+        sqlx::query("INSERT INTO bark_notification_settings(user_id,endpoint,device_key,updated_at) VALUES('bob',?,'testBarkKey987654321',0)")
+            .bind(&endpoint)
+            .execute(&db)
+            .await
+            .unwrap();
+        sqlx::query("INSERT INTO bark_notification_settings(user_id,endpoint,device_key,updated_at) VALUES('alice',?,'senderBarkKey987654',0)")
+            .bind(&endpoint)
+            .execute(&db)
+            .await
+            .unwrap();
+        let recipients: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM bark_notification_settings s JOIN conversation_members cm ON cm.user_id=s.user_id WHERE cm.conversation_id='conversation'",
+        )
+        .fetch_one(&db)
+        .await
+        .unwrap();
+        assert_eq!(recipients, 2);
+
+        let state = test_state(db);
+        deliver_bark_notifications(
+            state,
+            "conversation".to_owned(),
+            Some("alice".to_owned()),
+            Message {
+                message: StoredMessage {
+                    id: "message".to_owned(),
+                    conversation_id: "conversation".to_owned(),
+                    sender_kind: "user".to_owned(),
+                    sender_id: "alice".to_owned(),
+                    sender_name: "Alice".to_owned(),
+                    sender_deleted: false,
+                    body: "Hello Bob".to_owned(),
+                    created_at: 0,
+                    sequence: 1,
+                },
+                attachments: vec![],
+                cursor: "0:1".to_owned(),
+            },
+        )
+        .await;
+        let payload = tokio::time::timeout(std::time::Duration::from_secs(1), received.recv())
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(payload["title"], "Linkit · Alice");
+        assert_eq!(payload["body"], "Hello Bob");
+        assert_eq!(payload["group"], "conversation");
+        assert_eq!(payload["device_key"], "testBarkKey987654321");
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_millis(50), received.recv())
+                .await
+                .is_err()
+        );
     }
 
     #[tokio::test]
