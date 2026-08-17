@@ -97,6 +97,10 @@ export type SystemOverview = {
   }>;
 };
 
+export type BarkNotificationSettings = {
+  configured: boolean;
+};
+
 export function openPagePath(search = window.location.search) {
   const params = new URLSearchParams(search);
   const open = params.get("open");

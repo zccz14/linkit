@@ -156,7 +156,7 @@ impl BarkGateway {
         max_batch_push_count: i64,
     ) -> Self {
         Self {
-            client: reqwest::Client::new(),
+            client: reqwest::Client::builder().no_proxy().build().unwrap(),
             config: Some(Arc::new(ApnsConfig {
                 key_id: "test-key".to_owned(),
                 team_id: "test-team".to_owned(),
@@ -236,6 +236,37 @@ impl BarkGateway {
             bail!("APNs rejected the notification with HTTP {status}")
         }
         bail!(reason)
+    }
+
+    pub async fn notify(
+        &self,
+        endpoint: &str,
+        device_key: &str,
+        title: &str,
+        body: &str,
+        group: &str,
+    ) -> Result<()> {
+        let response = self
+            .client
+            .post(endpoint)
+            .json(&json!({
+                "device_key": device_key,
+                "title": title,
+                "body": body,
+                "group": group,
+            }))
+            .send()
+            .await
+            .context("Bark notification request failed")?;
+        if response.status().is_success() {
+            return Ok(());
+        }
+        let status = response.status();
+        let reason = response.text().await.unwrap_or_default();
+        if reason.is_empty() {
+            bail!("Bark notification failed with HTTP {status}")
+        }
+        bail!("Bark notification failed: {reason}")
     }
 }
 

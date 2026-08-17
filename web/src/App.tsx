@@ -107,6 +107,7 @@ import {
   subscribeToEvents,
   upload,
   type Attachment,
+  type BarkNotificationSettings,
   type Bot,
   type Config,
   type Conversation,
@@ -409,6 +410,7 @@ function Shell({ me, sdk }: { me: Me; sdk: AuthMiniApi }) {
   const links = [
     ["/directory", t("navigation.directory"), UsersRoundIcon],
     ["/bots", t("navigation.bots"), BotIcon],
+    ["/settings/notifications", t("navigation.notifications"), BellIcon],
     ["/settings/profile", t("navigation.profile"), SettingsIcon],
     ...(me.root
       ? [["/admin/system", t("navigation.admin"), ShieldCheckIcon] as const]
@@ -523,6 +525,10 @@ function Shell({ me, sdk }: { me: Me; sdk: AuthMiniApi }) {
           <Route path="/compose/:username" element={<Compose sdk={sdk} />} />
           <Route path="/groups/new" element={<GroupCreator sdk={sdk} />} />
           <Route path="/bots" element={<Bots sdk={sdk} />} />
+          <Route
+            path="/settings/notifications"
+            element={<BarkNotifications sdk={sdk} />}
+          />
           <Route
             path="/settings/profile"
             element={<ProfileEditor me={me} sdk={sdk} />}
@@ -735,15 +741,16 @@ function MobileNavigator() {
     ["/conversations", t("navigation.inbox"), MessageCircleIcon],
     ["/directory", t("navigation.directory"), UsersRoundIcon],
     ["/bots", t("navigation.bots"), BotIcon],
+    ["/settings/notifications", t("navigation.notifications"), BellIcon],
     ["/settings/profile", t("navigation.profile"), SettingsIcon],
   ] as const;
   return (
-    <nav className="fixed right-0 bottom-0 left-0 z-40 grid grid-cols-4 border-t bg-background/95 px-2 py-1 backdrop-blur md:hidden">
+    <nav className="fixed right-0 bottom-0 left-0 z-40 grid grid-cols-5 border-t bg-background/95 px-1 py-1 backdrop-blur md:hidden">
       {items.map(([to, label, Icon]) => (
         <Button
           key={to}
           variant={location.pathname === to ? "secondary" : "ghost"}
-          className="h-12 flex-col gap-0.5 px-1 text-[0.7rem]"
+          className="h-12 flex-col gap-0.5 px-0.5 text-[0.65rem]"
           onClick={() => navigate(to)}
         >
           <Icon />
@@ -1919,6 +1926,121 @@ function ProfileEditor({ me, sdk }: { me: Me; sdk: AuthMiniApi }) {
           {t("profileEditor.save")}
         </Button>
       </form>
+    </Page>
+  );
+}
+
+function BarkNotifications({ sdk }: { sdk: AuthMiniApi }) {
+  const { t } = useI18n();
+  const queryClient = useQueryClient();
+  const settings = useQuery({
+    queryKey: ["settings", "bark"],
+    queryFn: () => api<BarkNotificationSettings>(sdk, "/api/settings/bark"),
+  });
+  const [pushUrl, setPushUrl] = useState("");
+  const save = useMutation({
+    mutationFn: () =>
+      api(sdk, "/api/settings/bark", {
+        method: "PUT",
+        body: JSON.stringify({ push_url: pushUrl }),
+      }),
+    onSuccess: () => {
+      setPushUrl("");
+      void queryClient.invalidateQueries({ queryKey: ["settings", "bark"] });
+      toast.success(t("barkSettings.saved"));
+    },
+    onError: (error) => toast.error(error.message),
+  });
+  const remove = useMutation({
+    mutationFn: () =>
+      api(sdk, "/api/settings/bark", {
+        method: "DELETE",
+      }),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["settings", "bark"] });
+      toast.success(t("barkSettings.removed"));
+    },
+    onError: (error) => toast.error(error.message),
+  });
+  const configured = settings.data?.configured ?? false;
+
+  return (
+    <Page
+      title={t("barkSettings.title")}
+      description={t("barkSettings.description")}
+    >
+      <Card className="max-w-xl">
+        <CardHeader className="gap-3">
+          <div className="flex size-10 items-center justify-center rounded-lg bg-primary text-primary-foreground">
+            <BellIcon aria-hidden="true" />
+          </div>
+          <div>
+            <CardTitle>{t("barkSettings.cardTitle")}</CardTitle>
+            <CardDescription className="mt-1">
+              {t("barkSettings.cardDescription")}
+            </CardDescription>
+          </div>
+        </CardHeader>
+        <CardContent>
+          <p className="text-sm leading-6 text-muted-foreground">
+            {t("barkSettings.iosPrompt")} {" "}
+            <a
+              className="font-medium text-foreground underline underline-offset-4"
+              href="https://apps.apple.com/app/bark-customed-notifications/id1403753865"
+              target="_blank"
+              rel="noreferrer"
+            >
+              {t("barkSettings.downloadBark")}
+            </a>
+          </p>
+          <form
+            className="mt-6"
+            onSubmit={(event) => {
+              event.preventDefault();
+              save.mutate();
+            }}
+          >
+            <FieldGroup>
+              <Field>
+                <FieldLabel htmlFor="bark-push-url">
+                  {t("barkSettings.pushUrl")}
+                </FieldLabel>
+                <Input
+                  id="bark-push-url"
+                  type="url"
+                  inputMode="url"
+                  autoComplete="off"
+                  required
+                  value={pushUrl}
+                  onChange={(event) => setPushUrl(event.target.value)}
+                  placeholder="https://api.day.app/YourKey/"
+                />
+                <FieldDescription>
+                  {configured
+                    ? t("barkSettings.replaceHint")
+                    : t("barkSettings.inputHint")}
+                </FieldDescription>
+              </Field>
+            </FieldGroup>
+            <div className="mt-5 flex flex-wrap items-center gap-3">
+              <Button type="submit" disabled={save.isPending || !pushUrl.trim()}>
+                <BellIcon data-icon="inline-start" />
+                {save.isPending ? t("barkSettings.saving") : t("barkSettings.save")}
+              </Button>
+              {configured ? (
+                <Button
+                  type="button"
+                  variant="outline"
+                  disabled={remove.isPending}
+                  onClick={() => remove.mutate()}
+                >
+                  {remove.isPending ? t("barkSettings.removing") : t("barkSettings.remove")}
+                </Button>
+              ) : null}
+            </div>
+          </form>
+        </CardContent>
+      </Card>
     </Page>
   );
 }
