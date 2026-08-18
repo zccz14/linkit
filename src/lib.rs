@@ -2181,6 +2181,39 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_user_cannot_revoke_another_users_bark_device() {
+        let (state, _, _, bob_base) = bark_test_state().await;
+        let bob = bark_binding_for_capability(&state.db, bob_base.rsplit('/').next().unwrap())
+            .await
+            .unwrap()
+            .unwrap();
+        upsert_bark_device(&state.db, &bob.user_id, "", "bob-device-token")
+            .await
+            .unwrap();
+        let device_id: String = sqlx::query_scalar(
+            "SELECT id FROM bark_user_devices WHERE device_token='bob-device-token'",
+        )
+        .fetch_one(&state.db)
+        .await
+        .unwrap();
+        let error = delete_bark_device(
+            State(state.clone()),
+            axum::Extension(UserIdentity {
+                id: "alice".to_owned(),
+            }),
+            Path(device_id),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(error.status, StatusCode::NOT_FOUND);
+        let remaining: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM bark_user_devices")
+            .fetch_one(&state.db)
+            .await
+            .unwrap();
+        assert_eq!(remaining, 1);
+    }
+
+    #[tokio::test]
     async fn bark_v1_and_v2_push_routes_are_not_exposed() {
         let (_, app, _, _) = bark_test_state().await;
         for path in [
