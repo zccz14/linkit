@@ -868,6 +868,7 @@ struct StoredMessage {
     sender_name: String,
     sender_deleted: bool,
     body: String,
+    urgent: bool,
     created_at: i64,
     #[serde(skip_serializing)]
     sequence: i64,
@@ -908,6 +909,8 @@ async fn list_messages(
 struct SendMessageInput {
     body: String,
     attachment_ids: Vec<String>,
+    #[serde(default)]
+    urgent: bool,
 }
 
 async fn send_message(
@@ -919,12 +922,15 @@ async fn send_message(
     require_member(&state.db, &id, &user.id).await?;
     let message = create_message(
         &state.db,
-        &id,
-        "user",
-        &user.id,
-        input.body,
-        input.attachment_ids,
-        Some(&user.id),
+        NewMessage {
+            conversation_id: &id,
+            sender_kind: "user",
+            sender_id: &user.id,
+            body: input.body,
+            attachment_ids: input.attachment_ids,
+            urgent: input.urgent,
+            attachment_owner: Some(&user.id),
+        },
     )
     .await?;
     let _ = state.events.send(ConversationEvent {
@@ -1205,6 +1211,8 @@ struct BotMessageInput {
     recipient_username: Option<String>,
     body: String,
     attachment_ids: Option<Vec<String>>,
+    #[serde(default)]
+    urgent: bool,
 }
 
 async fn bot_send_message(
@@ -1228,12 +1236,15 @@ async fn bot_send_message(
     };
     let message = create_message(
         &state.db,
-        &conversation_id,
-        "bot",
-        &bot.id,
-        input.body,
-        input.attachment_ids.unwrap_or_default(),
-        None,
+        NewMessage {
+            conversation_id: &conversation_id,
+            sender_kind: "bot",
+            sender_id: &bot.id,
+            body: input.body,
+            attachment_ids: input.attachment_ids.unwrap_or_default(),
+            urgent: input.urgent,
+            attachment_owner: None,
+        },
     )
     .await?;
     let _ = state.events.send(ConversationEvent {
@@ -1544,8 +1555,14 @@ async fn deliver_bark_notifications(
         }
     };
     let url = bark_conversation_url(&public_origin, &conversation_id);
-    let push =
-        bark::PushInput::message(title, body, conversation_id, Some(message.message.id), url);
+    let push = bark::PushInput::message(
+        title,
+        body,
+        conversation_id,
+        Some(message.message.id),
+        url,
+        message.message.urgent,
+    );
     for destination in bark_notification_recipients(destinations, sender_user_id.as_deref()) {
         match state.bark.deliver(&destination.device_token, &push).await {
             Ok(bark::Delivery::Delivered) => {}
@@ -1598,15 +1615,26 @@ fn bark_notification_body(body: &str) -> String {
     body[..end].to_owned()
 }
 
-async fn create_message(
-    db: &SqlitePool,
-    conversation_id: &str,
-    sender_kind: &str,
-    sender_id: &str,
+struct NewMessage<'a> {
+    conversation_id: &'a str,
+    sender_kind: &'a str,
+    sender_id: &'a str,
     body: String,
     attachment_ids: Vec<String>,
-    attachment_owner: Option<&str>,
-) -> Result<Message, AppError> {
+    urgent: bool,
+    attachment_owner: Option<&'a str>,
+}
+
+async fn create_message(db: &SqlitePool, input: NewMessage<'_>) -> Result<Message, AppError> {
+    let NewMessage {
+        conversation_id,
+        sender_kind,
+        sender_id,
+        body,
+        attachment_ids,
+        urgent,
+        attachment_owner,
+    } = input;
     let body = bounded(&body, "body", 10_000)?;
     if body.trim().is_empty() && attachment_ids.is_empty() {
         return Err(AppError::bad_request(
@@ -1642,7 +1670,17 @@ async fn create_message(
     let sequence: i64 = sqlx::query_scalar("SELECT last_insert_rowid()")
         .fetch_one(&mut *tx)
         .await?;
-    sqlx::query("INSERT INTO messages(id,conversation_id,sender_kind,sender_id,body,created_at,sequence) VALUES(?,?,?,?,?,?,?)").bind(&id).bind(conversation_id).bind(sender_kind).bind(sender_id).bind(body).bind(now).bind(sequence).execute(&mut *tx).await?;
+    sqlx::query("INSERT INTO messages(id,conversation_id,sender_kind,sender_id,body,urgent,created_at,sequence) VALUES(?,?,?,?,?,?,?,?)")
+        .bind(&id)
+        .bind(conversation_id)
+        .bind(sender_kind)
+        .bind(sender_id)
+        .bind(body)
+        .bind(urgent)
+        .bind(now)
+        .bind(sequence)
+        .execute(&mut *tx)
+        .await?;
     for attachment_id in attachment_ids {
         sqlx::query("UPDATE attachments SET message_id=? WHERE id=?")
             .bind(&id)
@@ -1705,7 +1743,7 @@ async fn messages_for(
 
     let (mut rows, direction) = if let Some(cursor) = before_cursor {
         let (created_at, sequence) = parse_message_cursor(&cursor)?;
-        let rows = sqlx::query_as("SELECT m.id,m.conversation_id,m.sender_kind,m.sender_id,COALESCE(p.display_name,b.name,m.sender_id) sender_name,(m.sender_kind='bot' AND b.id IS NULL) sender_deleted,m.body,m.created_at,m.sequence FROM messages m LEFT JOIN profiles p ON m.sender_kind='user' AND p.user_id=m.sender_id LEFT JOIN bots b ON m.sender_kind='bot' AND b.id=m.sender_id WHERE m.conversation_id=? AND (m.created_at<? OR (m.created_at=? AND m.sequence<?)) ORDER BY m.created_at DESC,m.sequence DESC LIMIT ?")
+        let rows = sqlx::query_as("SELECT m.id,m.conversation_id,m.sender_kind,m.sender_id,COALESCE(p.display_name,b.name,m.sender_id) sender_name,(m.sender_kind='bot' AND b.id IS NULL) sender_deleted,m.body,m.urgent,m.created_at,m.sequence FROM messages m LEFT JOIN profiles p ON m.sender_kind='user' AND p.user_id=m.sender_id LEFT JOIN bots b ON m.sender_kind='bot' AND b.id=m.sender_id WHERE m.conversation_id=? AND (m.created_at<? OR (m.created_at=? AND m.sequence<?)) ORDER BY m.created_at DESC,m.sequence DESC LIMIT ?")
                 .bind(conversation_id)
                 .bind(created_at)
                 .bind(created_at)
@@ -1716,7 +1754,7 @@ async fn messages_for(
         (rows, PageDirection::Older)
     } else if let Some(cursor) = after_cursor {
         let (created_at, sequence) = parse_message_cursor(&cursor)?;
-        let rows = sqlx::query_as("SELECT m.id,m.conversation_id,m.sender_kind,m.sender_id,COALESCE(p.display_name,b.name,m.sender_id) sender_name,(m.sender_kind='bot' AND b.id IS NULL) sender_deleted,m.body,m.created_at,m.sequence FROM messages m LEFT JOIN profiles p ON m.sender_kind='user' AND p.user_id=m.sender_id LEFT JOIN bots b ON m.sender_kind='bot' AND b.id=m.sender_id WHERE m.conversation_id=? AND (m.created_at>? OR (m.created_at=? AND m.sequence>?)) ORDER BY m.created_at,m.sequence LIMIT ?")
+        let rows = sqlx::query_as("SELECT m.id,m.conversation_id,m.sender_kind,m.sender_id,COALESCE(p.display_name,b.name,m.sender_id) sender_name,(m.sender_kind='bot' AND b.id IS NULL) sender_deleted,m.body,m.urgent,m.created_at,m.sequence FROM messages m LEFT JOIN profiles p ON m.sender_kind='user' AND p.user_id=m.sender_id LEFT JOIN bots b ON m.sender_kind='bot' AND b.id=m.sender_id WHERE m.conversation_id=? AND (m.created_at>? OR (m.created_at=? AND m.sequence>?)) ORDER BY m.created_at,m.sequence LIMIT ?")
                 .bind(conversation_id)
                 .bind(created_at)
                 .bind(created_at)
@@ -1726,7 +1764,7 @@ async fn messages_for(
                 .await?;
         (rows, PageDirection::Newer)
     } else {
-        let rows = sqlx::query_as("SELECT m.id,m.conversation_id,m.sender_kind,m.sender_id,COALESCE(p.display_name,b.name,m.sender_id) sender_name,(m.sender_kind='bot' AND b.id IS NULL) sender_deleted,m.body,m.created_at,m.sequence FROM messages m LEFT JOIN profiles p ON m.sender_kind='user' AND p.user_id=m.sender_id LEFT JOIN bots b ON m.sender_kind='bot' AND b.id=m.sender_id WHERE m.conversation_id=? ORDER BY m.created_at DESC,m.sequence DESC LIMIT ?")
+        let rows = sqlx::query_as("SELECT m.id,m.conversation_id,m.sender_kind,m.sender_id,COALESCE(p.display_name,b.name,m.sender_id) sender_name,(m.sender_kind='bot' AND b.id IS NULL) sender_deleted,m.body,m.urgent,m.created_at,m.sequence FROM messages m LEFT JOIN profiles p ON m.sender_kind='user' AND p.user_id=m.sender_id LEFT JOIN bots b ON m.sender_kind='bot' AND b.id=m.sender_id WHERE m.conversation_id=? ORDER BY m.created_at DESC,m.sequence DESC LIMIT ?")
                 .bind(conversation_id)
                 .bind(MESSAGE_PAGE_SIZE + 1)
                 .fetch_all(db)
@@ -1757,7 +1795,7 @@ async fn messages_for(
 }
 
 async fn message(db: &SqlitePool, id: &str) -> Result<Message, AppError> {
-    let row: StoredMessage = sqlx::query_as("SELECT m.id,m.conversation_id,m.sender_kind,m.sender_id,COALESCE(p.display_name,b.name,m.sender_id) sender_name,(m.sender_kind='bot' AND b.id IS NULL) sender_deleted,m.body,m.created_at,m.sequence FROM messages m LEFT JOIN profiles p ON m.sender_kind='user' AND p.user_id=m.sender_id LEFT JOIN bots b ON m.sender_kind='bot' AND b.id=m.sender_id WHERE m.id=?").bind(id).fetch_optional(db).await?.ok_or_else(|| AppError::not_found("message not found"))?;
+    let row: StoredMessage = sqlx::query_as("SELECT m.id,m.conversation_id,m.sender_kind,m.sender_id,COALESCE(p.display_name,b.name,m.sender_id) sender_name,(m.sender_kind='bot' AND b.id IS NULL) sender_deleted,m.body,m.urgent,m.created_at,m.sequence FROM messages m LEFT JOIN profiles p ON m.sender_kind='user' AND p.user_id=m.sender_id LEFT JOIN bots b ON m.sender_kind='bot' AND b.id=m.sender_id WHERE m.id=?").bind(id).fetch_optional(db).await?.ok_or_else(|| AppError::not_found("message not found"))?;
     message_from_row(db, row).await
 }
 
@@ -2072,6 +2110,73 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(exists, 0);
+    }
+
+    #[tokio::test]
+    async fn migration_adds_urgent_messages_with_a_false_default() {
+        let db = db::connect_memory().await.unwrap();
+        let default_value: String = sqlx::query_scalar(
+            "SELECT dflt_value FROM pragma_table_info('messages') WHERE name = 'urgent'",
+        )
+        .fetch_one(&db)
+        .await
+        .unwrap();
+        assert_eq!(default_value, "0");
+    }
+
+    #[tokio::test]
+    async fn urgent_message_state_is_persisted_for_user_and_bot_messages() {
+        let db = db::connect_memory().await.unwrap();
+        sqlx::query("INSERT INTO users(id,created_at) VALUES('alice',0)")
+            .execute(&db)
+            .await
+            .unwrap();
+        sqlx::query("INSERT INTO conversations(id,kind,title,created_by,created_at) VALUES('conversation','direct','', 'alice',0)")
+            .execute(&db)
+            .await
+            .unwrap();
+        let urgent = create_message(
+            &db,
+            NewMessage {
+                conversation_id: "conversation",
+                sender_kind: "user",
+                sender_id: "alice",
+                body: "urgent".to_owned(),
+                attachment_ids: Vec::new(),
+                urgent: true,
+                attachment_owner: Some("alice"),
+            },
+        )
+        .await
+        .unwrap();
+        let ordinary = create_message(
+            &db,
+            NewMessage {
+                conversation_id: "conversation",
+                sender_kind: "bot",
+                sender_id: "bot",
+                body: "ordinary".to_owned(),
+                attachment_ids: Vec::new(),
+                urgent: false,
+                attachment_owner: None,
+            },
+        )
+        .await
+        .unwrap();
+        assert!(urgent.message.urgent);
+        assert!(!ordinary.message.urgent);
+        let page = messages_for(
+            &db,
+            "conversation",
+            MessagePageQuery {
+                before_cursor: None,
+                after_cursor: None,
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(page.messages.len(), 2);
+        assert!(page.messages.iter().any(|message| message.message.urgent));
     }
 
     #[test]

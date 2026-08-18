@@ -59,6 +59,7 @@ pub struct PushInput {
     pub group: String,
     pub id: Option<String>,
     pub url: String,
+    pub urgent: bool,
 }
 
 impl PushInput {
@@ -68,6 +69,7 @@ impl PushInput {
         group: String,
         id: Option<String>,
         url: String,
+        urgent: bool,
     ) -> Self {
         Self {
             title,
@@ -75,6 +77,7 @@ impl PushInput {
             group,
             id,
             url,
+            urgent,
         }
     }
 
@@ -88,6 +91,9 @@ impl PushInput {
         aps.insert("category".to_owned(), json!("myNotificationCategory"));
         aps.insert("sound".to_owned(), json!("1107.caf"));
         aps.insert("thread-id".to_owned(), json!(self.group));
+        if self.urgent {
+            aps.insert("interruption-level".to_owned(), json!("critical"));
+        }
         let payload = serde_json::to_vec(&json!({ "aps": aps, "url": self.url }))?;
         if payload.len() > APNS_PAYLOAD_MAX_BYTES {
             bail!("notification exceeds the APNs 4 KiB payload limit");
@@ -343,6 +349,7 @@ mod tests {
             "conversation".to_owned(),
             Some("message".to_owned()),
             "https://linkit.test/#/conversations/conversation".to_owned(),
+            false,
         );
         assert!(push.apns_payload().unwrap().len() <= APNS_PAYLOAD_MAX_BYTES);
     }
@@ -355,6 +362,7 @@ mod tests {
             "conversation".to_owned(),
             Some("message".to_owned()),
             "https://linkit.test/#/conversations/conversation".to_owned(),
+            false,
         );
         let payload: serde_json::Value =
             serde_json::from_slice(&push.apns_payload().unwrap()).unwrap();
@@ -364,6 +372,32 @@ mod tests {
         );
         assert_eq!(payload["aps"]["thread-id"], "conversation");
         assert_eq!(push.id.as_deref(), Some("message"));
+    }
+
+    #[test]
+    fn urgent_notification_payload_uses_a_critical_interruption_level() {
+        let urgent = PushInput::message(
+            "Linkit".to_owned(),
+            "Urgent".to_owned(),
+            "conversation".to_owned(),
+            Some("message".to_owned()),
+            "https://linkit.test/#/conversations/conversation".to_owned(),
+            true,
+        );
+        let ordinary = PushInput::message(
+            "Linkit".to_owned(),
+            "Ordinary".to_owned(),
+            "conversation".to_owned(),
+            Some("message".to_owned()),
+            "https://linkit.test/#/conversations/conversation".to_owned(),
+            false,
+        );
+        let urgent_payload: serde_json::Value =
+            serde_json::from_slice(&urgent.apns_payload().unwrap()).unwrap();
+        let ordinary_payload: serde_json::Value =
+            serde_json::from_slice(&ordinary.apns_payload().unwrap()).unwrap();
+        assert_eq!(urgent_payload["aps"]["interruption-level"], "critical");
+        assert!(ordinary_payload["aps"].get("interruption-level").is_none());
     }
 
     #[test]

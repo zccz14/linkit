@@ -848,6 +848,7 @@ function ConversationPage({ me, sdk }: { me: Me; sdk: AuthMiniApi }) {
   const queryClient = useQueryClient();
   const [body, setBody] = useState("");
   const [attachments, setAttachments] = useState<Attachment[]>([]);
+  const [urgent, setUrgent] = useState(false);
   const [manageOpen, setManageOpen] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
   const messageListRef = useRef<HTMLElement>(null);
@@ -876,11 +877,13 @@ function ConversationPage({ me, sdk }: { me: Me; sdk: AuthMiniApi }) {
         body: JSON.stringify({
           body,
           attachment_ids: attachments.map((attachment) => attachment.id),
+          urgent,
         }),
       }),
     onSuccess: (message) => {
       setBody("");
       setAttachments([]);
+      setUrgent(false);
       queryClient.setQueryData<InfiniteData<MessagePage>>(
         ["messages", id],
         (data) => appendMessage(data, message),
@@ -1004,6 +1007,17 @@ function ConversationPage({ me, sdk }: { me: Me; sdk: AuthMiniApi }) {
             ))}
           </div>
         ) : null}
+        <div className="mb-2 flex items-center justify-between gap-2">
+          <label className="flex items-center gap-2 text-sm">
+            <input
+              checked={urgent}
+              type="checkbox"
+              onChange={(event) => setUrgent(event.target.checked)}
+            />
+            {t("conversation.urgent")}
+          </label>
+          {urgent ? <span className="text-xs font-medium text-destructive">{t("conversation.urgentNotice")}</span> : null}
+        </div>
         <div className="flex items-end gap-2">
           <input
             ref={fileRef}
@@ -1323,6 +1337,9 @@ function MessageRow({
         </span>
         {message.sender_kind === "bot" ? (
           <Badge variant="secondary">{t("conversation.bot")}</Badge>
+        ) : null}
+        {message.urgent ? (
+          <Badge variant="destructive">{t("conversation.urgent")}</Badge>
         ) : null}
         <time>
           {new Date(message.created_at * 1000).toLocaleString(locale)}
