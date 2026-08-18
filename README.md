@@ -76,7 +76,9 @@ old URL; revoking it removes both the URL and all bound devices.
 
 When a message is created, Linkit selects only bound devices of conversation
 members, skips the human sender, and delivers directly to APNs with its Bark
-Provider Key. A Bot message can notify every bound conversation member.
+Provider Key. A Bot message can notify every bound conversation member. Clicking
+a delivered Bark notification opens that message's conversation at Linkit's
+configured public origin.
 
 Linkit keeps only the minimal Bark iOS lifecycle surface:
 
