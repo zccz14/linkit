@@ -48,6 +48,7 @@ export type Message = {
   sender_name: string;
   sender_deleted: boolean;
   body: string;
+  urgent: boolean;
   created_at: number;
   attachments: Attachment[];
   cursor: string;

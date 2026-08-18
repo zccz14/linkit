@@ -1,0 +1,1 @@
+ALTER TABLE messages ADD COLUMN urgent INTEGER NOT NULL DEFAULT 0 CHECK (urgent IN (0,1));
