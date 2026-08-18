@@ -442,7 +442,12 @@ function Shell({ me, sdk }: { me: Me; sdk: AuthMiniApi }) {
           className="flex items-center gap-2 px-2 text-lg font-semibold"
           to="/conversations"
         >
-          <MessageCircleIcon />
+          <img
+            alt=""
+            aria-hidden="true"
+            className="size-7 shrink-0"
+            src="/linkit-logo.png"
+          />
           Linkit
         </Link>
         <nav className="flex flex-col gap-1">
