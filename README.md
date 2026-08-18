@@ -2,9 +2,8 @@
 
 Linkit is an open-source, Auth Mini-powered profile and instant-messaging app
 distributed as one Rust binary. It includes user profiles, a searchable
-directory, direct messages, group conversations, media attachments, PWA
-installation, browser-notification subscription storage, and native Bot API
-tokens.
+directory, direct messages, group conversations, media attachments, direct Bark/APNs
+notifications, and native Bot API tokens.
 
 ## Features
 
@@ -14,9 +13,6 @@ tokens.
   state, cursor-paged history, and immediate SSE refresh.
 - **Open-page links** — external apps may open `/?open=profile` to edit the
   profile or `/?open=message&username=alice` to begin a direct message.
-- **PWA and notifications** — installable manifest, service worker, and an API
-  for signed-in browsers to register push subscriptions. A push provider can
-  later deliver to those stored subscriptions without changing the client API.
 - **Direct Bark notifications** — an iPhone running Bark binds directly to its Linkit user and receives APNs notifications without Linkit exposing a public Bark push API.
 - **Bilingual UI** — English and Chinese interfaces, with an in-app language
   picker and browser-language default on first visit.

@@ -121,10 +121,6 @@ pub fn router(state: AppState) -> Router {
             "/api/bots/{id}/groups/{conversation_id}",
             post(add_bot_to_group).delete(remove_bot_from_group),
         )
-        .route(
-            "/api/notification-subscriptions",
-            post(save_notification_subscription),
-        )
         .route_layer(from_fn_with_state(state.clone(), auth::authenticate));
 
     Router::new()
@@ -1602,22 +1598,6 @@ fn bark_notification_body(body: &str) -> String {
     body[..end].to_owned()
 }
 
-#[derive(Deserialize)]
-struct NotificationInput {
-    endpoint: String,
-    subscription: serde_json::Value,
-}
-
-async fn save_notification_subscription(
-    State(state): State<AppState>,
-    axum::Extension(user): axum::Extension<UserIdentity>,
-    axum::Json(input): axum::Json<NotificationInput>,
-) -> Result<StatusCode, AppError> {
-    let endpoint = nonempty(&input.endpoint, "endpoint", 4096)?;
-    sqlx::query("INSERT INTO notification_subscriptions(id,user_id,endpoint,subscription_json,created_at) VALUES(?,?,?,?,?) ON CONFLICT(endpoint) DO UPDATE SET user_id=excluded.user_id,subscription_json=excluded.subscription_json,created_at=excluded.created_at").bind(Uuid::new_v4().to_string()).bind(user.id).bind(endpoint).bind(serde_json::to_string(&input.subscription).map_err(|_| AppError::bad_request("subscription is invalid"))?).bind(chrono::Utc::now().timestamp()).execute(&state.db).await?;
-    Ok(StatusCode::NO_CONTENT)
-}
-
 async fn create_message(
     db: &SqlitePool,
     conversation_id: &str,
@@ -2032,7 +2012,6 @@ async fn static_asset(uri: axum::http::Uri) -> Response {
                     Some("js") => "text/javascript",
                     Some("css") => "text/css",
                     Some("svg") => "image/svg+xml",
-                    Some("webmanifest") => "application/manifest+json",
                     Some("png") => "image/png",
                     Some("ico") => "image/x-icon",
                     _ => "application/octet-stream",
@@ -2075,6 +2054,24 @@ mod tests {
     #[test]
     fn bot_tokens_have_an_unambiguous_public_prefix() {
         assert!(new_bot_token().starts_with("sk-"));
+    }
+
+    #[test]
+    fn embedded_assets_do_not_include_pwa_manifest_or_service_worker() {
+        assert!(Assets::get("manifest.webmanifest").is_none());
+        assert!(Assets::get("sw.js").is_none());
+    }
+
+    #[tokio::test]
+    async fn migration_removes_browser_notification_subscription_storage() {
+        let db = db::connect_memory().await.unwrap();
+        let exists: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'notification_subscriptions'",
+        )
+        .fetch_one(&db)
+        .await
+        .unwrap();
+        assert_eq!(exists, 0);
     }
 
     #[test]
