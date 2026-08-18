@@ -55,8 +55,7 @@ systemctl daemon-reload
 ln -sfn "$release_dir" /opt/linkit/current
 systemctl restart linkit.service
 for _ in $(seq 1 30); do
-  if curl --fail --silent http://127.0.0.1:8080/api/health >/dev/null \
-    && curl --fail --silent http://127.0.0.1:8080/api/bark/ping >/dev/null; then
+  if curl --fail --silent http://127.0.0.1:8080/api/health >/dev/null; then
     exit 0
   fi
   sleep 2

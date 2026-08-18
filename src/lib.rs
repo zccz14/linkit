@@ -12,17 +12,17 @@ use std::{
 use auth_mini_axum::{AuthMiniLayer, JwksCachePolicy};
 use axum::{
     Router,
-    body::{Body, to_bytes},
-    extract::{Multipart, Path, Query, Request, State},
+    body::Body,
+    extract::{Multipart, Path, Query, State},
     http::{HeaderMap, StatusCode, header},
-    middleware::{Next, from_fn_with_state},
+    middleware::from_fn_with_state,
     response::{IntoResponse, Response},
-    routing::{any, get, patch, post, put},
+    routing::{get, patch, post, put},
 };
 use rand::{Rng, distr::Alphanumeric};
 use rust_embed::RustEmbed;
 use serde::{Deserialize, Serialize};
-use serde_json::{Map, Value, json};
+use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use sqlx::{FromRow, SqlitePool};
 use sysinfo::{Disks, Networks, System};
@@ -35,7 +35,6 @@ use crate::{
 };
 
 const MAX_UPLOAD_BYTES: usize = 52_428_800;
-const BARK_REQUEST_MAX_BYTES: usize = 16 * 1024;
 const BARK_NOTIFICATION_BODY_MAX_BYTES: usize = 3_000;
 const MESSAGE_PAGE_SIZE: i64 = 50;
 const LIST_CONVERSATIONS_QUERY: &str = "SELECT c.id,c.kind,c.title,c.created_by,c.created_at,CASE WHEN c.kind='direct' THEN COALESCE((SELECT p.display_name FROM conversation_members cm_peer JOIN profiles p ON p.user_id=cm_peer.user_id WHERE cm_peer.conversation_id=c.id AND cm_peer.user_id<>? LIMIT 1),(SELECT b.name FROM conversation_bots cb JOIN bots b ON b.id=cb.bot_id WHERE cb.conversation_id=c.id LIMIT 1)) END counterpart_name,CASE WHEN c.kind='direct' THEN (SELECT p.avatar_attachment_id FROM conversation_members cm_peer JOIN profiles p ON p.user_id=cm_peer.user_id WHERE cm_peer.conversation_id=c.id AND cm_peer.user_id<>? LIMIT 1) END counterpart_avatar_attachment_id,(SELECT body FROM messages WHERE conversation_id=c.id ORDER BY created_at DESC LIMIT 1) latest_body,(SELECT created_at FROM messages WHERE conversation_id=c.id ORDER BY created_at DESC LIMIT 1) latest_at,(SELECT COUNT(*) FROM messages WHERE conversation_id=c.id AND created_at>cm.last_read_at AND sender_id<>?) unread_count FROM conversations c JOIN conversation_members cm ON cm.conversation_id=c.id WHERE cm.user_id=? ORDER BY COALESCE(latest_at,c.created_at) DESC";
@@ -79,7 +78,6 @@ impl AppState {
 }
 
 pub fn router(state: AppState) -> Router {
-    let bark_routes = bark_router(state.clone());
     let signed_in = Router::new()
         .route("/api/me", get(me))
         .route("/api/admin/system", get(system_overview))
@@ -88,8 +86,12 @@ pub fn router(state: AppState) -> Router {
         .route(
             "/api/settings/bark",
             get(bark_notification_settings)
-                .put(save_bark_notification_settings)
-                .delete(delete_bark_notification_settings),
+                .post(reset_bark_binding)
+                .delete(revoke_bark_binding),
+        )
+        .route(
+            "/api/settings/bark/devices/{id}",
+            axum::routing::delete(delete_bark_device),
         )
         .route("/api/users", get(list_users))
         .route("/api/users/{username}", get(read_user))
@@ -130,7 +132,11 @@ pub fn router(state: AppState) -> Router {
         .route("/api/config", get(public_config))
         .route("/api/setup", get(setup_status).post(setup))
         .route("/bot/v1/messages", post(bot_send_message))
-        .merge(bark_routes)
+        .route("/api/bark/b/{capability}/ping", get(bark_binding_ping))
+        .route(
+            "/api/bark/b/{capability}/register",
+            get(bark_register).post(bark_register_post),
+        )
         .merge(signed_in)
         .fallback(static_asset)
         .layer(axum::extract::DefaultBodyLimit::disable())
@@ -145,53 +151,6 @@ pub fn router(state: AppState) -> Router {
             }),
         )
         .with_state(state)
-}
-
-fn bark_router(state: AppState) -> Router<AppState> {
-    Router::new()
-        .route("/api/bark", get(bark_root))
-        .route("/api/bark/", get(bark_root))
-        .route("/api/bark/ping", get(bark_ping))
-        .route("/api/bark/healthz", get(bark_healthz))
-        .route("/api/bark/info", get(bark_info))
-        .route("/api/bark/mcp", any(bark_mcp))
-        .route("/api/bark/mcp/{device_key}", any(bark_mcp_with_key))
-        .route(
-            "/api/bark/register",
-            get(bark_register)
-                .post(bark_register_post)
-                .layer(RequestBodyLimitLayer::new(BARK_REQUEST_MAX_BYTES)),
-        )
-        .route("/api/bark/register/{key}", get(bark_register_check))
-        .route(
-            "/api/bark/push",
-            post(bark_push).layer(RequestBodyLimitLayer::new(BARK_REQUEST_MAX_BYTES)),
-        )
-        .route(
-            "/api/bark/{device_key}",
-            get(bark_push_url)
-                .post(bark_push_url)
-                .layer(RequestBodyLimitLayer::new(BARK_REQUEST_MAX_BYTES)),
-        )
-        .route(
-            "/api/bark/{device_key}/{body}",
-            get(bark_push_url_with_body)
-                .post(bark_push_url_with_body)
-                .layer(RequestBodyLimitLayer::new(BARK_REQUEST_MAX_BYTES)),
-        )
-        .route(
-            "/api/bark/{device_key}/{title}/{body}",
-            get(bark_push_url_with_title_and_body)
-                .post(bark_push_url_with_title_and_body)
-                .layer(RequestBodyLimitLayer::new(BARK_REQUEST_MAX_BYTES)),
-        )
-        .route(
-            "/api/bark/{device_key}/{title}/{subtitle}/{body}",
-            get(bark_push_url_with_title_subtitle_and_body)
-                .post(bark_push_url_with_title_subtitle_and_body)
-                .layer(RequestBodyLimitLayer::new(BARK_REQUEST_MAX_BYTES)),
-        )
-        .route_layer(from_fn_with_state(state, bark_basic_authenticate))
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -319,11 +278,7 @@ struct BarkResponse {
     timestamp: i64,
 }
 
-fn bark_response(
-    status: StatusCode,
-    message: impl Into<String>,
-    data: Option<serde_json::Value>,
-) -> Response {
+fn bark_response(status: StatusCode, message: impl Into<String>, data: Option<Value>) -> Response {
     (
         status,
         axum::Json(BarkResponse {
@@ -336,99 +291,83 @@ fn bark_response(
         .into_response()
 }
 
-async fn bark_basic_authenticate(
+async fn bark_binding_ping(
     State(state): State<AppState>,
-    request: Request,
-    next: Next,
+    Path(capability): Path<String>,
 ) -> Response {
-    let path = request.uri().path();
-    let authorization = request
-        .headers()
-        .get(header::AUTHORIZATION)
-        .and_then(|value| value.to_str().ok());
-    if bark_auth_free_path(path) || state.bark.allows_request(authorization) {
-        return next.run(request).await;
+    if !state.bark.configured()
+        || bark_binding_for_capability(&state.db, &capability)
+            .await
+            .ok()
+            .flatten()
+            .is_none()
+    {
+        return bark_response(StatusCode::NOT_FOUND, "Bark server is unavailable", None);
     }
-    (StatusCode::IM_A_TEAPOT, "I'm a teapot").into_response()
-}
-
-fn bark_auth_free_path(path: &str) -> bool {
-    ["/api/bark/ping", "/api/bark/register", "/api/bark/healthz"]
-        .into_iter()
-        .any(|free_path| path.starts_with(free_path))
-}
-
-fn bark_unavailable(state: &AppState) -> Option<Response> {
-    (!state.bark.configured()).then(|| {
-        bark_response(
-            StatusCode::SERVICE_UNAVAILABLE,
-            "Bark APNs is not configured",
-            None,
-        )
-    })
-}
-
-async fn bark_root() -> &'static str {
-    "ok"
-}
-
-async fn bark_ping() -> Response {
     bark_response(StatusCode::OK, "pong", None)
-}
-
-async fn bark_healthz() -> &'static str {
-    "ok"
-}
-
-async fn bark_info(State(state): State<AppState>) -> Response {
-    let devices = bark::device_count(&state.db).await.unwrap_or_default();
-    axum::Json(json!({
-        "version": env!("CARGO_PKG_VERSION"),
-        "build": "",
-        "arch": format!("{}/{}", std::env::consts::OS, std::env::consts::ARCH),
-        "commit": "",
-        "devices": devices,
-    }))
-    .into_response()
 }
 
 async fn bark_register(
     State(state): State<AppState>,
+    Path(capability): Path<String>,
     Query(input): Query<bark::RegisterInput>,
 ) -> Response {
-    register_bark_device(state, input).await
+    register_bark_device(state, capability, input).await
 }
 
-async fn bark_register_post(State(state): State<AppState>, request: Request) -> Response {
-    let (params, _) = match bark_request_params(request).await {
-        Ok(params) => params,
-        Err(message) => return bark_response(StatusCode::BAD_REQUEST, message, None),
+async fn bark_register_post(
+    State(state): State<AppState>,
+    Path(capability): Path<String>,
+    axum::extract::Form(input): axum::extract::Form<bark::RegisterInput>,
+) -> Response {
+    register_bark_device(state, capability, input).await
+}
+
+async fn register_bark_device(
+    state: AppState,
+    capability: String,
+    input: bark::RegisterInput,
+) -> Response {
+    if !state.bark.configured() {
+        return bark_response(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "Bark APNs is not configured",
+            None,
+        );
+    }
+    let binding = match bark_binding_for_capability(&state.db, &capability).await {
+        Ok(Some(binding)) => binding,
+        Ok(None) | Err(_) => {
+            return bark_response(StatusCode::NOT_FOUND, "Bark server is unavailable", None);
+        }
     };
-    match serde_json::from_value::<bark::RegisterInput>(Value::Object(params)) {
-        Ok(input) => register_bark_device(state, input).await,
-        Err(_) => bark_response(StatusCode::BAD_REQUEST, "device token is empty", None),
-    }
-}
-
-async fn register_bark_device(state: AppState, input: bark::RegisterInput) -> Response {
-    if let Some(response) = bark_unavailable(&state) {
-        return response;
-    }
-    if input.device_token.is_empty() {
-        return bark_response(StatusCode::BAD_REQUEST, "device token is empty", None);
+    if input.device_token == "deleted" {
+        if input.key.is_empty() {
+            return bark_response(StatusCode::BAD_REQUEST, "device key is empty", None);
+        }
+        let result =
+            sqlx::query("DELETE FROM bark_user_devices WHERE user_id=? AND device_key_hash=?")
+                .bind(&binding.user_id)
+                .bind(bark::hash_secret(&input.key))
+                .execute(&state.db)
+                .await;
+        return match result {
+            Ok(_) => bark_response(StatusCode::OK, "success", Some(json!({"key": input.key}))),
+            Err(_) => bark_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "device registration failed",
+                None,
+            ),
+        };
     }
     if bark::validate_device_token(&input.device_token).is_err() {
         return bark_response(StatusCode::BAD_REQUEST, "device token is invalid", None);
     }
-    match bark::register_device(&state.db, &input.key, &input.device_token).await {
+    match upsert_bark_device(&state.db, &binding.user_id, &input.key, &input.device_token).await {
         Ok(key) => bark_response(
             StatusCode::OK,
             "success",
-            Some(json!({
-                "key": key.clone(),
-                "device_key": key,
-                "device_token": input.device_token,
-            })),
+            Some(json!({"key": key, "device_key": key})),
         ),
         Err(_) => bark_response(
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -436,523 +375,6 @@ async fn register_bark_device(state: AppState, input: bark::RegisterInput) -> Re
             None,
         ),
     }
-}
-
-async fn bark_register_check(State(state): State<AppState>, Path(key): Path<String>) -> Response {
-    if let Some(response) = bark_unavailable(&state) {
-        return response;
-    }
-    if key.is_empty() {
-        return bark_response(StatusCode::BAD_REQUEST, "device key is empty", None);
-    }
-    match bark::device_token_by_key(&state.db, &key).await {
-        Ok(_) => bark_response(StatusCode::OK, "success", None),
-        Err(error) => bark_response(StatusCode::BAD_REQUEST, error.to_string(), None),
-    }
-}
-
-#[derive(Default)]
-struct BarkPath {
-    device_key: Option<String>,
-    title: Option<String>,
-    subtitle: Option<String>,
-    body: Option<String>,
-}
-
-impl BarkPath {
-    fn insert_into(self, params: &mut Map<String, Value>) {
-        if let Some(device_key) = self.device_key {
-            params.insert("device_key".to_owned(), Value::String(device_key));
-        }
-        if let Some(title) = self.title {
-            params.insert("title".to_owned(), Value::String(title));
-        }
-        if let Some(subtitle) = self.subtitle {
-            params.insert("subtitle".to_owned(), Value::String(subtitle));
-        }
-        if let Some(body) = self.body {
-            params.insert("body".to_owned(), Value::String(body));
-        }
-    }
-}
-
-struct BarkPushRequest {
-    input: bark::PushInput,
-    device_keys: Vec<String>,
-}
-
-async fn bark_push(State(state): State<AppState>, request: Request) -> Response {
-    bark_push_request(state, BarkPath::default(), request).await
-}
-
-async fn bark_push_url(
-    State(state): State<AppState>,
-    Path(device_key): Path<String>,
-    request: Request,
-) -> Response {
-    bark_push_request(
-        state,
-        BarkPath {
-            device_key: Some(device_key),
-            ..BarkPath::default()
-        },
-        request,
-    )
-    .await
-}
-
-async fn bark_push_url_with_body(
-    State(state): State<AppState>,
-    Path((device_key, body)): Path<(String, String)>,
-    request: Request,
-) -> Response {
-    bark_push_request(
-        state,
-        BarkPath {
-            device_key: Some(device_key),
-            body: Some(body),
-            ..BarkPath::default()
-        },
-        request,
-    )
-    .await
-}
-
-async fn bark_push_url_with_title_and_body(
-    State(state): State<AppState>,
-    Path((device_key, title, body)): Path<(String, String, String)>,
-    request: Request,
-) -> Response {
-    bark_push_request(
-        state,
-        BarkPath {
-            device_key: Some(device_key),
-            title: Some(title),
-            body: Some(body),
-            ..BarkPath::default()
-        },
-        request,
-    )
-    .await
-}
-
-async fn bark_push_url_with_title_subtitle_and_body(
-    State(state): State<AppState>,
-    Path((device_key, title, subtitle, body)): Path<(String, String, String, String)>,
-    request: Request,
-) -> Response {
-    bark_push_request(
-        state,
-        BarkPath {
-            device_key: Some(device_key),
-            title: Some(title),
-            subtitle: Some(subtitle),
-            body: Some(body),
-        },
-        request,
-    )
-    .await
-}
-
-async fn bark_push_request(state: AppState, path: BarkPath, request: Request) -> Response {
-    let request = match bark_push_input(request, path).await {
-        Ok(request) => request,
-        Err(message) => return bark_response(StatusCode::BAD_REQUEST, message, None),
-    };
-    let BarkPushRequest { input, device_keys } = request;
-    if device_keys.is_empty() {
-        return deliver_bark_push(state, input).await;
-    }
-    if !state.bark.allows_batch_push_count(device_keys.len()) {
-        return bark_response(
-            StatusCode::BAD_REQUEST,
-            "batch push count exceeds the maximum limit",
-            None,
-        );
-    }
-    let results = futures_util::future::join_all(device_keys.into_iter().map(|device_key| {
-        let state = state.clone();
-        let mut input = input.clone();
-        input.device_key = device_key.clone();
-        async move {
-            match try_deliver_bark_push(&state, &input).await {
-                Ok(()) => BarkBatchResult {
-                    code: StatusCode::OK.as_u16(),
-                    device_key,
-                    message: None,
-                },
-                Err(error) => BarkBatchResult {
-                    code: error.status.as_u16(),
-                    device_key,
-                    message: Some(error.message.to_owned()),
-                },
-            }
-        }
-    }))
-    .await;
-    bark_response(StatusCode::OK, "success", Some(json!(results)))
-}
-
-// COMPATIBILITY: Bark v2.3.5 clients and integrations use V1 form requests and
-// V2 JSON requests at the same push endpoints. Keep this boundary while Linkit
-// advertises the Bark gateway; remove it only with a documented Bark migration.
-async fn bark_push_input(request: Request, path: BarkPath) -> Result<BarkPushRequest, String> {
-    let query = request.uri().query().unwrap_or_default().to_owned();
-    let (params, is_json) = bark_request_params(request).await?;
-    let mut params = bark_merge_push_params(params, is_json, &query);
-    path.insert_into(&mut params);
-    let device_keys = if is_json {
-        bark_device_keys(&mut params)?
-    } else {
-        Vec::new()
-    };
-    Ok(BarkPushRequest {
-        input: bark::PushInput::from_params(params),
-        device_keys,
-    })
-}
-
-fn bark_merge_push_params(
-    mut body: Map<String, Value>,
-    is_json: bool,
-    query: &str,
-) -> Map<String, Value> {
-    let query = bark_url_params(query);
-    if is_json {
-        body.extend(query);
-        body
-    } else {
-        query.into_iter().chain(body).collect()
-    }
-}
-
-async fn bark_request_params(request: Request) -> Result<(Map<String, Value>, bool), String> {
-    let content_type = request
-        .headers()
-        .get(header::CONTENT_TYPE)
-        .and_then(|value| value.to_str().ok())
-        .unwrap_or_default()
-        .to_ascii_lowercase();
-    let is_json = bark_json_content_type(&content_type);
-    if content_type.starts_with("multipart/form-data") {
-        let boundary = multer::parse_boundary(&content_type)
-            .map_err(|_| "push payload is invalid multipart data".to_owned())?;
-        return bark_multipart_params(request, boundary)
-            .await
-            .map(|params| (params, false));
-    }
-    let bytes = to_bytes(request.into_body(), BARK_REQUEST_MAX_BYTES)
-        .await
-        .map_err(|_| "request body is invalid".to_owned())?;
-    if is_json {
-        if bytes.is_empty() {
-            return Ok((Map::new(), true));
-        }
-        let value: Value = serde_json::from_slice(&bytes)
-            .map_err(|_| "push payload is invalid JSON".to_owned())?;
-        let Value::Object(params) = value else {
-            return Err("push payload must be a JSON object".to_owned());
-        };
-        return Ok((bark_lowercase_params(params), true));
-    }
-    let encoded = std::str::from_utf8(&bytes).map_err(|_| "push payload is invalid".to_owned())?;
-    Ok((bark_url_params(encoded), false))
-}
-
-fn bark_json_content_type(content_type: &str) -> bool {
-    content_type.split(';').next().is_some_and(|mime| {
-        mime.trim().eq_ignore_ascii_case("application/json") || mime.trim().ends_with("+json")
-    })
-}
-
-async fn bark_multipart_params(
-    request: Request,
-    boundary: String,
-) -> Result<Map<String, Value>, String> {
-    let mut multipart = multer::Multipart::new(request.into_body().into_data_stream(), boundary);
-    let mut params = Map::new();
-    while let Some(field) = multipart
-        .next_field()
-        .await
-        .map_err(|_| "push payload is invalid multipart data".to_owned())?
-    {
-        let Some(name) = field.name().map(str::to_owned) else {
-            continue;
-        };
-        let value = field
-            .text()
-            .await
-            .map_err(|_| "push payload is invalid multipart data".to_owned())?;
-        params.insert(name.to_ascii_lowercase(), Value::String(value));
-    }
-    Ok(params)
-}
-
-fn bark_url_params(encoded: &str) -> Map<String, Value> {
-    url::form_urlencoded::parse(encoded.as_bytes())
-        .map(|(key, value)| (key.to_ascii_lowercase(), Value::String(value.into_owned())))
-        .collect()
-}
-
-fn bark_lowercase_params(params: Map<String, Value>) -> Map<String, Value> {
-    params
-        .into_iter()
-        .map(|(key, value)| (key.to_ascii_lowercase(), value))
-        .collect()
-}
-
-fn bark_device_keys(params: &mut Map<String, Value>) -> Result<Vec<String>, String> {
-    match params.remove("device_keys") {
-        None => Ok(Vec::new()),
-        Some(Value::String(keys)) => Ok(keys.split(',').map(str::to_owned).collect()),
-        Some(Value::Array(keys)) => Ok(keys.into_iter().map(bark_string).collect()),
-        Some(_) => Err("invalid type for device_keys".to_owned()),
-    }
-}
-
-fn bark_string(value: Value) -> String {
-    match value {
-        Value::String(value) => value,
-        Value::Number(value) => value.to_string(),
-        Value::Bool(value) => value.to_string(),
-        Value::Null => "<nil>".to_owned(),
-        Value::Array(_) | Value::Object(_) => value.to_string(),
-    }
-}
-
-#[derive(Serialize)]
-struct BarkBatchResult {
-    code: u16,
-    device_key: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    message: Option<String>,
-}
-
-struct BarkPushError {
-    status: StatusCode,
-    message: String,
-}
-
-async fn deliver_bark_push(state: AppState, input: bark::PushInput) -> Response {
-    match try_deliver_bark_push(&state, &input).await {
-        Ok(()) => bark_response(StatusCode::OK, "success", None),
-        Err(error) => bark_response(error.status, error.message, None),
-    }
-}
-
-async fn try_deliver_bark_push(
-    state: &AppState,
-    input: &bark::PushInput,
-) -> Result<(), BarkPushError> {
-    if !state.bark.configured() {
-        return Err(BarkPushError {
-            status: StatusCode::SERVICE_UNAVAILABLE,
-            message: "Bark APNs is not configured".to_owned(),
-        });
-    }
-    input.validate().map_err(|error| BarkPushError {
-        status: StatusCode::BAD_REQUEST,
-        message: error.to_string(),
-    })?;
-    let device_token = bark::device_token_by_key(&state.db, &input.device_key)
-        .await
-        .map_err(|error| BarkPushError {
-            status: StatusCode::BAD_REQUEST,
-            message: error.to_string(),
-        })?;
-    match state.bark.deliver(&device_token, input).await {
-        Ok(bark::Delivery::Delivered) => Ok(()),
-        Ok(bark::Delivery::InvalidDeviceToken) => {
-            let _ = bark::invalidate_device_key(&state.db, &input.device_key).await;
-            Err(BarkPushError {
-                status: StatusCode::INTERNAL_SERVER_ERROR,
-                message: "push failed: device token invalid".to_owned(),
-            })
-        }
-        Err(error) => Err(BarkPushError {
-            status: StatusCode::INTERNAL_SERVER_ERROR,
-            message: format!("push failed: {error}"),
-        }),
-    }
-}
-
-#[derive(Deserialize)]
-struct BarkMcpRequest {
-    method: String,
-    #[serde(default)]
-    id: Option<Value>,
-    #[serde(default)]
-    params: Value,
-}
-
-async fn bark_mcp(State(state): State<AppState>, request: Request) -> Response {
-    bark_mcp_request(state, None, request).await
-}
-
-async fn bark_mcp_with_key(
-    State(state): State<AppState>,
-    Path(device_key): Path<String>,
-    request: Request,
-) -> Response {
-    bark_mcp_request(state, Some(device_key), request).await
-}
-
-async fn bark_mcp_request(
-    state: AppState,
-    device_key: Option<String>,
-    request: Request,
-) -> Response {
-    if request.method() != axum::http::Method::POST {
-        return StatusCode::METHOD_NOT_ALLOWED.into_response();
-    }
-    let body = match to_bytes(request.into_body(), BARK_REQUEST_MAX_BYTES).await {
-        Ok(body) => body,
-        Err(_) => return bark_mcp_error(Value::Null, -32700, "Parse error"),
-    };
-    let request: BarkMcpRequest = match serde_json::from_slice(&body) {
-        Ok(request) => request,
-        Err(_) => return bark_mcp_error(Value::Null, -32700, "Parse error"),
-    };
-    let id = request.id.unwrap_or(Value::Null);
-    match request.method.as_str() {
-        "initialize" => bark_mcp_result(
-            id,
-            json!({
-                "protocolVersion": request
-                    .params
-                    .get("protocolVersion")
-                    .and_then(Value::as_str)
-                    .filter(|version| !version.is_empty())
-                    .unwrap_or("2025-03-26"),
-                "capabilities": {"tools": {}},
-                "serverInfo": {
-                    "name": if device_key.is_some() { "Bark MCP Server (Specific)" } else { "Bark MCP Server" },
-                    "version": env!("CARGO_PKG_VERSION"),
-                },
-            }),
-        ),
-        "notifications/initialized" | "notifications/cancelled" => {
-            StatusCode::ACCEPTED.into_response()
-        }
-        "ping" => bark_mcp_result(id, json!({})),
-        "tools/list" => bark_mcp_result(
-            id,
-            json!({"tools": [bark_mcp_notify_tool(device_key.is_none())]}),
-        ),
-        "tools/call" => bark_mcp_notify(state, device_key, id, request.params).await,
-        _ if id.is_null() => StatusCode::ACCEPTED.into_response(),
-        _ => bark_mcp_error(id, -32601, "Method not found"),
-    }
-}
-
-fn bark_mcp_notify_tool(requires_device_key: bool) -> Value {
-    let mut properties = serde_json::Map::from_iter([
-        (
-            "title".to_owned(),
-            json!({"type":"string","description":"Notification title"}),
-        ),
-        (
-            "subtitle".to_owned(),
-            json!({"type":"string","description":"Notification subtitle"}),
-        ),
-        (
-            "body".to_owned(),
-            json!({"type":"string","description":"Notification content"}),
-        ),
-        (
-            "markdown".to_owned(),
-            json!({"type":"string","description":"Markdown notification content"}),
-        ),
-        (
-            "level".to_owned(),
-            json!({"type":"string","enum":["critical","active","timeSensitive","passive"]}),
-        ),
-        (
-            "volume".to_owned(),
-            json!({"type":"number","minimum":0,"maximum":10,"default":5}),
-        ),
-        ("badge".to_owned(), json!({"type":"number"})),
-        ("call".to_owned(), json!({"type":"string"})),
-        ("sound".to_owned(), json!({"type":"string"})),
-        ("icon".to_owned(), json!({"type":"string"})),
-        ("image".to_owned(), json!({"type":"string"})),
-        ("group".to_owned(), json!({"type":"string"})),
-        ("isArchive".to_owned(), json!({"type":"string"})),
-        ("ttl".to_owned(), json!({"type":"number"})),
-        ("url".to_owned(), json!({"type":"string"})),
-        ("copy".to_owned(), json!({"type":"string"})),
-    ]);
-    if requires_device_key {
-        properties.insert(
-            "device_key".to_owned(),
-            json!({"type":"string","description":"Device Key"}),
-        );
-    }
-    json!({
-        "name": "notify",
-        "description": "Send a notification to a device via Bark",
-        "inputSchema": {
-            "type": "object",
-            "properties": properties,
-            "required": if requires_device_key { json!(["device_key"]) } else { json!([]) },
-        },
-    })
-}
-
-async fn bark_mcp_notify(
-    state: AppState,
-    device_key: Option<String>,
-    id: Value,
-    params: Value,
-) -> Response {
-    if params.get("name").and_then(Value::as_str) != Some("notify") {
-        return bark_mcp_tool_result(id, "Unknown tool", true);
-    }
-    let Some(arguments) = params.get("arguments").and_then(Value::as_object) else {
-        return bark_mcp_tool_result(id, "Invalid arguments format", true);
-    };
-    let mut arguments = bark_lowercase_params(arguments.clone());
-    if let Some(device_key) = device_key {
-        arguments.insert("device_key".to_owned(), Value::String(device_key));
-    }
-    let input = bark::PushInput::from_params(arguments);
-    if input.device_key.is_empty() {
-        return bark_mcp_tool_result(id, "device_key is required", true);
-    }
-    match try_deliver_bark_push(&state, &input).await {
-        Ok(()) => bark_mcp_tool_result(id, "Notification sent successfully", false),
-        Err(error) => bark_mcp_tool_result(
-            id,
-            &format!(
-                "Failed to send notification: {} (code {})",
-                error.message, error.status
-            ),
-            true,
-        ),
-    }
-}
-
-fn bark_mcp_tool_result(id: Value, text: &str, is_error: bool) -> Response {
-    bark_mcp_result(
-        id,
-        json!({
-            "content": [{"type": "text", "text": text}],
-            "isError": is_error,
-        }),
-    )
-}
-
-fn bark_mcp_result(id: Value, result: Value) -> Response {
-    axum::Json(json!({"jsonrpc":"2.0", "id": id, "result": result})).into_response()
-}
-
-fn bark_mcp_error(id: Value, code: i64, message: &str) -> Response {
-    axum::Json(json!({
-        "jsonrpc": "2.0",
-        "id": id,
-        "error": {"code": code, "message": message},
-    }))
-    .into_response()
 }
 
 fn request_log_path(path: &str) -> &str {
@@ -1827,62 +1249,255 @@ async fn bot_send_message(
     Ok(axum::Json(message))
 }
 
+#[derive(FromRow)]
+struct BarkBinding {
+    id: String,
+    user_id: String,
+    token_hash: String,
+}
+
+#[derive(Serialize, FromRow)]
+struct BarkDevice {
+    id: String,
+    created_at: i64,
+    updated_at: i64,
+}
+
 #[derive(Serialize)]
 struct BarkNotificationSettings {
-    configured: bool,
-}
-
-#[derive(Deserialize)]
-struct BarkNotificationSettingsInput {
-    push_url: String,
-}
-
-#[derive(FromRow)]
-struct BarkNotificationDestination {
-    user_id: String,
-    endpoint: String,
-    device_key: String,
+    base_url: String,
+    devices: Vec<BarkDevice>,
+    apns_configured: bool,
 }
 
 async fn bark_notification_settings(
     State(state): State<AppState>,
     axum::Extension(user): axum::Extension<UserIdentity>,
 ) -> Result<axum::Json<BarkNotificationSettings>, AppError> {
-    let configured: Option<i64> =
-        sqlx::query_scalar("SELECT 1 FROM bark_notification_settings WHERE user_id=?")
-            .bind(user.id)
-            .fetch_optional(&state.db)
-            .await?;
-    Ok(axum::Json(BarkNotificationSettings {
-        configured: configured.is_some(),
-    }))
+    Ok(axum::Json(bark_settings_for(&state, &user.id).await?))
 }
 
-async fn save_bark_notification_settings(
+async fn reset_bark_binding(
     State(state): State<AppState>,
     axum::Extension(user): axum::Extension<UserIdentity>,
-    axum::Json(input): axum::Json<BarkNotificationSettingsInput>,
-) -> Result<StatusCode, AppError> {
-    let (endpoint, device_key) = bark_push_endpoint(&input.push_url)?;
-    sqlx::query("INSERT INTO bark_notification_settings(user_id,endpoint,device_key,updated_at) VALUES(?,?,?,?) ON CONFLICT(user_id) DO UPDATE SET endpoint=excluded.endpoint,device_key=excluded.device_key,updated_at=excluded.updated_at")
-        .bind(user.id)
-        .bind(endpoint)
-        .bind(device_key)
-        .bind(chrono::Utc::now().timestamp())
-        .execute(&state.db)
+) -> Result<axum::Json<BarkNotificationSettings>, AppError> {
+    let mut transaction = state.db.begin().await?;
+    sqlx::query("DELETE FROM bark_user_devices WHERE user_id=?")
+        .bind(&user.id)
+        .execute(&mut *transaction)
         .await?;
-    Ok(StatusCode::NO_CONTENT)
+    sqlx::query("DELETE FROM bark_user_bindings WHERE user_id=?")
+        .bind(&user.id)
+        .execute(&mut *transaction)
+        .await?;
+    transaction.commit().await?;
+    Ok(axum::Json(bark_settings_for(&state, &user.id).await?))
 }
 
-async fn delete_bark_notification_settings(
+async fn revoke_bark_binding(
     State(state): State<AppState>,
     axum::Extension(user): axum::Extension<UserIdentity>,
 ) -> Result<StatusCode, AppError> {
-    sqlx::query("DELETE FROM bark_notification_settings WHERE user_id=?")
+    let mut transaction = state.db.begin().await?;
+    sqlx::query("DELETE FROM bark_user_devices WHERE user_id=?")
+        .bind(&user.id)
+        .execute(&mut *transaction)
+        .await?;
+    sqlx::query("DELETE FROM bark_user_bindings WHERE user_id=?")
+        .bind(&user.id)
+        .execute(&mut *transaction)
+        .await?;
+    transaction.commit().await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn delete_bark_device(
+    State(state): State<AppState>,
+    axum::Extension(user): axum::Extension<UserIdentity>,
+    Path(id): Path<String>,
+) -> Result<StatusCode, AppError> {
+    let result = sqlx::query("DELETE FROM bark_user_devices WHERE id=? AND user_id=?")
+        .bind(id)
         .bind(user.id)
         .execute(&state.db)
         .await?;
+    if result.rows_affected() == 0 {
+        return Err(AppError::not_found("Bark device was not found"));
+    }
     Ok(StatusCode::NO_CONTENT)
+}
+
+async fn bark_settings_for(
+    state: &AppState,
+    user_id: &str,
+) -> Result<BarkNotificationSettings, AppError> {
+    let (binding, capability) = ensure_bark_binding(&state.db, user_id).await?;
+    let origin = meta(&state.db, "public_origin").await?;
+    if origin.is_empty() {
+        return Err(AppError::unavailable("public_origin is not configured"));
+    }
+    let devices = sqlx::query_as::<_, BarkDevice>(
+        "SELECT id,created_at,updated_at FROM bark_user_devices WHERE user_id=? ORDER BY updated_at DESC",
+    )
+    .bind(&binding.user_id)
+    .fetch_all(&state.db)
+    .await?;
+    Ok(BarkNotificationSettings {
+        base_url: format!("{}/api/bark/b/{capability}", origin.trim_end_matches('/')),
+        devices,
+        apns_configured: state.bark.configured(),
+    })
+}
+
+async fn bark_binding_secret(db: &SqlitePool) -> Result<String, AppError> {
+    let candidate = format!("{}{}", Uuid::new_v4().simple(), Uuid::new_v4().simple());
+    sqlx::query("INSERT INTO app_meta(key,value) VALUES('bark_binding_secret',?) ON CONFLICT(key) DO NOTHING")
+        .bind(candidate)
+        .execute(db)
+        .await?;
+    meta(db, "bark_binding_secret").await
+}
+
+fn bark_capability(binding_id: &str, secret: &str) -> String {
+    use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
+    use ring::hmac;
+
+    let key = hmac::Key::new(hmac::HMAC_SHA256, secret.as_bytes());
+    let signature = URL_SAFE_NO_PAD.encode(hmac::sign(&key, binding_id.as_bytes()).as_ref());
+    format!("{binding_id}.{signature}")
+}
+
+async fn ensure_bark_binding(
+    db: &SqlitePool,
+    user_id: &str,
+) -> Result<(BarkBinding, String), AppError> {
+    let secret = bark_binding_secret(db).await?;
+    if let Some(binding) = sqlx::query_as::<_, BarkBinding>(
+        "SELECT id,user_id,token_hash FROM bark_user_bindings WHERE user_id=?",
+    )
+    .bind(user_id)
+    .fetch_optional(db)
+    .await?
+    {
+        let capability = bark_capability(&binding.id, &secret);
+        return Ok((binding, capability));
+    }
+    let id = Uuid::new_v4().to_string();
+    let capability = bark_capability(&id, &secret);
+    let now = chrono::Utc::now().timestamp();
+    let token_hash = bark::hash_secret(&capability);
+    sqlx::query("INSERT INTO bark_user_bindings(id,user_id,token_hash,created_at,updated_at) VALUES(?,?,?,?,?)")
+        .bind(&id)
+        .bind(user_id)
+        .bind(&token_hash)
+        .bind(now)
+        .bind(now)
+        .execute(db)
+        .await?;
+    Ok((
+        BarkBinding {
+            id,
+            user_id: user_id.to_owned(),
+            token_hash,
+        },
+        capability,
+    ))
+}
+
+async fn bark_binding_for_capability(
+    db: &SqlitePool,
+    capability: &str,
+) -> Result<Option<BarkBinding>, AppError> {
+    let Some((id, _)) = capability.split_once('.') else {
+        return Ok(None);
+    };
+    let Some(binding) = sqlx::query_as::<_, BarkBinding>(
+        "SELECT id,user_id,token_hash FROM bark_user_bindings WHERE id=?",
+    )
+    .bind(id)
+    .fetch_optional(db)
+    .await?
+    else {
+        return Ok(None);
+    };
+    let secret = bark_binding_secret(db).await?;
+    let expected = bark_capability(&binding.id, &secret);
+    let token_hash = bark::hash_secret(capability);
+    if expected != capability || binding.token_hash != token_hash {
+        return Ok(None);
+    }
+    Ok(Some(binding))
+}
+
+async fn upsert_bark_device(
+    db: &SqlitePool,
+    user_id: &str,
+    requested_key: &str,
+    device_token: &str,
+) -> Result<String, AppError> {
+    let key = if requested_key.is_empty() {
+        bark::new_device_key()
+    } else {
+        let owned: Option<i64> = sqlx::query_scalar(
+            "SELECT 1 FROM bark_user_devices WHERE user_id=? AND device_key_hash=?",
+        )
+        .bind(user_id)
+        .bind(bark::hash_secret(requested_key))
+        .fetch_optional(db)
+        .await?;
+        if owned.is_some() {
+            requested_key.to_owned()
+        } else {
+            bark::new_device_key()
+        }
+    };
+    let now = chrono::Utc::now().timestamp();
+    sqlx::query("INSERT INTO bark_user_devices(id,user_id,device_key_hash,device_token,created_at,updated_at) VALUES(?,?,?,?,?,?) ON CONFLICT(device_token) DO UPDATE SET user_id=excluded.user_id,device_key_hash=excluded.device_key_hash,updated_at=excluded.updated_at")
+        .bind(Uuid::new_v4().to_string())
+        .bind(user_id)
+        .bind(bark::hash_secret(&key))
+        .bind(device_token)
+        .bind(now)
+        .bind(now)
+        .execute(db)
+        .await?;
+    Ok(key)
+}
+
+async fn delete_bark_device_by_token(db: &SqlitePool, device_token: &str) -> Result<(), AppError> {
+    sqlx::query("DELETE FROM bark_user_devices WHERE device_token=?")
+        .bind(device_token)
+        .execute(db)
+        .await?;
+    Ok(())
+}
+
+#[derive(Clone, FromRow)]
+struct BarkNotificationDestination {
+    user_id: String,
+    device_token: String,
+}
+
+async fn bark_notification_destinations(
+    db: &SqlitePool,
+    conversation_id: &str,
+) -> Result<Vec<BarkNotificationDestination>, sqlx::Error> {
+    sqlx::query_as(
+        "SELECT d.user_id,d.device_token FROM bark_user_devices d JOIN conversation_members cm ON cm.user_id=d.user_id WHERE cm.conversation_id=?",
+    )
+    .bind(conversation_id)
+    .fetch_all(db)
+    .await
+}
+
+fn bark_notification_recipients(
+    destinations: Vec<BarkNotificationDestination>,
+    sender_user_id: Option<&str>,
+) -> Vec<BarkNotificationDestination> {
+    destinations
+        .into_iter()
+        .filter(|destination| sender_user_id != Some(destination.user_id.as_str()))
+        .collect()
 }
 
 fn dispatch_bark_notifications(
@@ -1905,16 +1520,11 @@ async fn deliver_bark_notifications(
     sender_user_id: Option<String>,
     message: Message,
 ) {
-    let destinations: Result<Vec<BarkNotificationDestination>, sqlx::Error> = sqlx::query_as(
-        "SELECT s.user_id,s.endpoint,s.device_key FROM bark_notification_settings s JOIN conversation_members cm ON cm.user_id=s.user_id WHERE cm.conversation_id=?",
-    )
-    .bind(&conversation_id)
-    .fetch_all(&state.db)
-    .await;
+    let destinations = bark_notification_destinations(&state.db, &conversation_id).await;
     let destinations = match destinations {
         Ok(destinations) => destinations,
         Err(error) => {
-            tracing::error!(%error, "could not load Bark message notification settings");
+            tracing::error!(%error, "could not load Bark message notification devices");
             return;
         }
     };
@@ -1924,22 +1534,20 @@ async fn deliver_bark_notifications(
     } else {
         bark_notification_body(&message.message.body)
     };
-    for destination in destinations {
-        if sender_user_id.as_deref() == Some(destination.user_id.as_str()) {
-            continue;
-        }
-        if let Err(error) = state
-            .bark
-            .notify(
-                &destination.endpoint,
-                &destination.device_key,
-                &title,
-                &body,
-                &conversation_id,
-            )
-            .await
-        {
-            tracing::warn!(user_id = %destination.user_id, %error, "Bark message notification failed");
+    let push = bark::PushInput::message(title, body, conversation_id, Some(message.message.id));
+    for destination in bark_notification_recipients(destinations, sender_user_id.as_deref()) {
+        match state.bark.deliver(&destination.device_token, &push).await {
+            Ok(bark::Delivery::Delivered) => {}
+            Ok(bark::Delivery::InvalidDeviceToken) => {
+                if let Err(error) =
+                    delete_bark_device_by_token(&state.db, &destination.device_token).await
+                {
+                    tracing::warn!(%error, "could not remove an invalid Bark device token");
+                }
+            }
+            Err(error) => {
+                tracing::warn!(user_id = %destination.user_id, %error, "Bark message notification failed")
+            }
         }
     }
 }
@@ -2330,40 +1938,6 @@ fn valid_origin(value: &str, label: &str) -> Result<String, AppError> {
     Ok(parsed.as_str().trim_end_matches('/').to_owned())
 }
 
-fn bark_push_endpoint(value: &str) -> Result<(String, String), AppError> {
-    let mut url = url::Url::parse(value.trim())
-        .map_err(|_| AppError::bad_request("Bark push link must be a valid URL"))?;
-    let local = matches!(
-        url.host_str(),
-        Some("localhost") | Some("127.0.0.1") | Some("::1")
-    );
-    if !matches!(url.scheme(), "https" | "http")
-        || url.host_str().is_none()
-        || (url.scheme() == "http" && !local)
-        || url.query().is_some()
-        || url.fragment().is_some()
-        || !url.username().is_empty()
-        || url.password().is_some()
-    {
-        return Err(AppError::bad_request(
-            "Bark push link must be an HTTPS URL ending in Your Key",
-        ));
-    }
-    let mut segments = url
-        .path_segments()
-        .ok_or_else(|| AppError::bad_request("Bark push link must end in Your Key"))?
-        .filter(|segment| !segment.is_empty())
-        .collect::<Vec<_>>();
-    let device_key = segments
-        .pop()
-        .filter(|key| (13..=128).contains(&key.len()) && !key.chars().any(char::is_whitespace))
-        .ok_or_else(|| AppError::bad_request("Bark push link must end in a valid Your Key"))?
-        .to_owned();
-    segments.push("push");
-    url.set_path(&format!("/{}", segments.join("/")));
-    Ok((url.to_string(), device_key))
-}
-
 fn valid_audience(value: &str) -> Result<String, AppError> {
     let value = value.trim().to_ascii_lowercase();
     if value.is_empty() || value.contains(['/', ':', '?', '#', '@']) {
@@ -2466,23 +2040,6 @@ mod tests {
     }
 
     #[test]
-    fn bark_push_links_keep_the_key_separate_from_the_push_endpoint() {
-        let key = "testBarkKey987654321";
-        assert_eq!(
-            bark_push_endpoint(&format!("https://api.day.app/{key}/")).unwrap(),
-            ("https://api.day.app/push".to_owned(), key.to_owned())
-        );
-        assert_eq!(
-            bark_push_endpoint(&format!("https://linkit.ntnl.io/api/bark/{key}/")).unwrap(),
-            (
-                "https://linkit.ntnl.io/api/bark/push".to_owned(),
-                key.to_owned()
-            )
-        );
-        assert!(bark_push_endpoint("https://api.day.app/not-a-key").is_err());
-    }
-
-    #[test]
     fn bark_notification_body_stays_within_the_apns_payload_budget() {
         let body = "中".repeat(BARK_NOTIFICATION_BODY_MAX_BYTES);
         let shortened = bark_notification_body(&body);
@@ -2490,77 +2047,7 @@ mod tests {
         assert!(shortened.is_char_boundary(shortened.len()));
     }
 
-    #[tokio::test]
-    async fn bark_notification_settings_are_bound_to_the_signed_in_user() {
-        let db = db::connect_memory().await.unwrap();
-        sqlx::query("INSERT INTO users(id,created_at) VALUES('alice',0)")
-            .execute(&db)
-            .await
-            .unwrap();
-        let state = test_state(db.clone());
-        let user = UserIdentity {
-            id: "alice".to_owned(),
-        };
-        let key = "testBarkKey987654321";
-
-        assert_eq!(
-            save_bark_notification_settings(
-                State(state.clone()),
-                axum::Extension(user.clone()),
-                axum::Json(BarkNotificationSettingsInput {
-                    push_url: format!("https://api.day.app/{key}/"),
-                }),
-            )
-            .await
-            .unwrap(),
-            StatusCode::NO_CONTENT
-        );
-        let saved: (String, String) = sqlx::query_as(
-            "SELECT endpoint,device_key FROM bark_notification_settings WHERE user_id='alice'",
-        )
-        .fetch_one(&db)
-        .await
-        .unwrap();
-        assert_eq!(saved.0, "https://api.day.app/push");
-        assert_eq!(saved.1, key);
-        assert!(
-            bark_notification_settings(State(state.clone()), axum::Extension(user.clone()))
-                .await
-                .unwrap()
-                .0
-                .configured
-        );
-        delete_bark_notification_settings(State(state), axum::Extension(user))
-            .await
-            .unwrap();
-        let remaining: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM bark_notification_settings")
-            .fetch_one(&db)
-            .await
-            .unwrap();
-        assert_eq!(remaining, 0);
-    }
-
-    #[tokio::test]
-    async fn new_messages_are_delivered_to_configured_bark_recipients() {
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let endpoint = format!("http://{}/push", listener.local_addr().unwrap());
-        let (sent, mut received) = tokio::sync::mpsc::unbounded_channel();
-        let app = Router::new().route(
-            "/push",
-            post({
-                let sent = sent.clone();
-                move |axum::Json(payload): axum::Json<Value>| {
-                    let sent = sent.clone();
-                    async move {
-                        let _ = sent.send(payload);
-                        StatusCode::NO_CONTENT
-                    }
-                }
-            }),
-        );
-        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
-        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
-
+    async fn bark_test_state() -> (AppState, Router, String, String) {
         let db = db::connect_memory().await.unwrap();
         for user_id in ["alice", "bob"] {
             sqlx::query("INSERT INTO users(id,created_at) VALUES(?,0)")
@@ -2569,86 +2056,26 @@ mod tests {
                 .await
                 .unwrap();
         }
-        sqlx::query("INSERT INTO conversations(id,kind,title,created_by,created_at) VALUES('conversation','direct','', 'alice',0)")
+        sqlx::query("UPDATE app_meta SET value='https://linkit.test' WHERE key='public_origin'")
             .execute(&db)
             .await
             .unwrap();
-        for user_id in ["alice", "bob"] {
-            sqlx::query("INSERT INTO conversation_members(conversation_id,user_id,role,joined_at) VALUES('conversation',?,'member',0)")
-                .bind(user_id)
-                .execute(&db)
-                .await
-                .unwrap();
-        }
-        sqlx::query("INSERT INTO bark_notification_settings(user_id,endpoint,device_key,updated_at) VALUES('bob',?,'testBarkKey987654321',0)")
-            .bind(&endpoint)
-            .execute(&db)
-            .await
-            .unwrap();
-        sqlx::query("INSERT INTO bark_notification_settings(user_id,endpoint,device_key,updated_at) VALUES('alice',?,'senderBarkKey987654',0)")
-            .bind(&endpoint)
-            .execute(&db)
-            .await
-            .unwrap();
-        let recipients: i64 = sqlx::query_scalar(
-            "SELECT COUNT(*) FROM bark_notification_settings s JOIN conversation_members cm ON cm.user_id=s.user_id WHERE cm.conversation_id='conversation'",
-        )
-        .fetch_one(&db)
-        .await
-        .unwrap();
-        assert_eq!(recipients, 2);
-
         let state = test_state(db);
-        deliver_bark_notifications(
-            state,
-            "conversation".to_owned(),
-            Some("alice".to_owned()),
-            Message {
-                message: StoredMessage {
-                    id: "message".to_owned(),
-                    conversation_id: "conversation".to_owned(),
-                    sender_kind: "user".to_owned(),
-                    sender_id: "alice".to_owned(),
-                    sender_name: "Alice".to_owned(),
-                    sender_deleted: false,
-                    body: "Hello Bob".to_owned(),
-                    created_at: 0,
-                    sequence: 1,
-                },
-                attachments: vec![],
-                cursor: "0:1".to_owned(),
-            },
-        )
-        .await;
-        let payload = tokio::time::timeout(std::time::Duration::from_secs(1), received.recv())
-            .await
-            .unwrap()
-            .unwrap();
-        assert_eq!(payload["title"], "Linkit · Alice");
-        assert_eq!(payload["body"], "Hello Bob");
-        assert_eq!(payload["group"], "conversation");
-        assert_eq!(payload["device_key"], "testBarkKey987654321");
-        assert!(
-            tokio::time::timeout(std::time::Duration::from_millis(50), received.recv())
-                .await
-                .is_err()
-        );
+        let alice = bark_settings_for(&state, "alice").await.unwrap();
+        let bob = bark_settings_for(&state, "bob").await.unwrap();
+        let app = router(state.clone());
+        (state, app, alice.base_url, bob.base_url)
     }
 
     #[tokio::test]
-    async fn migrations_create_setup_defaults() {
-        let pool = db::connect_memory().await.unwrap();
-        assert_eq!(meta(&pool, "setup_complete").await.unwrap(), "false");
-    }
-
-    #[tokio::test]
-    async fn bark_app_registration_protocol_is_public_and_compatible() {
-        let app = router(test_state(db::connect_memory().await.unwrap()));
+    async fn bark_base_url_binds_registration_to_its_user() {
+        let (state, app, alice_base, bob_base) = bark_test_state().await;
+        assert_ne!(alice_base, bob_base);
         let ping = app
             .clone()
             .oneshot(
                 axum::http::Request::builder()
-                    .uri("/api/bark/ping")
+                    .uri(format!("{alice_base}/ping"))
                     .body(Body::empty())
                     .unwrap(),
             )
@@ -2656,332 +2083,111 @@ mod tests {
             .unwrap();
         assert_eq!(ping.status(), StatusCode::OK);
         let registered = app
-            .clone()
             .oneshot(
                 axum::http::Request::builder()
-                    .uri("/api/bark/register?devicetoken=aabbccdd")
+                    .uri(format!(
+                        "{alice_base}/register?devicetoken=alice-device-token"
+                    ))
                     .body(Body::empty())
                     .unwrap(),
             )
             .await
             .unwrap();
         assert_eq!(registered.status(), StatusCode::OK);
-        let body = registered.into_body().collect().await.unwrap().to_bytes();
-        let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
-        let key = value["data"]["key"].as_str().unwrap();
-        assert!((13..=22).contains(&key.len()));
-        let checked = app
-            .clone()
-            .oneshot(
-                axum::http::Request::builder()
-                    .uri(format!("/api/bark/register/{key}"))
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(checked.status(), StatusCode::OK);
-
-        let re_registered = app
-            .oneshot(
-                axum::http::Request::builder()
-                    .method("POST")
-                    .uri("/api/bark/register")
-                    .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
-                    .body(Body::from(format!("device_key={key}&device_token=deleted")))
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(re_registered.status(), StatusCode::OK);
-        let body = re_registered
-            .into_body()
-            .collect()
-            .await
-            .unwrap()
-            .to_bytes();
-        let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
-        assert_eq!(value["data"]["device_key"], key);
+        let devices: Vec<String> =
+            sqlx::query_scalar("SELECT user_id FROM bark_user_devices ORDER BY user_id")
+                .fetch_all(&state.db)
+                .await
+                .unwrap();
+        assert_eq!(devices, ["alice"]);
     }
 
     #[tokio::test]
-    async fn bark_v1_url_push_is_routed_and_supports_query_options() {
-        let app = router(test_state(db::connect_memory().await.unwrap()));
+    async fn unknown_bark_capability_never_registers_a_device() {
+        let (state, app, _, _) = bark_test_state().await;
         let response = app
             .oneshot(
                 axum::http::Request::builder()
-                    .uri("/api/bark/not-a-device-key/%E6%B5%8B%E8%AF%95?group=alerts&sound=alarm&badge=3&url=https%3A%2F%2Flinkit.ntnl.io%2F")
+                    .uri("/api/bark/b/not-a-real-capability/register?devicetoken=unknown-token")
                     .body(Body::empty())
                     .unwrap(),
             )
             .await
             .unwrap();
-        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
-        let body = response.into_body().collect().await.unwrap().to_bytes();
-        let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
-        assert_eq!(
-            value["message"],
-            "failed to get [not-a-device-key] device token from database"
-        );
-    }
-
-    #[test]
-    fn bark_v1_path_fields_override_query_fields() {
-        let mut params = bark_url_params(
-            "title=query+title&subtitle=query+subtitle&body=query+body&level=timeSensitive",
-        );
-        BarkPath {
-            device_key: Some("key".to_owned()),
-            title: Some("path title".to_owned()),
-            body: Some("path body".to_owned()),
-            ..BarkPath::default()
-        }
-        .insert_into(&mut params);
-        let push = bark::PushInput::from_params(params);
-        assert_eq!(push.title, "path title");
-        assert_eq!(push.subtitle, "query subtitle");
-        assert_eq!(push.body, "path body");
-        assert_eq!(
-            push.extra["level"],
-            Value::String("timeSensitive".to_owned())
-        );
-    }
-
-    #[test]
-    fn bark_preserves_v1_and_v2_parameter_precedence() {
-        let v1 = bark_merge_push_params(bark_url_params("body=form"), false, "body=query");
-        assert_eq!(v1["body"], "form");
-
-        let v2 = bark_merge_push_params(bark_url_params("body=json"), true, "body=query");
-        assert_eq!(v2["body"], "query");
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+        let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM bark_user_devices")
+            .fetch_one(&state.db)
+            .await
+            .unwrap();
+        assert_eq!(count, 0);
     }
 
     #[tokio::test]
-    async fn bark_legacy_post_forms_and_v2_batches_are_compatible() {
-        let app = router(test_state(db::connect_memory().await.unwrap()));
-        let form = app
-            .clone()
-            .oneshot(
-                axum::http::Request::builder()
-                    .method("POST")
-                    .uri("/api/bark/not-a-device-key")
-                    .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
-                    .body(Body::from("title=Form&body=Message&group=alerts"))
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(form.status(), StatusCode::BAD_REQUEST);
-        let body = form.into_body().collect().await.unwrap().to_bytes();
-        let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
-        assert_eq!(
-            value["message"],
-            "failed to get [not-a-device-key] device token from database"
-        );
-
-        let multipart = app
-            .clone()
-            .oneshot(
-                axum::http::Request::builder()
-                    .method("POST")
-                    .uri("/api/bark/not-a-device-key")
-                    .header(header::CONTENT_TYPE, "multipart/form-data; boundary=bark")
-                    .body(Body::from(
-                        "--bark\r\nContent-Disposition: form-data; name=\"body\"\r\n\r\nMessage\r\n--bark--\r\n",
-                    ))
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(multipart.status(), StatusCode::BAD_REQUEST);
-        let body = multipart.into_body().collect().await.unwrap().to_bytes();
-        let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
-        assert_eq!(
-            value["message"],
-            "failed to get [not-a-device-key] device token from database"
-        );
-
-        let batch = app
-            .oneshot(
-                axum::http::Request::builder()
-                    .method("POST")
-                    .uri("/api/bark/push")
-                    .header(header::CONTENT_TYPE, "application/vnd.bark+json")
-                    .body(Body::from(
-                        r#"{"body":"Message","device_keys":["first-missing","second-missing"]}"#,
-                    ))
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(batch.status(), StatusCode::OK);
-        let body = batch.into_body().collect().await.unwrap().to_bytes();
-        let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
-        assert_eq!(value["data"][0]["code"], StatusCode::BAD_REQUEST.as_u16());
-        assert_eq!(value["data"][1]["code"], StatusCode::BAD_REQUEST.as_u16());
-    }
-
-    #[tokio::test]
-    async fn bark_delivers_registered_v1_v2_and_batch_pushes() {
-        let db = db::connect_memory().await.unwrap();
-        let key = bark::register_device(&db, "", "test-device-token")
-            .await
-            .unwrap();
-        let app = router(test_state(db));
-
-        let v1 = app
-            .clone()
-            .oneshot(
-                axum::http::Request::builder()
-                    .uri(format!(
-                        "/api/bark/{key}/V1%20message?icon=https%3A%2F%2Fexample.test%2Favatar.jpg&level=critical"
-                    ))
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(v1.status(), StatusCode::OK);
-        let body = v1.into_body().collect().await.unwrap().to_bytes();
-        let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
-        assert_eq!(value["code"], StatusCode::OK.as_u16());
-
-        let v2 = app
-            .clone()
-            .oneshot(
-                axum::http::Request::builder()
-                    .method("POST")
-                    .uri("/api/bark/push")
-                    .header(header::CONTENT_TYPE, "application/json")
-                    .body(Body::from(format!(
-                        r#"{{"device_key":"{key}","ciphertext":"encrypted","isArchive":"1"}}"#
-                    )))
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(v2.status(), StatusCode::OK);
-
-        let batch = app
-            .oneshot(
-                axum::http::Request::builder()
-                    .method("POST")
-                    .uri("/api/bark/push")
-                    .header(header::CONTENT_TYPE, "application/json")
-                    .body(Body::from(format!(
-                        r#"{{"body":"Batch","device_keys":["{key}","{key}"]}}"#
-                    )))
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(batch.status(), StatusCode::OK);
-        let body = batch.into_body().collect().await.unwrap().to_bytes();
-        let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
-        assert_eq!(value["data"][0]["code"], StatusCode::OK.as_u16());
-        assert_eq!(value["data"][1]["code"], StatusCode::OK.as_u16());
-    }
-
-    #[tokio::test]
-    async fn bark_basic_auth_and_batch_limit_match_the_upstream_contract() {
-        let db = db::connect_memory().await.unwrap();
-        let gateway = bark::BarkGateway::test_gateway_with(Some(("bark", "pass")), 1);
-        let app = router(test_state_with_bark(db, gateway));
-
-        let root = app
-            .clone()
-            .oneshot(
-                axum::http::Request::builder()
-                    .uri("/api/bark")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(root.status(), StatusCode::IM_A_TEAPOT);
-        assert_eq!(
-            root.into_body().collect().await.unwrap().to_bytes(),
-            "I'm a teapot"
-        );
-
-        let ping = app
-            .clone()
-            .oneshot(
-                axum::http::Request::builder()
-                    .uri("/api/bark/ping")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(ping.status(), StatusCode::OK);
-
+    async fn bark_deleted_token_unbinds_its_device() {
+        let (state, app, base, _) = bark_test_state().await;
         let registered = app
             .clone()
             .oneshot(
                 axum::http::Request::builder()
-                    .uri("/api/bark/register?devicetoken=test-device-token")
+                    .uri(format!("{base}/register?devicetoken=alice-device-token"))
                     .body(Body::empty())
                     .unwrap(),
             )
             .await
             .unwrap();
-        let body = registered.into_body().collect().await.unwrap().to_bytes();
-        let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
-        let key = value["data"]["key"].as_str().unwrap();
-
-        let unauthorized = app
-            .clone()
+        let payload = registered.into_body().collect().await.unwrap().to_bytes();
+        let key = serde_json::from_slice::<Value>(&payload).unwrap()["data"]["key"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        let removed = app
             .oneshot(
                 axum::http::Request::builder()
-                    .uri(format!("/api/bark/{key}/Message"))
+                    .uri(format!("{base}/register?key={key}&devicetoken=deleted"))
                     .body(Body::empty())
                     .unwrap(),
             )
             .await
             .unwrap();
-        assert_eq!(unauthorized.status(), StatusCode::IM_A_TEAPOT);
-
-        let authorized = app
-            .clone()
-            .oneshot(
-                axum::http::Request::builder()
-                    .uri(format!("/api/bark/{key}/Message"))
-                    .header(header::AUTHORIZATION, "Basic YmFyazpwYXNz")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
+        assert_eq!(removed.status(), StatusCode::OK);
+        let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM bark_user_devices")
+            .fetch_one(&state.db)
             .await
             .unwrap();
-        assert_eq!(authorized.status(), StatusCode::OK);
-
-        let limited = app
-            .oneshot(
-                axum::http::Request::builder()
-                    .method("POST")
-                    .uri("/api/bark/push")
-                    .header(header::AUTHORIZATION, "Basic YmFyazpwYXNz")
-                    .header(header::CONTENT_TYPE, "application/json")
-                    .body(Body::from(format!(
-                        r#"{{"body":"Batch","device_keys":["{key}","{key}"]}}"#
-                    )))
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(limited.status(), StatusCode::BAD_REQUEST);
-        let body = limited.into_body().collect().await.unwrap().to_bytes();
-        let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
-        assert_eq!(
-            value["message"],
-            "batch push count exceeds the maximum limit"
-        );
+        assert_eq!(count, 0);
     }
 
     #[tokio::test]
-    async fn bark_misc_endpoints_match_the_server_contract() {
-        let app = router(test_state(db::connect_memory().await.unwrap()));
-        for path in ["/api/bark", "/api/bark/", "/api/bark/healthz"] {
+    async fn resetting_a_bark_binding_invalidates_the_old_base_url() {
+        let (state, app, base, _) = bark_test_state().await;
+        let user = UserIdentity {
+            id: "alice".to_owned(),
+        };
+        let reset = reset_bark_binding(State(state), axum::Extension(user))
+            .await
+            .unwrap()
+            .0;
+        assert_ne!(reset.base_url, base);
+        let response = app
+            .oneshot(
+                axum::http::Request::builder()
+                    .uri(format!("{base}/ping"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn bark_v1_and_v2_push_routes_are_not_exposed() {
+        let (_, app, _, _) = bark_test_state().await;
+        for path in [
+            "/api/bark/push",
+            "/api/bark/key/body",
+            "/api/bark/key/title/body",
+        ] {
             let response = app
                 .clone()
                 .oneshot(
@@ -2992,142 +2198,52 @@ mod tests {
                 )
                 .await
                 .unwrap();
-            assert_eq!(response.status(), StatusCode::OK);
-            assert_eq!(
-                response.into_body().collect().await.unwrap().to_bytes(),
-                "ok"
-            );
+            assert_eq!(response.status(), StatusCode::NOT_FOUND, "{path}");
         }
-        let info = app
-            .oneshot(
-                axum::http::Request::builder()
-                    .uri("/api/bark/info")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(info.status(), StatusCode::OK);
-        let body = info.into_body().collect().await.unwrap().to_bytes();
-        let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
-        assert_eq!(value["version"], env!("CARGO_PKG_VERSION"));
-        assert_eq!(value["devices"], 0);
     }
 
     #[tokio::test]
-    async fn bark_mcp_matches_the_upstream_notify_surface() {
+    async fn bark_notifications_select_only_conversation_members_and_skip_the_sender() {
         let db = db::connect_memory().await.unwrap();
-        let key = bark::register_device(&db, "", "test-device-token")
+        for user_id in ["alice", "bob", "carol"] {
+            sqlx::query("INSERT INTO users(id,created_at) VALUES(?,0)")
+                .bind(user_id)
+                .execute(&db)
+                .await
+                .unwrap();
+        }
+        sqlx::query("INSERT INTO conversations(id,kind,title,created_by,created_at) VALUES('conversation','group','Test','alice',0)")
+            .execute(&db)
             .await
             .unwrap();
-        let app = router(test_state(db));
-        let initialize = app
-            .clone()
-            .oneshot(
-                axum::http::Request::builder()
-                    .method("POST")
-                    .uri("/api/bark/mcp/example-device-key")
-                    .header(header::CONTENT_TYPE, "application/json")
-                    .body(Body::from(
-                        r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26"}}"#,
-                    ))
-                    .unwrap(),
-            )
+        for user_id in ["alice", "bob"] {
+            sqlx::query("INSERT INTO conversation_members(conversation_id,user_id,role,joined_at) VALUES('conversation',?,'member',0)")
+                .bind(user_id)
+                .execute(&db)
+                .await
+                .unwrap();
+        }
+        for (user_id, token) in [
+            ("alice", "alice-token"),
+            ("bob", "bob-token"),
+            ("carol", "carol-token"),
+        ] {
+            sqlx::query("INSERT INTO bark_user_devices(id,user_id,device_key_hash,device_token,created_at,updated_at) VALUES(?,?,?,?,0,0)")
+                .bind(Uuid::new_v4().to_string())
+                .bind(user_id)
+                .bind(bark::hash_secret(token))
+                .bind(token)
+                .execute(&db)
+                .await
+                .unwrap();
+        }
+        let destinations = bark_notification_destinations(&db, "conversation")
             .await
             .unwrap();
-        assert_eq!(initialize.status(), StatusCode::OK);
-        let body = initialize.into_body().collect().await.unwrap().to_bytes();
-        let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
-        assert_eq!(
-            value["result"]["serverInfo"]["name"],
-            "Bark MCP Server (Specific)"
-        );
-
-        let tools = app
-            .clone()
-            .oneshot(
-                axum::http::Request::builder()
-                    .method("POST")
-                    .uri("/api/bark/mcp")
-                    .body(Body::from(
-                        r#"{"jsonrpc":"2.0","id":2,"method":"tools/list"}"#,
-                    ))
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        let body = tools.into_body().collect().await.unwrap().to_bytes();
-        let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
-        assert_eq!(value["result"]["tools"][0]["name"], "notify");
-        assert_eq!(
-            value["result"]["tools"][0]["inputSchema"]["required"],
-            json!(["device_key"])
-        );
-
-        let missing_key = app
-            .clone()
-            .oneshot(
-                axum::http::Request::builder()
-                    .method("POST")
-                    .uri("/api/bark/mcp")
-                    .body(Body::from(
-                        r#"{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"notify","arguments":{"body":"Message"}}}"#,
-                    ))
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        let body = missing_key.into_body().collect().await.unwrap().to_bytes();
-        let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
-        assert_eq!(
-            value["result"]["content"][0]["text"],
-            "device_key is required"
-        );
-
-        let notify = app
-            .clone()
-            .oneshot(
-                axum::http::Request::builder()
-                    .method("POST")
-                    .uri("/api/bark/mcp/example-device-key")
-                    .body(Body::from(
-                        r#"{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"notify","arguments":{"body":"Message"}}}"#,
-                    ))
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        let body = notify.into_body().collect().await.unwrap().to_bytes();
-        let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
-        assert_eq!(value["result"]["isError"], true);
-        assert!(
-            value["result"]["content"][0]["text"]
-                .as_str()
-                .unwrap()
-                .contains("code 400")
-        );
-
-        let sent = app
-            .oneshot(
-                axum::http::Request::builder()
-                    .method("POST")
-                    .uri(format!("/api/bark/mcp/{key}"))
-                    .header(header::CONTENT_TYPE, "application/json")
-                    .body(Body::from(
-                        r#"{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"notify","arguments":{"body":"Message","icon":"https://example.test/avatar.jpg","level":"critical"}}}"#,
-                    ))
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(sent.status(), StatusCode::OK);
-        let body = sent.into_body().collect().await.unwrap().to_bytes();
-        let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
-        assert_eq!(
-            value["result"]["content"][0]["text"],
-            "Notification sent successfully"
-        );
-        assert_eq!(value["result"]["isError"], false);
+        let recipients = bark_notification_recipients(destinations, Some("alice"));
+        assert_eq!(recipients.len(), 1);
+        assert_eq!(recipients[0].user_id, "bob");
+        assert_eq!(recipients[0].device_token, "bob-token");
     }
 
     #[test]
