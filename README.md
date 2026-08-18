@@ -17,9 +17,7 @@ tokens.
 - **PWA and notifications** — installable manifest, service worker, and an API
   for signed-in browsers to register push subscriptions. A push provider can
   later deliver to those stored subscriptions without changing the client API.
-- **Private Bark gateway** — an iPhone running Bark may use this Linkit instance
-  as its Bark server, keeping the device registration and notification request
-  away from the public Bark service.
+- **Direct Bark notifications** — an iPhone running Bark binds directly to its Linkit user and receives APNs notifications without Linkit exposing a public Bark push API.
 - **Bilingual UI** — English and Chinese interfaces, with an in-app language
   picker and browser-language default on first visit.
 - **Native Bots** — each Bot has a durable UUID, one human owner, an `sk-…`
@@ -59,83 +57,39 @@ For a group, add the Bot in the owner-managed group path and supply its
 See [the Bot direct-message guide](docs/bot-direct-messages.md) for the full
 creation flow, token handling, response contract, and error handling.
 
-## Private Bark gateway
+## Bark device binding
 
-Install [Bark](https://github.com/Finb/Bark) on an iPhone and add this custom
-server URL in Bark:
+Linkit sends conversation and Bot notifications directly to Bark on iPhone
+through APNs. It does not expose Bark URL V1/V2 push endpoints.
 
-```
-https://linkit.ntnl.io/api/bark
-```
+Open **Settings → Notifications** while signed in to obtain your private Bark
+Server Base URL and QR code. In Bark on iPhone, add a server and scan that QR
+code. Bark calls the Base URL's `/ping` and `/register` endpoints; registration
+uploads its APNs device token and Linkit binds that device to the signed-in
+Linkit user who owns the Base URL.
 
-Bark registers its APNs device token directly with Linkit and displays the
-resulting **Your Key**. Treat that key as a notification-send credential. Send
-a notification through the standard Bark V2 API:
+The Base URL is a high-entropy capability, not a user ID. Linkit only stores a
+hash of it, redacts it from HTTP logs, and exposes it only to its owner through
+the authenticated settings API. Treat the URL like a device-binding secret:
+do not share it. Regenerating it removes existing devices and invalidates the
+old URL; revoking it removes both the URL and all bound devices.
 
-```bash
-curl --fail-with-body https://linkit.ntnl.io/api/bark/push \
-  -H 'Content-Type: application/json' \
-  -d '{
-    "device_key": "YOUR_KEY",
-    "title": "Linkit",
-    "body": "You have a new message.",
-    "group": "messages",
-    "url": "https://linkit.ntnl.io/"
-  }'
-```
+When a message is created, Linkit selects only bound devices of conversation
+members, skips the human sender, and delivers directly to APNs with its Bark
+Provider Key. A Bot message can notify every bound conversation member.
 
-The Bark-compatible HTTP API follows the upstream self-hosted
-`bark-server` v2.3.5 contract, including registration, V1 and V2 pushes,
-batch results, diagnostics, Basic Auth, and MCP:
+Linkit keeps only the minimal Bark iOS lifecycle surface:
 
-```bash
-curl --fail-with-body 'https://linkit.ntnl.io/api/bark/YOUR_KEY/Your%20message?group=alerts&sound=alarm'
+```text
+GET  /api/bark/b/<private-capability>/ping
+GET  /api/bark/b/<private-capability>/register
+POST /api/bark/b/<private-capability>/register
 ```
 
-`/:key/:body`, `/:key/:title/:body`, and
-`/:key/:title/:subtitle/:body` accept both GET and POST. V1 query,
-`application/x-www-form-urlencoded`, and multipart fields are supported; V2
-JSON works at `/push` and at the Key-shaped endpoints. Path values take
-precedence over matching query or body values.
-
-V2 also accepts `device_keys` as a comma-separated string or JSON array for a
-batch push and returns one Bark result per device. All documented Bark fields
-are forwarded to the iOS app, including `level`, `volume`, `badge`, `call`,
-`autoCopy`, `copy`, `sound`, `icon`, `image`, `group`, `ciphertext`,
-`isArchive`, `ttl`, `url`, `action`, and `delete`.
-
-`group` is sent as the APNs thread identifier. iOS controls whether threaded
-notifications are visibly grouped, so set Bark's **Notification Grouping** to
-**Automatic** or **By App** rather than **Off**. A `level` of `critical` also
-requires the system **Critical Alerts** permission for Bark to be enabled.
-
-The standard diagnostics are available at `/`, `/ping`, `/healthz`, and
-`/info` beneath the configured Bark base URL. The registration endpoint accepts
-the current `device_key`/`device_token` names and the legacy `key`/
-`devicetoken` names used by the Bark app.
-
-The upstream MCP HTTP endpoints are available at `/mcp` and `/mcp/:key` beneath
-the same base URL. They expose Bark's `notify` tool; the Key-bound endpoint
-does not require `device_key` in tool arguments.
-
-The gateway keeps device-token registrations in Linkit's private SQLite data
-directory, which runs in WAL mode, and only uses APNs to deliver the push. It
-does not use bark-server's MySQL, Bbolt, in-memory, or environment-backed
-storage modes. It deploys the APNs identity
-used by the upstream self-hosted `bark-server` v2.3.5 into a root-owned runtime
-file; it is not included in this repository or release archive.
-
-The upstream server's optional runtime settings are available with the same
-environment variable names where they apply to this embedded surface:
-
-```bash
-# Protect all Bark routes except /ping, /register, and /healthz.
-BARK_SERVER_BASIC_AUTH_USER=bark
-BARK_SERVER_BASIC_AUTH_PASSWORD=change-me
-
-# -1 is unlimited, matching bark-server's default.
-BARK_SERVER_MAX_BATCH_PUSH_COUNT=100
-```
+The registration request accepts Bark's current `device_key`/`device_token`
+field names and its legacy `key`/`devicetoken` names. Sending
+`devicetoken=deleted` unbinds the matching device. The APNs Provider Key is a
+root-owned runtime file, not part of this repository or release archive.
 
 ## Development
 

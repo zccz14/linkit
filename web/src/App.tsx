@@ -20,6 +20,7 @@ import {
 import {
   BellIcon,
   BotIcon,
+  CopyIcon,
   ChevronLeftIcon,
   FileIcon,
   ImageIcon,
@@ -27,8 +28,11 @@ import {
   MessageCircleIcon,
   PaperclipIcon,
   PlusIcon,
+  RotateCcwIcon,
   SearchIcon,
   SendIcon,
+  SmartphoneIcon,
+  Trash2Icon,
   SettingsIcon,
   ShieldCheckIcon,
   UserRoundIcon,
@@ -36,6 +40,7 @@ import {
   XIcon,
 } from "lucide-react";
 import { toast } from "sonner";
+import { QRCodeSVG } from "qrcode.react";
 
 import { LanguageMenu } from "@/components/language-menu";
 import { useI18n } from "@/components/use-i18n";
@@ -1943,116 +1948,133 @@ function ProfileEditor({ me, sdk }: { me: Me; sdk: AuthMiniApi }) {
 }
 
 function BarkNotifications({ sdk }: { sdk: AuthMiniApi }) {
-  const { t } = useI18n();
+  const { locale, t } = useI18n();
   const queryClient = useQueryClient();
+  const [confirmation, setConfirmation] = useState<"reset" | "revoke" | null>(null);
   const settings = useQuery({
     queryKey: ["settings", "bark"],
     queryFn: () => api<BarkNotificationSettings>(sdk, "/api/settings/bark"),
   });
-  const [pushUrl, setPushUrl] = useState("");
-  const save = useMutation({
-    mutationFn: () =>
-      api(sdk, "/api/settings/bark", {
-        method: "PUT",
-        body: JSON.stringify({ push_url: pushUrl }),
-      }),
+  const reset = useMutation({
+    mutationFn: () => api<BarkNotificationSettings>(sdk, "/api/settings/bark", { method: "POST" }),
     onSuccess: () => {
-      setPushUrl("");
       void queryClient.invalidateQueries({ queryKey: ["settings", "bark"] });
-      toast.success(t("barkSettings.saved"));
+      setConfirmation(null);
+      toast.success(t("barkSettings.resetDone"));
     },
     onError: (error) => toast.error(error.message),
   });
-  const remove = useMutation({
-    mutationFn: () =>
-      api(sdk, "/api/settings/bark", {
-        method: "DELETE",
-      }),
+  const revoke = useMutation({
+    mutationFn: () => api(sdk, "/api/settings/bark", { method: "DELETE" }),
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ["settings", "bark"] });
-      toast.success(t("barkSettings.removed"));
+      setConfirmation(null);
+      toast.success(t("barkSettings.revoked"));
     },
     onError: (error) => toast.error(error.message),
   });
-  const configured = settings.data?.configured ?? false;
+  const removeDevice = useMutation({
+    mutationFn: (id: string) => api(sdk, `/api/settings/bark/devices/${encodeURIComponent(id)}`, { method: "DELETE" }),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["settings", "bark"] });
+      toast.success(t("barkSettings.deviceRemoved"));
+    },
+    onError: (error) => toast.error(error.message),
+  });
+  const baseUrl = settings.data?.base_url ?? "";
+  const copy = async () => {
+    try {
+      await navigator.clipboard.writeText(baseUrl);
+      toast.success(t("barkSettings.copied"));
+    } catch {
+      toast.error(t("barkSettings.copyFailed"));
+    }
+  };
 
   return (
-    <Page
-      title={t("barkSettings.title")}
-      description={t("barkSettings.description")}
-    >
-      <Card className="max-w-xl">
-        <CardHeader className="gap-3">
-          <div className="flex size-10 items-center justify-center rounded-lg bg-primary text-primary-foreground">
-            <BellIcon aria-hidden="true" />
-          </div>
-          <div>
-            <CardTitle>{t("barkSettings.cardTitle")}</CardTitle>
-            <CardDescription className="mt-1">
-              {t("barkSettings.cardDescription")}
-            </CardDescription>
-          </div>
+    <Page title={t("barkSettings.title")} description={t("barkSettings.description")}>
+      <div className="grid max-w-3xl gap-5 lg:grid-cols-[minmax(0,1fr)_13rem]">
+        <Card>
+          <CardHeader className="gap-3">
+            <div className="flex size-10 items-center justify-center rounded-lg bg-primary text-primary-foreground">
+              <BellIcon aria-hidden="true" />
+            </div>
+            <div>
+              <CardTitle>{t("barkSettings.cardTitle")}</CardTitle>
+              <CardDescription className="mt-1">{t("barkSettings.cardDescription")}</CardDescription>
+            </div>
+          </CardHeader>
+          <CardContent className="space-y-5">
+            <p className="text-sm leading-6 text-muted-foreground">
+              {t("barkSettings.iosPrompt")} {" "}
+              <a className="font-medium text-foreground underline underline-offset-4" href="https://apps.apple.com/app/bark-customed-notifications/id1403753865" target="_blank" rel="noreferrer">
+                {t("barkSettings.downloadBark")}
+              </a>
+            </p>
+            {settings.isLoading ? <p className="text-sm text-muted-foreground">{t("barkSettings.loading")}</p> : null}
+            {baseUrl ? <>
+              <Field>
+                <FieldLabel htmlFor="bark-base-url">{t("barkSettings.baseUrl")}</FieldLabel>
+                <div className="flex gap-2">
+                  <Input id="bark-base-url" readOnly value={baseUrl} aria-describedby="bark-base-url-help" />
+                  <Button type="button" variant="outline" size="icon" aria-label={t("barkSettings.copy")} onClick={() => void copy()}>
+                    <CopyIcon aria-hidden="true" />
+                  </Button>
+                </div>
+                <FieldDescription id="bark-base-url-help">{t("barkSettings.baseUrlHint")}</FieldDescription>
+              </Field>
+              {!settings.data?.apns_configured ? <p className="text-sm text-destructive">{t("barkSettings.apnsUnavailable")}</p> : null}
+              <div className="flex flex-wrap gap-3">
+                <Button type="button" variant="outline" disabled={reset.isPending} onClick={() => setConfirmation("reset")}>
+                  <RotateCcwIcon data-icon="inline-start" />
+                  {t("barkSettings.reset")}
+                </Button>
+                <Button type="button" variant="destructive" disabled={revoke.isPending} onClick={() => setConfirmation("revoke")}>
+                  <Trash2Icon data-icon="inline-start" />
+                  {t("barkSettings.revoke")}
+                </Button>
+              </div>
+            </> : null}
+          </CardContent>
+        </Card>
+        <Card className="self-start">
+          <CardHeader>
+            <CardTitle className="text-base">{t("barkSettings.scanTitle")}</CardTitle>
+            <CardDescription>{t("barkSettings.scanDescription")}</CardDescription>
+          </CardHeader>
+          <CardContent className="flex justify-center pb-6">
+            {baseUrl ? <div className="rounded-lg bg-white p-3 ring-1 ring-foreground/10"><QRCodeSVG value={baseUrl} size={164} level="M" includeMargin /></div> : <div className="grid size-44 place-items-center rounded-lg bg-muted text-sm text-muted-foreground">{t("barkSettings.loading")}</div>}
+          </CardContent>
+        </Card>
+      </div>
+      <Card className="mt-5 max-w-3xl">
+        <CardHeader>
+          <CardTitle>{t("barkSettings.devicesTitle")}</CardTitle>
+          <CardDescription>{t("barkSettings.devicesDescription")}</CardDescription>
         </CardHeader>
         <CardContent>
-          <p className="text-sm leading-6 text-muted-foreground">
-            {t("barkSettings.iosPrompt")} {" "}
-            <a
-              className="font-medium text-foreground underline underline-offset-4"
-              href="https://apps.apple.com/app/bark-customed-notifications/id1403753865"
-              target="_blank"
-              rel="noreferrer"
-            >
-              {t("barkSettings.downloadBark")}
-            </a>
-          </p>
-          <form
-            className="mt-6"
-            onSubmit={(event) => {
-              event.preventDefault();
-              save.mutate();
-            }}
-          >
-            <FieldGroup>
-              <Field>
-                <FieldLabel htmlFor="bark-push-url">
-                  {t("barkSettings.pushUrl")}
-                </FieldLabel>
-                <Input
-                  id="bark-push-url"
-                  type="url"
-                  inputMode="url"
-                  autoComplete="off"
-                  required
-                  value={pushUrl}
-                  onChange={(event) => setPushUrl(event.target.value)}
-                  placeholder="https://api.day.app/YourKey/"
-                />
-                <FieldDescription>
-                  {configured
-                    ? t("barkSettings.replaceHint")
-                    : t("barkSettings.inputHint")}
-                </FieldDescription>
-              </Field>
-            </FieldGroup>
-            <div className="mt-5 flex flex-wrap items-center gap-3">
-              <Button type="submit" disabled={save.isPending || !pushUrl.trim()}>
-                <BellIcon data-icon="inline-start" />
-                {save.isPending ? t("barkSettings.saving") : t("barkSettings.save")}
-              </Button>
-              {configured ? (
-                <Button
-                  type="button"
-                  variant="outline"
-                  disabled={remove.isPending}
-                  onClick={() => remove.mutate()}
-                >
-                  {remove.isPending ? t("barkSettings.removing") : t("barkSettings.remove")}
-                </Button>
-              ) : null}
-            </div>
-          </form>
+          {settings.data?.devices.length ? <ul className="divide-y rounded-lg border" aria-label={t("barkSettings.devicesTitle")}>
+            {settings.data.devices.map((device) => <li key={device.id} className="flex items-center gap-3 px-3 py-3">
+              <SmartphoneIcon className="size-4 text-muted-foreground" aria-hidden="true" />
+              <div className="min-w-0"><p className="font-medium">{t("barkSettings.device")}</p><p className="text-xs text-muted-foreground">{new Date(device.updated_at * 1000).toLocaleString(locale)}</p></div>
+              <code className="ml-auto text-xs text-muted-foreground">{device.id.slice(0, 8)}</code>
+              <Button type="button" variant="ghost" size="icon" aria-label={t("barkSettings.removeDevice")} disabled={removeDevice.isPending} onClick={() => removeDevice.mutate(device.id)}><Trash2Icon aria-hidden="true" /></Button>
+            </li>)}
+          </ul> : <p className="text-sm text-muted-foreground">{t("barkSettings.noDevices")}</p>}
         </CardContent>
       </Card>
+      <AlertDialog open={confirmation !== null} onOpenChange={(open) => !open && setConfirmation(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>{confirmation === "reset" ? t("barkSettings.resetConfirmTitle") : t("barkSettings.revokeConfirmTitle")}</AlertDialogTitle>
+            <AlertDialogDescription>{confirmation === "reset" ? t("barkSettings.resetConfirmDescription") : t("barkSettings.revokeConfirmDescription")}</AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>{t("common.cancel")}</AlertDialogCancel>
+            <AlertDialogAction onClick={() => confirmation === "reset" ? reset.mutate() : revoke.mutate()}>{confirmation === "reset" ? t("barkSettings.reset") : t("barkSettings.revoke")}</AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </Page>
   );
 }

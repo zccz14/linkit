@@ -98,7 +98,13 @@ export type SystemOverview = {
 };
 
 export type BarkNotificationSettings = {
-  configured: boolean;
+  base_url: string;
+  devices: Array<{
+    id: string;
+    created_at: number;
+    updated_at: number;
+  }>;
+  apns_configured: boolean;
 };
 
 export function openPagePath(search = window.location.search) {
