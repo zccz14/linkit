@@ -123,10 +123,6 @@ import {
   type Profile,
   type SystemOverview,
 } from "@/lib/api";
-import {
-  announceIncomingMessage,
-  prepareMessageAlertTone,
-} from "@/lib/message-alert";
 
 const profileRoute = (username: string) =>
   `/people/${encodeURIComponent(username)}`;
@@ -381,21 +377,6 @@ function Shell({ me, sdk }: { me: Me; sdk: AuthMiniApi }) {
     queryFn: () => api<Conversation[]>(sdk, "/api/conversations"),
     refetchInterval: 4_000,
   });
-  const [notificationPermission, setNotificationPermission] = useState(
-    () => window.Notification?.permission,
-  );
-  useEffect(() => {
-    window.addEventListener("pointerdown", prepareMessageAlertTone, {
-      once: true,
-    });
-    window.addEventListener("keydown", prepareMessageAlertTone, {
-      once: true,
-    });
-    return () => {
-      window.removeEventListener("pointerdown", prepareMessageAlertTone);
-      window.removeEventListener("keydown", prepareMessageAlertTone);
-    };
-  }, []);
   useEffect(
     () =>
       subscribeToEvents(sdk, (event) => {
@@ -404,13 +385,8 @@ function Shell({ me, sdk }: { me: Me; sdk: AuthMiniApi }) {
           ["messages", event.conversation_id],
           (data) => appendMessage(data, event.message),
         );
-        if (event.sender_id !== me.id)
-          announceIncomingMessage({
-            title: t("notification.title"),
-            body: t("notification.body"),
-          });
       }),
-    [me.id, queryClient, sdk, t],
+    [queryClient, sdk],
   );
   const links = [
     ["/directory", t("navigation.directory"), UsersRoundIcon],
@@ -486,20 +462,6 @@ function Shell({ me, sdk }: { me: Me; sdk: AuthMiniApi }) {
               @{me.profile!.username}
             </p>
           </div>
-          {notificationPermission === "default" ? (
-            <Button
-              variant="ghost"
-              size="icon-sm"
-              aria-label={t("notification.enable")}
-              onClick={() =>
-                void window.Notification?.requestPermission().then(
-                  setNotificationPermission,
-                )
-              }
-            >
-              <BellIcon />
-            </Button>
-          ) : null}
           <LanguageMenu />
           <Button
             variant="ghost"
