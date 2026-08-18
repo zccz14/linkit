@@ -1534,7 +1534,22 @@ async fn deliver_bark_notifications(
     } else {
         bark_notification_body(&message.message.body)
     };
-    let push = bark::PushInput::message(title, body, conversation_id, Some(message.message.id));
+    let public_origin = match meta(&state.db, "public_origin").await {
+        Ok(origin) if !origin.is_empty() => origin,
+        Ok(_) => {
+            tracing::error!(
+                "could not build Bark notification URL because public_origin is not configured"
+            );
+            return;
+        }
+        Err(error) => {
+            tracing::error!(%error, "could not read public_origin for Bark notification URL");
+            return;
+        }
+    };
+    let url = bark_conversation_url(&public_origin, &conversation_id);
+    let push =
+        bark::PushInput::message(title, body, conversation_id, Some(message.message.id), url);
     for destination in bark_notification_recipients(destinations, sender_user_id.as_deref()) {
         match state.bark.deliver(&destination.device_token, &push).await {
             Ok(bark::Delivery::Delivered) => {}
@@ -1550,6 +1565,29 @@ async fn deliver_bark_notifications(
             }
         }
     }
+}
+
+fn bark_conversation_url(public_origin: &str, conversation_id: &str) -> String {
+    format!(
+        "{}/#/conversations/{}",
+        public_origin.trim_end_matches('/'),
+        bark_url_path_segment(conversation_id)
+    )
+}
+
+fn bark_url_path_segment(value: &str) -> String {
+    const HEX: &[u8; 16] = b"0123456789ABCDEF";
+    let mut encoded = String::with_capacity(value.len());
+    for byte in value.bytes() {
+        if byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'.' | b'_' | b'~') {
+            encoded.push(byte as char);
+        } else {
+            encoded.push('%');
+            encoded.push(HEX[(byte >> 4) as usize] as char);
+            encoded.push(HEX[(byte & 0x0f) as usize] as char);
+        }
+    }
+    encoded
 }
 
 fn bark_notification_body(body: &str) -> String {
@@ -2037,6 +2075,18 @@ mod tests {
     #[test]
     fn bot_tokens_have_an_unambiguous_public_prefix() {
         assert!(new_bot_token().starts_with("sk-"));
+    }
+
+    #[test]
+    fn bark_conversation_url_uses_the_configured_origin_and_hash_route() {
+        assert_eq!(
+            bark_conversation_url("https://linkit.test", "conversation"),
+            "https://linkit.test/#/conversations/conversation"
+        );
+        assert_eq!(
+            bark_conversation_url("https://linkit.test/", "conversation /?#"),
+            "https://linkit.test/#/conversations/conversation%20%2F%3F%23"
+        );
     }
 
     #[test]

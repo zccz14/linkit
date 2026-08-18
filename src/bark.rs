@@ -58,15 +58,23 @@ pub struct PushInput {
     pub body: String,
     pub group: String,
     pub id: Option<String>,
+    pub url: String,
 }
 
 impl PushInput {
-    pub fn message(title: String, body: String, group: String, id: Option<String>) -> Self {
+    pub fn message(
+        title: String,
+        body: String,
+        group: String,
+        id: Option<String>,
+        url: String,
+    ) -> Self {
         Self {
             title,
             body,
             group,
             id,
+            url,
         }
     }
 
@@ -80,7 +88,7 @@ impl PushInput {
         aps.insert("category".to_owned(), json!("myNotificationCategory"));
         aps.insert("sound".to_owned(), json!("1107.caf"));
         aps.insert("thread-id".to_owned(), json!(self.group));
-        let payload = serde_json::to_vec(&json!({ "aps": aps }))?;
+        let payload = serde_json::to_vec(&json!({ "aps": aps, "url": self.url }))?;
         if payload.len() > APNS_PAYLOAD_MAX_BYTES {
             bail!("notification exceeds the APNs 4 KiB payload limit");
         }
@@ -334,8 +342,28 @@ mod tests {
             "x".repeat(3_000),
             "conversation".to_owned(),
             Some("message".to_owned()),
+            "https://linkit.test/#/conversations/conversation".to_owned(),
         );
         assert!(push.apns_payload().unwrap().len() <= APNS_PAYLOAD_MAX_BYTES);
+    }
+
+    #[test]
+    fn notification_payload_keeps_the_conversation_url_thread_and_collapse_id() {
+        let push = PushInput::message(
+            "Linkit · Bot".to_owned(),
+            "A message".to_owned(),
+            "conversation".to_owned(),
+            Some("message".to_owned()),
+            "https://linkit.test/#/conversations/conversation".to_owned(),
+        );
+        let payload: serde_json::Value =
+            serde_json::from_slice(&push.apns_payload().unwrap()).unwrap();
+        assert_eq!(
+            payload["url"],
+            "https://linkit.test/#/conversations/conversation"
+        );
+        assert_eq!(payload["aps"]["thread-id"], "conversation");
+        assert_eq!(push.id.as_deref(), Some("message"));
     }
 
     #[test]
