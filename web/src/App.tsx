@@ -104,6 +104,8 @@ import { Separator } from "@/components/ui/separator";
 import { Toaster } from "@/components/ui/sonner";
 import { Textarea } from "@/components/ui/textarea";
 import { useIsMobile } from "@/hooks/use-mobile";
+import { MessageMarkdown } from "@/lib/message-markdown";
+import { shouldSendMessageOnEnter } from "@/lib/message";
 import {
   api,
   attachmentObjectUrl,
@@ -853,6 +855,7 @@ function ConversationPage({ me, sdk }: { me: Me; sdk: AuthMiniApi }) {
   const fileRef = useRef<HTMLInputElement>(null);
   const messageListRef = useRef<HTMLElement>(null);
   const openedConversationRef = useRef("");
+  const composingRef = useRef(false);
   const messages = useInfiniteQuery({
     queryKey: ["messages", id],
     initialPageParam: "",
@@ -1039,13 +1042,26 @@ function ConversationPage({ me, sdk }: { me: Me; sdk: AuthMiniApi }) {
             className="min-h-9 max-h-36 resize-none"
             value={body}
             onChange={(event) => setBody(event.target.value)}
+            onCompositionStart={() => {
+              composingRef.current = true;
+            }}
+            onCompositionEnd={() => {
+              composingRef.current = false;
+            }}
             onKeyDown={(event) => {
-              if (event.key === "Enter" && !event.shiftKey) {
-                event.preventDefault();
-                sendMessage();
-              }
+              if (
+                !shouldSendMessageOnEnter({
+                  key: event.key,
+                  shiftKey: event.shiftKey,
+                  isComposing: event.nativeEvent.isComposing || composingRef.current,
+                })
+              )
+                return;
+              event.preventDefault();
+              event.currentTarget.form?.requestSubmit();
             }}
             placeholder={t("conversation.writeMessage")}
+            aria-describedby="conversation-compose-hint"
           />
           <Button
             type="submit"
@@ -1055,6 +1071,12 @@ function ConversationPage({ me, sdk }: { me: Me; sdk: AuthMiniApi }) {
             {t("conversation.send")}
           </Button>
         </div>
+        <p
+          id="conversation-compose-hint"
+          className="mt-2 text-xs text-muted-foreground"
+        >
+          {t("conversation.composeHint")}
+        </p>
       </form>
       {!isMobile ? (
         <Drawer
@@ -1347,9 +1369,7 @@ function MessageRow({
       </div>
       <Card className={mine ? "bg-primary text-primary-foreground" : ""}>
         <CardContent className="flex flex-col gap-3 p-3">
-          {message.body ? (
-            <p className="whitespace-pre-wrap text-sm">{message.body}</p>
-          ) : null}
+          {message.body ? <MessageMarkdown>{message.body}</MessageMarkdown> : null}
           {message.attachments.map((attachment) => (
             <AttachmentView
               key={attachment.id}
