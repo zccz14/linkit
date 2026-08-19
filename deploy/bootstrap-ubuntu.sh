@@ -20,6 +20,19 @@ location ^~ /api/bark/ {
 }
 NGINX
 
+install -m 0644 /dev/stdin /etc/nginx/snippets/linkit-events.conf <<'NGINX'
+location = /api/events {
+    proxy_pass http://127.0.0.1:8080;
+    proxy_http_version 1.1;
+    proxy_set_header Host $host;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
+    proxy_buffering off;
+    proxy_cache off;
+    proxy_read_timeout 1h;
+}
+NGINX
+
 install -m 0644 /dev/stdin /etc/systemd/system/linkit.service <<'UNIT'
 [Unit]
 Description=Linkit
@@ -53,6 +66,7 @@ server {
     server_name linkit.ntnl.io;
     client_max_body_size 52m;
     include /etc/nginx/snippets/linkit-bark.conf;
+    include /etc/nginx/snippets/linkit-events.conf;
     location / {
         proxy_pass http://127.0.0.1:8080;
         proxy_http_version 1.1;
