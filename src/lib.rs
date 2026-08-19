@@ -81,6 +81,7 @@ pub fn router(state: AppState) -> Router {
     let signed_in = Router::new()
         .route("/api/me", get(me))
         .route("/api/admin/system", get(system_overview))
+        .route("/api/admin/bark-users", get(bark_notification_users))
         .route("/api/events", get(events))
         .route("/api/profile", put(update_profile))
         .route(
@@ -616,6 +617,36 @@ async fn system_overview(
         .expect("system monitor mutex is not poisoned")
         .snapshot(sqlite_bytes);
     Ok(axum::Json(overview))
+}
+
+#[derive(Serialize, FromRow)]
+struct BarkNotificationUser {
+    display_name: String,
+    username: String,
+    device_count: i64,
+    last_device_updated_at: i64,
+}
+
+async fn bark_notification_users(
+    State(state): State<AppState>,
+    axum::Extension(user): axum::Extension<UserIdentity>,
+) -> Result<axum::Json<Vec<BarkNotificationUser>>, AppError> {
+    require_root(&state.db, &user.id).await?;
+    Ok(axum::Json(list_bark_notification_users(&state.db).await?))
+}
+
+async fn list_bark_notification_users(
+    db: &SqlitePool,
+) -> Result<Vec<BarkNotificationUser>, AppError> {
+    Ok(sqlx::query_as(
+        "SELECT p.display_name,p.username,COUNT(d.id) device_count,MAX(d.updated_at) last_device_updated_at
+         FROM bark_user_devices d
+         JOIN profiles p ON p.user_id=d.user_id
+         GROUP BY d.user_id,p.display_name,p.username
+         ORDER BY last_device_updated_at DESC,p.username COLLATE NOCASE",
+    )
+    .fetch_all(db)
+    .await?)
 }
 
 #[derive(Deserialize)]
@@ -1850,7 +1881,7 @@ async fn require_group_owner(
 async fn require_root(db: &SqlitePool, user_id: &str) -> Result<(), AppError> {
     if meta(db, "root_user_id").await? != user_id {
         return Err(AppError::forbidden(
-            "only the Root User can view system resources",
+            "only the Root User can access this administration endpoint",
         ));
     }
     Ok(())
@@ -2551,6 +2582,76 @@ mod tests {
                 .status,
             StatusCode::FORBIDDEN
         );
+    }
+
+    #[tokio::test]
+    async fn bark_notification_users_include_only_bound_profiles_without_secrets() {
+        let pool = db::connect_memory().await.unwrap();
+        for (id, username, display_name) in [
+            ("alice", "alice", "Alice"),
+            ("bob", "bob", "Bob"),
+            ("carol", "carol", "Carol"),
+        ] {
+            sqlx::query("INSERT INTO users(id,created_at) VALUES(?,0)")
+                .bind(id)
+                .execute(&pool)
+                .await
+                .unwrap();
+            sqlx::query("INSERT INTO profiles(user_id,username,display_name,motto,updated_at) VALUES(?,?,?,'',0)")
+                .bind(id)
+                .bind(username)
+                .bind(display_name)
+                .execute(&pool)
+                .await
+                .unwrap();
+        }
+        for (id, user_id, updated_at) in [
+            ("alice-device", "alice", 10_i64),
+            ("bob-device-1", "bob", 20_i64),
+            ("bob-device-2", "bob", 30_i64),
+        ] {
+            sqlx::query("INSERT INTO bark_user_devices(id,user_id,device_key_hash,device_token,created_at,updated_at) VALUES(?,?,?, ?,0,?)")
+                .bind(id)
+                .bind(user_id)
+                .bind(format!("key-{id}"))
+                .bind(format!("token-{id}"))
+                .bind(updated_at)
+                .execute(&pool)
+                .await
+                .unwrap();
+        }
+
+        let users = list_bark_notification_users(&pool).await.unwrap();
+        assert_eq!(users.len(), 2);
+        assert_eq!(users[0].display_name, "Bob");
+        assert_eq!(users[0].username, "bob");
+        assert_eq!(users[0].device_count, 2);
+        assert_eq!(users[0].last_device_updated_at, 30);
+        assert_eq!(users[1].username, "alice");
+        assert_eq!(users[1].device_count, 1);
+        let payload = serde_json::to_value(&users).unwrap();
+        assert!(payload.pointer("/0/device_token").is_none());
+        assert!(payload.pointer("/0/base_url").is_none());
+        assert!(payload.pointer("/0/capability").is_none());
+    }
+
+    #[tokio::test]
+    async fn bark_notification_users_are_limited_to_root() {
+        let pool = db::connect_memory().await.unwrap();
+        sqlx::query("UPDATE app_meta SET value=? WHERE key='root_user_id'")
+            .bind("root-user")
+            .execute(&pool)
+            .await
+            .unwrap();
+        let result = bark_notification_users(
+            State(test_state(pool)),
+            axum::Extension(UserIdentity {
+                id: "ordinary-user".into(),
+            }),
+        )
+        .await;
+        assert!(result.is_err());
+        assert_eq!(result.err().unwrap().status, StatusCode::FORBIDDEN);
     }
 
     #[tokio::test]
