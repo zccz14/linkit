@@ -4,6 +4,7 @@ import test from "node:test";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 
+import { renamedConversationDetail } from "../src/lib/conversation.ts";
 import { MessageMarkdown } from "../src/lib/message-markdown.ts";
 import {
   safeMarkdownUrl,
@@ -60,4 +61,22 @@ test("message Markdown renders formatting and safe external links without raw HT
   );
   assert.doesNotMatch(html, /<img/);
   assert.doesNotMatch(html, /javascript:/);
+});
+
+
+test("renaming a group updates the loaded conversation cache without changing members", () => {
+  const conversation = {
+    id: "group",
+    kind: "group" as const,
+    title: "Before",
+    created_by: "owner",
+    created_at: 0,
+    unread_count: 0,
+    members: [{ user_id: "owner", username: "owner", display_name: "Owner", role: "owner" }],
+    bots: [],
+  };
+  const renamed = renamedConversationDetail(conversation, "After");
+  assert.equal(renamed?.title, "After");
+  assert.deepEqual(renamed?.members, conversation.members);
+  assert.equal(renamedConversationDetail(undefined, "After"), undefined);
 });

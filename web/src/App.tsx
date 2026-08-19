@@ -110,6 +110,7 @@ import { Separator } from "@/components/ui/separator";
 import { Toaster } from "@/components/ui/sonner";
 import { Textarea } from "@/components/ui/textarea";
 import { useIsMobile } from "@/hooks/use-mobile";
+import { renamedConversationDetail } from "@/lib/conversation";
 import { MessageMarkdown } from "@/lib/message-markdown";
 import { shouldSendMessageOnEnter } from "@/lib/message";
 import {
@@ -1230,8 +1231,10 @@ function GroupManagementContent({
 }) {
   const { t } = useI18n();
   const queryClient = useQueryClient();
+  const [groupTitle, setGroupTitle] = useState(detail.title);
   const [username, setUsername] = useState("");
   const [botId, setBotId] = useState("");
+  useEffect(() => setGroupTitle(detail.title), [detail.id, detail.title]);
   const bots = useQuery({
     queryKey: ["bots"],
     queryFn: () => api<Bot[]>(sdk, "/api/bots"),
@@ -1240,6 +1243,23 @@ function GroupManagementContent({
     void queryClient.invalidateQueries({
       queryKey: ["conversation", detail.id],
     });
+  const renameGroup = useMutation({
+    mutationFn: () =>
+      api<Conversation>(sdk, `/api/conversations/${detail.id}`, {
+        method: "PATCH",
+        body: JSON.stringify({ title: groupTitle }),
+      }),
+    onSuccess: (conversation) => {
+      setGroupTitle(conversation.title);
+      queryClient.setQueryData<ConversationDetail>(
+        ["conversation", detail.id],
+        (current) => renamedConversationDetail(current, conversation.title),
+      );
+      void queryClient.invalidateQueries({ queryKey: ["conversations"] });
+      toast.success(t("conversation.groupNameSaved"));
+    },
+    onError: (error) => toast.error(error.message),
+  });
   const addMember = useMutation({
     mutationFn: () =>
       api(sdk, `/api/conversations/${detail.id}/members`, {
@@ -1293,6 +1313,35 @@ function GroupManagementContent({
   return (
     <div className="min-h-0 flex-1 overflow-auto p-4">
       <div className="flex flex-col gap-6">
+        {isOwner ? (
+          <section className="flex flex-col gap-3">
+            <div className="flex items-center justify-between">
+              <h2 className="font-medium">{t("conversation.groupName")}</h2>
+            </div>
+            <form
+              className="flex gap-2"
+              onSubmit={(event) => {
+                event.preventDefault();
+                if (groupTitle.trim()) renameGroup.mutate();
+              }}
+            >
+              <Input
+                value={groupTitle}
+                onChange={(event) => setGroupTitle(event.target.value)}
+                aria-label={t("conversation.groupName")}
+                maxLength={120}
+                required
+              />
+              <Button
+                type="submit"
+                disabled={!groupTitle.trim() || renameGroup.isPending}
+              >
+                {t("conversation.saveGroupName")}
+              </Button>
+            </form>
+          </section>
+        ) : null}
+        {isOwner ? <Separator /> : null}
         <section className="flex flex-col gap-3">
           <div className="flex items-center justify-between">
             <h2 className="font-medium">{t("conversation.members")}</h2>
