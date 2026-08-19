@@ -100,7 +100,10 @@ pub fn router(state: AppState) -> Router {
             "/api/conversations",
             get(list_conversations).post(create_group),
         )
-        .route("/api/conversations/{id}", get(conversation_detail))
+        .route(
+            "/api/conversations/{id}",
+            get(conversation_detail).patch(update_group_title),
+        )
         .route("/api/conversations/direct/{username}", post(open_direct))
         .route(
             "/api/conversations/{id}/members",
@@ -779,6 +782,27 @@ async fn conversation_detail(
 struct GroupInput {
     title: String,
     usernames: Vec<String>,
+}
+
+#[derive(Deserialize)]
+struct UpdateGroupTitleInput {
+    title: String,
+}
+
+async fn update_group_title(
+    State(state): State<AppState>,
+    axum::Extension(user): axum::Extension<UserIdentity>,
+    Path(id): Path<String>,
+    axum::Json(input): axum::Json<UpdateGroupTitleInput>,
+) -> Result<axum::Json<Conversation>, AppError> {
+    require_group_owner(&state.db, &id, &user.id).await?;
+    let title = nonempty(&input.title, "title", 120)?;
+    sqlx::query("UPDATE conversations SET title=? WHERE id=? AND kind='group'")
+        .bind(title)
+        .bind(&id)
+        .execute(&state.db)
+        .await?;
+    conversation(&state.db, &id, &user.id).await.map(axum::Json)
 }
 
 async fn create_group(
@@ -2747,6 +2771,86 @@ mod tests {
         assert_eq!(message_count, 1);
         assert_eq!(group_membership_count, 0);
         assert!(messages.messages[0].message.sender_deleted);
+    }
+
+    #[tokio::test]
+    async fn group_owner_can_rename_a_group_but_members_and_direct_conversations_cannot() {
+        let pool = db::connect_memory().await.unwrap();
+        for user_id in ["owner", "member"] {
+            sqlx::query("INSERT INTO users(id,created_at) VALUES(?,0)")
+                .bind(user_id)
+                .execute(&pool)
+                .await
+                .unwrap();
+            sqlx::query("INSERT INTO profiles(user_id,username,display_name,motto,updated_at) VALUES(?,?,?,'',0)")
+                .bind(user_id)
+                .bind(user_id)
+                .bind(user_id)
+                .execute(&pool)
+                .await
+                .unwrap();
+        }
+        for (id, kind, title) in [("group", "group", "Before"), ("direct", "direct", "")] {
+            sqlx::query(
+                "INSERT INTO conversations(id,kind,title,created_by,created_at) VALUES(?,?,?,?,0)",
+            )
+            .bind(id)
+            .bind(kind)
+            .bind(title)
+            .bind("owner")
+            .execute(&pool)
+            .await
+            .unwrap();
+        }
+        sqlx::query("INSERT INTO conversation_members(conversation_id,user_id,role,joined_at) VALUES('group','owner','owner',0),('group','member','member',0),('direct','owner','member',0)")
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        let renamed = update_group_title(
+            State(test_state(pool.clone())),
+            axum::Extension(UserIdentity { id: "owner".into() }),
+            Path("group".into()),
+            axum::Json(UpdateGroupTitleInput {
+                title: "  Renamed  ".into(),
+            }),
+        )
+        .await
+        .unwrap()
+        .0;
+        assert_eq!(renamed.title, "Renamed");
+
+        for (conversation_id, user_id) in [("group", "member"), ("direct", "owner")] {
+            let error = match update_group_title(
+                State(test_state(pool.clone())),
+                axum::Extension(UserIdentity { id: user_id.into() }),
+                Path(conversation_id.into()),
+                axum::Json(UpdateGroupTitleInput {
+                    title: "Nope".into(),
+                }),
+            )
+            .await
+            {
+                Ok(_) => panic!("non-owner update unexpectedly succeeded"),
+                Err(error) => error,
+            };
+            assert_eq!(error.status, StatusCode::FORBIDDEN);
+        }
+
+        let error = match update_group_title(
+            State(test_state(pool)),
+            axum::Extension(UserIdentity { id: "owner".into() }),
+            Path("group".into()),
+            axum::Json(UpdateGroupTitleInput {
+                title: "   ".into(),
+            }),
+        )
+        .await
+        {
+            Ok(_) => panic!("blank group name unexpectedly succeeded"),
+            Err(error) => error,
+        };
+        assert_eq!(error.status, StatusCode::BAD_REQUEST);
     }
 
     #[tokio::test]
