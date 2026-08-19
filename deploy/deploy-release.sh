@@ -33,8 +33,23 @@ location ^~ /api/bark/ {
     proxy_set_header X-Forwarded-Proto $scheme;
 }
 NGINX
+install -m 0644 /dev/stdin /etc/nginx/snippets/linkit-events.conf <<'NGINX'
+location = /api/events {
+    proxy_pass http://127.0.0.1:8080;
+    proxy_http_version 1.1;
+    proxy_set_header Host $host;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
+    proxy_buffering off;
+    proxy_cache off;
+    proxy_read_timeout 1h;
+}
+NGINX
 if ! grep -Fq 'include /etc/nginx/snippets/linkit-bark.conf;' /etc/nginx/sites-available/linkit; then
   sed -i '/client_max_body_size 52m;/a\    include /etc/nginx/snippets/linkit-bark.conf;' /etc/nginx/sites-available/linkit
+fi
+if ! grep -Fq 'include /etc/nginx/snippets/linkit-events.conf;' /etc/nginx/sites-available/linkit; then
+  sed -i '/client_max_body_size 52m;/a\    include /etc/nginx/snippets/linkit-events.conf;' /etc/nginx/sites-available/linkit
 fi
 nginx -t
 systemctl reload nginx
