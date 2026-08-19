@@ -98,6 +98,13 @@ export type SystemOverview = {
   }>;
 };
 
+export type BarkNotificationUser = {
+  display_name: string;
+  username: string;
+  device_count: number;
+  last_device_updated_at: number;
+};
+
 export type BarkNotificationSettings = {
   base_url: string;
   devices: Array<{

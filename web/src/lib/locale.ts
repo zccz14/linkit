@@ -57,10 +57,12 @@ const english = {
   "conversation.loadOlder": "Load earlier messages",
   "conversation.loadingOlder": "Loading earlier messages…",
   "conversation.writeMessage": "Write a message…",
-  "conversation.composeHint": "Enter to send · Shift+Enter for a new line · IME Enter confirms composition",
+  "conversation.composeHint":
+    "Enter to send · Shift+Enter for a new line · IME Enter confirms composition",
   "conversation.send": "Send",
   "conversation.urgent": "Urgent",
-  "conversation.urgentNotice": "Recipients with Bark Critical Alerts enabled will be alerted.",
+  "conversation.urgentNotice":
+    "Recipients with Bark Critical Alerts enabled will be alerted.",
   "conversation.bot": "Bot",
   "conversation.deletedBot": "Deleted bot",
   "attachment.loading": "Loading {name}",
@@ -118,34 +120,42 @@ const english = {
   "profileEditor.uploadError": "Upload failed",
   "common.cancel": "Cancel",
   "barkSettings.title": "Notifications",
-  "barkSettings.description": "Receive new Linkit messages outside the browser.",
+  "barkSettings.description":
+    "Receive new Linkit messages outside the browser.",
   "barkSettings.cardTitle": "Bark for iPhone",
-  "barkSettings.cardDescription": "Scan your private Linkit Bark server to bind this iPhone directly to your account.",
+  "barkSettings.cardDescription":
+    "Scan your private Linkit Bark server to bind this iPhone directly to your account.",
   "barkSettings.iosPrompt": "On iPhone, install Bark first:",
   "barkSettings.downloadBark": "Download Bark from the App Store",
   "barkSettings.baseUrl": "Private Bark server URL",
-  "barkSettings.baseUrlHint": "Scan this URL in Bark's Add Server screen. Treat it as a private device-binding credential.",
+  "barkSettings.baseUrlHint":
+    "Scan this URL in Bark's Add Server screen. Treat it as a private device-binding credential.",
   "barkSettings.copy": "Copy URL",
   "barkSettings.copied": "Bark server URL copied",
   "barkSettings.copyFailed": "Could not copy the Bark server URL",
   "barkSettings.scanTitle": "Scan in Bark",
   "barkSettings.scanDescription": "Add a server in Bark, then scan this code.",
   "barkSettings.devicesTitle": "Bound devices",
-  "barkSettings.devicesDescription": "Linkit sends chat alerts directly to these Bark devices through APNs.",
+  "barkSettings.devicesDescription":
+    "Linkit sends chat alerts directly to these Bark devices through APNs.",
   "barkSettings.device": "Bark device",
   "barkSettings.removeDevice": "Remove device",
   "barkSettings.deviceRemoved": "Bark device removed",
-  "barkSettings.noDevices": "No Bark devices are bound yet. Scan the code on your iPhone to connect one.",
+  "barkSettings.noDevices":
+    "No Bark devices are bound yet. Scan the code on your iPhone to connect one.",
   "barkSettings.loading": "Preparing your private server…",
-  "barkSettings.apnsUnavailable": "Bark APNs delivery is not configured on this Linkit server.",
+  "barkSettings.apnsUnavailable":
+    "Bark APNs delivery is not configured on this Linkit server.",
   "barkSettings.reset": "Generate a new URL",
   "barkSettings.resetDone": "A new Bark server URL is ready",
   "barkSettings.resetConfirmTitle": "Generate a new Bark server URL?",
-  "barkSettings.resetConfirmDescription": "This removes currently bound devices. Scan the new code in Bark to reconnect them.",
+  "barkSettings.resetConfirmDescription":
+    "This removes currently bound devices. Scan the new code in Bark to reconnect them.",
   "barkSettings.revoke": "Revoke devices",
   "barkSettings.revoked": "Bark devices and server URL revoked",
   "barkSettings.revokeConfirmTitle": "Revoke all Bark devices?",
-  "barkSettings.revokeConfirmDescription": "Current devices will stop receiving Linkit notifications. You can create a new private server URL afterward.",
+  "barkSettings.revokeConfirmDescription":
+    "Current devices will stop receiving Linkit notifications. You can create a new private server URL afterward.",
   "admin.title": "System overview",
   "admin.description":
     "Live host resources for this Linkit instance. Refreshes every 5 seconds.",
@@ -161,6 +171,17 @@ const english = {
   "admin.mountPoint": "Mount point",
   "admin.available": "Available",
   "admin.updated": "Updated {time}",
+  "admin.barkUsers": "Bark users",
+  "admin.barkUsersDescription":
+    "Accounts with at least one bound Bark notification device.",
+  "admin.barkUsersTitle": "Bark notification users",
+  "admin.barkUsersPageDescription":
+    "Only accounts with an active Bark device binding are shown. Private device credentials are never displayed.",
+  "admin.barkUsersEmptyTitle": "No Bark users yet",
+  "admin.barkUsersEmptyDescription":
+    "Bound Bark notification devices will appear here when users connect them.",
+  "admin.barkUsersDevices": "{count} devices",
+  "admin.barkUsersLastUpdated": "Last device update {time}",
 } as const;
 
 export type TranslationKey = keyof typeof english;
@@ -218,10 +239,12 @@ const chinese: Record<TranslationKey, string> = {
   "conversation.loadOlder": "加载更早的消息",
   "conversation.loadingOlder": "正在加载更早的消息…",
   "conversation.writeMessage": "输入消息…",
-  "conversation.composeHint": "Enter 发送 · Shift+Enter 换行 · 输入法确认候选时不会发送",
+  "conversation.composeHint":
+    "Enter 发送 · Shift+Enter 换行 · 输入法确认候选时不会发送",
   "conversation.send": "发送",
   "conversation.urgent": "加急",
-  "conversation.urgentNotice": "仅已在 Bark 中开启严重提醒权限的接收者会收到加急提醒。",
+  "conversation.urgentNotice":
+    "仅已在 Bark 中开启严重提醒权限的接收者会收到加急提醒。",
   "conversation.bot": "机器人",
   "conversation.deletedBot": "该机器人已被删除",
   "attachment.loading": "正在加载 {name}",
@@ -279,32 +302,38 @@ const chinese: Record<TranslationKey, string> = {
   "barkSettings.title": "通知",
   "barkSettings.description": "即使不打开浏览器，也能收到新的 Linkit 消息。",
   "barkSettings.cardTitle": "iPhone Bark 通知",
-  "barkSettings.cardDescription": "扫码连接你的专属 Linkit Bark Server，将这台 iPhone 直接绑定到当前账户。",
+  "barkSettings.cardDescription":
+    "扫码连接你的专属 Linkit Bark Server，将这台 iPhone 直接绑定到当前账户。",
   "barkSettings.iosPrompt": "请先在 iPhone 上安装 Bark：",
   "barkSettings.downloadBark": "从 App Store 下载 Bark",
   "barkSettings.baseUrl": "专属 Bark Server URL",
-  "barkSettings.baseUrlHint": "在 Bark 的添加服务器页面扫描此 URL。它是私密的设备绑定凭证，请勿公开分享。",
+  "barkSettings.baseUrlHint":
+    "在 Bark 的添加服务器页面扫描此 URL。它是私密的设备绑定凭证，请勿公开分享。",
   "barkSettings.copy": "复制 URL",
   "barkSettings.copied": "已复制 Bark Server URL",
   "barkSettings.copyFailed": "无法复制 Bark Server URL",
   "barkSettings.scanTitle": "在 Bark 中扫码",
   "barkSettings.scanDescription": "在 Bark 添加服务器，然后扫描此二维码。",
   "barkSettings.devicesTitle": "已绑定设备",
-  "barkSettings.devicesDescription": "Linkit 会通过 APNs 直接向这些 Bark 设备发送聊天提醒。",
+  "barkSettings.devicesDescription":
+    "Linkit 会通过 APNs 直接向这些 Bark 设备发送聊天提醒。",
   "barkSettings.device": "Bark 设备",
   "barkSettings.removeDevice": "移除设备",
   "barkSettings.deviceRemoved": "已移除 Bark 设备",
-  "barkSettings.noDevices": "尚未绑定 Bark 设备。请在 iPhone 上扫描二维码进行连接。",
+  "barkSettings.noDevices":
+    "尚未绑定 Bark 设备。请在 iPhone 上扫描二维码进行连接。",
   "barkSettings.loading": "正在准备专属服务器…",
   "barkSettings.apnsUnavailable": "此 Linkit 服务器尚未配置 Bark APNs 投递。",
   "barkSettings.reset": "生成新 URL",
   "barkSettings.resetDone": "新的 Bark Server URL 已就绪",
   "barkSettings.resetConfirmTitle": "生成新的 Bark Server URL？",
-  "barkSettings.resetConfirmDescription": "这会移除当前已绑定的设备；请在 Bark 中扫描新二维码重新连接。",
+  "barkSettings.resetConfirmDescription":
+    "这会移除当前已绑定的设备；请在 Bark 中扫描新二维码重新连接。",
   "barkSettings.revoke": "撤销设备",
   "barkSettings.revoked": "已撤销 Bark 设备和 Server URL",
   "barkSettings.revokeConfirmTitle": "撤销所有 Bark 设备？",
-  "barkSettings.revokeConfirmDescription": "当前设备将停止接收 Linkit 通知，之后可以重新创建专属 Server URL。",
+  "barkSettings.revokeConfirmDescription":
+    "当前设备将停止接收 Linkit 通知，之后可以重新创建专属 Server URL。",
   "admin.title": "系统概况",
   "admin.description": "此 Linkit 实例的实时主机资源，每 5 秒刷新。",
   "admin.cpu": "CPU",
@@ -319,6 +348,15 @@ const chinese: Record<TranslationKey, string> = {
   "admin.mountPoint": "挂载点",
   "admin.available": "可用",
   "admin.updated": "更新于 {time}",
+  "admin.barkUsers": "Bark 用户",
+  "admin.barkUsersDescription": "至少绑定了一台 Bark 通知设备的账户。",
+  "admin.barkUsersTitle": "Bark 通知用户",
+  "admin.barkUsersPageDescription":
+    "这里只显示已绑定有效 Bark 设备的账户；不会显示任何设备凭证。",
+  "admin.barkUsersEmptyTitle": "还没有 Bark 用户",
+  "admin.barkUsersEmptyDescription": "用户绑定 Bark 通知设备后会显示在这里。",
+  "admin.barkUsersDevices": "{count} 台设备",
+  "admin.barkUsersLastUpdated": "最近设备更新于 {time}",
 };
 
 export const translations = {

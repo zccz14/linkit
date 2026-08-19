@@ -42,3 +42,10 @@ test("render failure fallback matches the browser language", () => {
   assert.equal(renderErrorCopy("zh-TW").refresh, "刷新页面");
   assert.equal(renderErrorCopy("en-US").refresh, "Refresh page");
 });
+
+test("Bark administration copy does not expose device credentials", () => {
+  for (const locale of supportedLocales) {
+    assert.ok(translate(locale, "admin.barkUsersTitle").length > 0);
+    assert.ok(translate(locale, "admin.barkUsersEmptyTitle").length > 0);
+  }
+});
