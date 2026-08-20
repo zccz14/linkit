@@ -53,6 +53,13 @@ For a group, add the Bot in the owner-managed group path and supply its
 See [the Bot direct-message guide](docs/bot-direct-messages.md) for the full
 creation flow, token handling, response contract, and error handling.
 
+## External profile lookup
+
+Downstream products may resolve a known Auth Mini user ID to Linkit's minimal
+public display profile: username, display name, and an optional safe avatar URL.
+The API has no list or search endpoint and does not expose motto, messages, or
+notification data. See [the external profile API guide](docs/public-profile-api.md).
+
 ## Bark device binding
 
 Linkit sends conversation and Bot notifications directly to Bark on iPhone
