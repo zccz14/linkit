@@ -130,6 +130,11 @@ pub fn router(state: AppState) -> Router {
     Router::new()
         .route("/api/health", get(health))
         .route("/api/config", get(public_config))
+        .route("/api/public/profiles/{user_id}", get(public_profile))
+        .route(
+            "/api/public/profiles/{user_id}/avatar",
+            get(public_profile_avatar),
+        )
         .route("/api/setup", get(setup_status).post(setup))
         .route("/bot/v1/messages", post(bot_send_message))
         .route("/api/bark/b/{capability}/ping", get(bark_binding_ping))
@@ -491,6 +496,83 @@ struct Profile {
 
 async fn profile_for_user(db: &SqlitePool, user_id: &str) -> Result<Option<Profile>, AppError> {
     Ok(sqlx::query_as("SELECT user_id,username,display_name,motto,avatar_attachment_id,updated_at FROM profiles WHERE user_id=?").bind(user_id).fetch_optional(db).await?)
+}
+
+#[derive(Debug, Serialize)]
+struct PublicProfile {
+    user_id: String,
+    username: String,
+    display_name: String,
+    avatar_url: Option<String>,
+}
+
+async fn public_profile(
+    State(state): State<AppState>,
+    Path(user_id): Path<String>,
+) -> Result<axum::Json<PublicProfile>, AppError> {
+    let public_origin = meta(&state.db, "public_origin").await?;
+    let profile = sqlx::query_as::<_, (String, String, String, Option<String>)>(
+        "SELECT p.user_id,p.username,p.display_name,
+                CASE WHEN EXISTS(
+                    SELECT 1 FROM attachments a
+                    WHERE a.id=p.avatar_attachment_id
+                      AND a.owner_user_id=p.user_id
+                      AND a.media_type LIKE 'image/%'
+                ) THEN p.avatar_attachment_id END
+         FROM profiles p WHERE p.user_id=?",
+    )
+    .bind(&user_id)
+    .fetch_optional(&state.db)
+    .await?
+    .ok_or_else(|| AppError::not_found("user not found"))?;
+    Ok(axum::Json(PublicProfile {
+        user_id: profile.0,
+        username: profile.1,
+        display_name: profile.2,
+        avatar_url: profile
+            .3
+            .map(|_| public_profile_avatar_url(&public_origin, &user_id)),
+    }))
+}
+
+fn public_profile_avatar_url(public_origin: &str, user_id: &str) -> String {
+    let mut url = url::Url::parse(public_origin).expect("configured public origin is valid");
+    url.path_segments_mut()
+        .expect("configured public origin is a base URL")
+        .extend(["api", "public", "profiles", user_id, "avatar"]);
+    url.into()
+}
+
+async fn public_profile_avatar(
+    State(state): State<AppState>,
+    Path(user_id): Path<String>,
+) -> Result<Response, AppError> {
+    let row: Option<(String, String, String)> = sqlx::query_as(
+        "SELECT a.storage_name,a.file_name,a.media_type
+         FROM profiles p
+         JOIN attachments a ON a.id=p.avatar_attachment_id
+         WHERE p.user_id=?
+           AND a.owner_user_id=p.user_id
+           AND a.media_type LIKE 'image/%'",
+    )
+    .bind(user_id)
+    .fetch_optional(&state.db)
+    .await?;
+    let Some((storage_name, file_name, media_type)) = row else {
+        return Err(AppError::not_found("avatar not found"));
+    };
+    let bytes = tokio::fs::read(state.uploads.join(storage_name)).await?;
+    Ok((
+        [
+            (header::CONTENT_TYPE, media_type),
+            (
+                header::CONTENT_DISPOSITION,
+                format!("inline; filename=\"{}\"", file_name.replace('"', "_")),
+            ),
+        ],
+        Body::from(bytes),
+    )
+        .into_response())
 }
 
 #[derive(Serialize)]
@@ -2137,6 +2219,120 @@ mod tests {
             system_monitor: Arc::new(Mutex::new(SystemMonitor::new())),
             events,
         }
+    }
+
+    #[tokio::test]
+    async fn public_profile_lookup_exposes_only_display_fields_and_a_safe_avatar_url() {
+        let pool = db::connect_memory().await.unwrap();
+        sqlx::query(
+            "UPDATE app_meta SET value='https://linkit.example.test' WHERE key='public_origin'",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query("INSERT INTO users(id,created_at) VALUES('user /?#',0)")
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query("INSERT INTO profiles(user_id,username,display_name,motto,avatar_attachment_id,updated_at) VALUES('user /?#','alice','Alice','private motto','avatar',0)")
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query("INSERT INTO attachments(id,owner_user_id,file_name,media_type,byte_size,storage_name,created_at) VALUES('avatar','user /?#','avatar.png','image/png',1,'public-profile-avatar',0)")
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        let profile = public_profile(State(test_state(pool)), Path("user /?#".into()))
+            .await
+            .unwrap()
+            .0;
+        let payload = serde_json::to_value(&profile).unwrap();
+        assert_eq!(payload["user_id"], "user /?#");
+        assert_eq!(payload["username"], "alice");
+        assert_eq!(payload["display_name"], "Alice");
+        assert_eq!(
+            payload["avatar_url"],
+            "https://linkit.example.test/api/public/profiles/user%20%2F%3F%23/avatar"
+        );
+        assert!(payload.get("motto").is_none());
+        assert!(payload.get("avatar_attachment_id").is_none());
+    }
+
+    #[tokio::test]
+    async fn public_profile_lookup_returns_null_without_an_avatar_and_404_for_unknown_users() {
+        let pool = db::connect_memory().await.unwrap();
+        sqlx::query(
+            "UPDATE app_meta SET value='https://linkit.example.test' WHERE key='public_origin'",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query("INSERT INTO users(id,created_at) VALUES('alice',0)")
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query("INSERT INTO profiles(user_id,username,display_name,motto,updated_at) VALUES('alice','alice','Alice','',0)")
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        let profile = public_profile(State(test_state(pool.clone())), Path("alice".into()))
+            .await
+            .unwrap()
+            .0;
+        assert!(profile.avatar_url.is_none());
+        let error = public_profile(State(test_state(pool)), Path("unknown".into()))
+            .await
+            .unwrap_err();
+        assert_eq!(error.status, StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn public_profile_avatar_serves_only_the_profile_image_attachment() {
+        let pool = db::connect_memory().await.unwrap();
+        sqlx::query("INSERT INTO users(id,created_at) VALUES('alice',0),('bob',0)")
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query("INSERT INTO profiles(user_id,username,display_name,motto,avatar_attachment_id,updated_at) VALUES('alice','alice','Alice','', 'avatar',0)")
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query("INSERT INTO attachments(id,owner_user_id,file_name,media_type,byte_size,storage_name,created_at) VALUES('avatar','alice','avatar.png','image/png',1,'linkit-public-avatar-test',0),('private','bob','private.png','image/png',1,'linkit-private-avatar-test',0)")
+            .execute(&pool)
+            .await
+            .unwrap();
+        let uploads = std::env::temp_dir().join(Uuid::new_v4().to_string());
+        std::fs::create_dir(&uploads).unwrap();
+        std::fs::write(uploads.join("linkit-public-avatar-test"), [7_u8]).unwrap();
+        std::fs::write(uploads.join("linkit-private-avatar-test"), [9_u8]).unwrap();
+        let mut state = test_state(pool);
+        state.uploads = Arc::new(uploads.clone());
+
+        let response = public_profile_avatar(State(state.clone()), Path("alice".into()))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            response
+                .into_body()
+                .collect()
+                .await
+                .unwrap()
+                .to_bytes()
+                .as_ref(),
+            [7_u8]
+        );
+        sqlx::query("UPDATE profiles SET avatar_attachment_id='private' WHERE user_id='alice'")
+            .execute(&state.db)
+            .await
+            .unwrap();
+        let error = public_profile_avatar(State(state), Path("alice".into()))
+            .await
+            .unwrap_err();
+        assert_eq!(error.status, StatusCode::NOT_FOUND);
+        std::fs::remove_dir_all(uploads).unwrap();
     }
 
     #[test]
