@@ -4,7 +4,7 @@ import test from "node:test";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 
-import { renamedConversationDetail } from "../src/lib/conversation.ts";
+import { updatedConversationDetail } from "../src/lib/conversation.ts";
 import { MessageMarkdown } from "../src/lib/message-markdown.ts";
 import {
   safeMarkdownUrl,
@@ -75,8 +75,8 @@ test("renaming a group updates the loaded conversation cache without changing me
     members: [{ user_id: "owner", username: "owner", display_name: "Owner", role: "owner" }],
     bots: [],
   };
-  const renamed = renamedConversationDetail(conversation, "After");
+  const renamed = updatedConversationDetail(conversation, { title: "After", avatar_attachment_id: undefined });
   assert.equal(renamed?.title, "After");
   assert.deepEqual(renamed?.members, conversation.members);
-  assert.equal(renamedConversationDetail(undefined, "After"), undefined);
+  assert.equal(updatedConversationDetail(undefined, { title: "After", avatar_attachment_id: undefined }), undefined);
 });

@@ -104,7 +104,7 @@ import { Separator } from "@/components/ui/separator";
 import { Toaster } from "@/components/ui/sonner";
 import { Textarea } from "@/components/ui/textarea";
 import { useIsMobile } from "@/hooks/use-mobile";
-import { renamedConversationDetail } from "@/lib/conversation";
+import { updatedConversationDetail } from "@/lib/conversation";
 import { MessageMarkdown } from "@/lib/message-markdown";
 import { shouldSendMessageOnEnter } from "@/lib/message";
 import {
@@ -668,11 +668,13 @@ function ConversationAvatar({
   const { t } = useI18n();
   if (conversation.kind === "group")
     return (
-      <Avatar>
-        <AvatarFallback aria-label={t("group.title")}>
-          <UsersRoundIcon />
-        </AvatarFallback>
-      </Avatar>
+      <ProfileAvatar
+        sdk={sdk}
+        profile={{
+          display_name: conversation.title || t("group.title"),
+          avatar_attachment_id: conversation.avatar_attachment_id,
+        }}
+      />
     );
   return (
     <ProfileAvatar
@@ -1164,9 +1166,13 @@ function GroupManagementContent({
   const { t } = useI18n();
   const queryClient = useQueryClient();
   const [groupTitle, setGroupTitle] = useState(detail.title);
+  const [groupAvatar, setGroupAvatar] = useState(detail.avatar_attachment_id ?? "");
   const [username, setUsername] = useState("");
   const [botId, setBotId] = useState("");
-  useEffect(() => setGroupTitle(detail.title), [detail.id, detail.title]);
+  useEffect(() => {
+    setGroupTitle(detail.title);
+    setGroupAvatar(detail.avatar_attachment_id ?? "");
+  }, [detail.avatar_attachment_id, detail.id, detail.title]);
   const bots = useQuery({
     queryKey: ["bots"],
     queryFn: () => api<Bot[]>(sdk, "/api/bots"),
@@ -1175,23 +1181,39 @@ function GroupManagementContent({
     void queryClient.invalidateQueries({
       queryKey: ["conversation", detail.id],
     });
-  const renameGroup = useMutation({
-    mutationFn: () =>
+  const updateGroup = useMutation({
+    mutationFn: (input: { title?: string; avatar_attachment_id?: string | null }) =>
       api<Conversation>(sdk, `/api/conversations/${detail.id}`, {
         method: "PATCH",
-        body: JSON.stringify({ title: groupTitle }),
+        body: JSON.stringify(input),
       }),
     onSuccess: (conversation) => {
       setGroupTitle(conversation.title);
+      setGroupAvatar(conversation.avatar_attachment_id ?? "");
       queryClient.setQueryData<ConversationDetail>(
         ["conversation", detail.id],
-        (current) => renamedConversationDetail(current, conversation.title),
+        (current) => updatedConversationDetail(current, conversation),
       );
       void queryClient.invalidateQueries({ queryKey: ["conversations"] });
-      toast.success(t("conversation.groupNameSaved"));
     },
     onError: (error) => toast.error(error.message),
   });
+  const saveGroupTitle = () => {
+    if (!groupTitle.trim()) return;
+    updateGroup.mutate({ title: groupTitle });
+  };
+  const chooseGroupAvatar = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.currentTarget.files?.[0];
+    event.currentTarget.value = "";
+    if (!file) return;
+    try {
+      const attachment = await upload(sdk, file);
+      updateGroup.mutate({ avatar_attachment_id: attachment.id });
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : t("profileEditor.uploadError"));
+    }
+  };
+
   const addMember = useMutation({
     mutationFn: () =>
       api(sdk, `/api/conversations/${detail.id}/members`, {
@@ -1254,7 +1276,7 @@ function GroupManagementContent({
               className="flex gap-2"
               onSubmit={(event) => {
                 event.preventDefault();
-                if (groupTitle.trim()) renameGroup.mutate();
+                saveGroupTitle();
               }}
             >
               <Input
@@ -1266,11 +1288,41 @@ function GroupManagementContent({
               />
               <Button
                 type="submit"
-                disabled={!groupTitle.trim() || renameGroup.isPending}
+                disabled={!groupTitle.trim() || updateGroup.isPending}
               >
                 {t("conversation.saveGroupName")}
               </Button>
             </form>
+            <Field>
+              <FieldLabel htmlFor="group-avatar">{t("conversation.groupAvatar")}</FieldLabel>
+              <div className="flex items-center gap-3">
+                <ProfileAvatar
+                  sdk={sdk}
+                  profile={{
+                    display_name: detail.title,
+                    avatar_attachment_id: groupAvatar || undefined,
+                  }}
+                />
+                <Input
+                  id="group-avatar"
+                  type="file"
+                  accept="image/*"
+                  disabled={updateGroup.isPending}
+                  onChange={(event) => void chooseGroupAvatar(event)}
+                />
+                {groupAvatar ? (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    disabled={updateGroup.isPending}
+                    onClick={() => updateGroup.mutate({ avatar_attachment_id: null })}
+                  >
+                    {t("conversation.removeGroupAvatar")}
+                  </Button>
+                ) : null}
+              </div>
+              <FieldDescription>{t("conversation.groupAvatarHint")}</FieldDescription>
+            </Field>
           </section>
         ) : null}
         {isOwner ? <Separator /> : null}

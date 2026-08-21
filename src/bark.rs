@@ -59,6 +59,7 @@ pub struct PushInput {
     pub group: String,
     pub id: Option<String>,
     pub url: String,
+    pub icon: String,
     pub urgent: bool,
 }
 
@@ -69,6 +70,7 @@ impl PushInput {
         group: String,
         id: Option<String>,
         url: String,
+        icon: String,
         urgent: bool,
     ) -> Self {
         Self {
@@ -77,6 +79,7 @@ impl PushInput {
             group,
             id,
             url,
+            icon,
             urgent,
         }
     }
@@ -94,7 +97,8 @@ impl PushInput {
         if self.urgent {
             aps.insert("interruption-level".to_owned(), json!("critical"));
         }
-        let payload = serde_json::to_vec(&json!({ "aps": aps, "url": self.url }))?;
+        let payload =
+            serde_json::to_vec(&json!({ "aps": aps, "url": self.url, "icon": self.icon }))?;
         if payload.len() > APNS_PAYLOAD_MAX_BYTES {
             bail!("notification exceeds the APNs 4 KiB payload limit");
         }
@@ -349,6 +353,7 @@ mod tests {
             "conversation".to_owned(),
             Some("message".to_owned()),
             "https://linkit.test/#/conversations/conversation".to_owned(),
+            "https://linkit.test/linkit-logo.png".to_owned(),
             false,
         );
         assert!(push.apns_payload().unwrap().len() <= APNS_PAYLOAD_MAX_BYTES);
@@ -362,6 +367,7 @@ mod tests {
             "conversation".to_owned(),
             Some("message".to_owned()),
             "https://linkit.test/#/conversations/conversation".to_owned(),
+            "https://linkit.test/linkit-logo.png".to_owned(),
             false,
         );
         let payload: serde_json::Value =
@@ -371,6 +377,7 @@ mod tests {
             "https://linkit.test/#/conversations/conversation"
         );
         assert_eq!(payload["aps"]["thread-id"], "conversation");
+        assert_eq!(payload["icon"], "https://linkit.test/linkit-logo.png");
         assert_eq!(push.id.as_deref(), Some("message"));
     }
 
@@ -382,6 +389,7 @@ mod tests {
             "conversation".to_owned(),
             Some("message".to_owned()),
             "https://linkit.test/#/conversations/conversation".to_owned(),
+            "https://linkit.test/linkit-logo.png".to_owned(),
             true,
         );
         let ordinary = PushInput::message(
@@ -390,6 +398,7 @@ mod tests {
             "conversation".to_owned(),
             Some("message".to_owned()),
             "https://linkit.test/#/conversations/conversation".to_owned(),
+            "https://linkit.test/linkit-logo.png".to_owned(),
             false,
         );
         let urgent_payload: serde_json::Value =

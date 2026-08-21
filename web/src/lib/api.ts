@@ -21,6 +21,7 @@ export type Conversation = {
   id: string;
   kind: "direct" | "group";
   title: string;
+  avatar_attachment_id?: string;
   counterpart_name?: string;
   counterpart_avatar_attachment_id?: string;
   created_by: string;

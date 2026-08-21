@@ -1,8 +1,8 @@
-import type { ConversationDetail } from "@/lib/api";
+import type { Conversation, ConversationDetail } from "@/lib/api";
 
-export function renamedConversationDetail(
+export function updatedConversationDetail(
   conversation: ConversationDetail | undefined,
-  title: string,
+  update: Pick<Conversation, "title" | "avatar_attachment_id">,
 ) {
-  return conversation ? { ...conversation, title } : conversation;
+  return conversation ? { ...conversation, ...update } : conversation;
 }
