@@ -2522,7 +2522,7 @@ mod tests {
             .decode()
             .unwrap();
         assert_eq!((image.width(), image.height()), (AVATAR_EDGE, AVATAR_EDGE));
-        assert_eq!(image.color().has_alpha(), true);
+        assert!(image.color().has_alpha());
     }
 
     #[tokio::test]
