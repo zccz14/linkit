@@ -3,3 +3,6 @@
 /web/node_modules
 /.DS_Store
 
+
+/packages/linkit-react-components/node_modules
+/packages/linkit-react-components/dist
