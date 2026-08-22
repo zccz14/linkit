@@ -141,6 +141,7 @@ pub fn router(state: AppState) -> Router {
         )
         .route("/api/setup", get(setup_status).post(setup))
         .route("/bot/v1/messages", post(bot_send_message))
+        .route("/bot/v1/conversations/{id}", get(bot_conversation))
         .route("/api/bark/b/{capability}/ping", get(bark_binding_ping))
         .route(
             "/api/bark/b/{capability}/register",
@@ -1128,6 +1129,7 @@ async fn send_message(
             attachment_ids: input.attachment_ids,
             urgent: input.urgent,
             attachment_owner: Some(&user.id),
+            client_message_id: None,
         },
     )
     .await?;
@@ -1411,6 +1413,27 @@ struct BotMessageInput {
     attachment_ids: Option<Vec<String>>,
     #[serde(default)]
     urgent: bool,
+    client_message_id: Option<String>,
+}
+
+#[derive(Serialize, FromRow)]
+struct BotConversation {
+    id: String,
+    kind: String,
+    title: String,
+}
+
+async fn bot_conversation(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+) -> Result<axum::Json<BotConversation>, AppError> {
+    let bot = bot_from_headers(&state.db, &headers).await?;
+    let conversation: Option<BotConversation> = sqlx::query_as("SELECT c.id,c.kind,c.title FROM conversations c JOIN conversation_bots cb ON cb.conversation_id=c.id WHERE c.id=? AND cb.bot_id=?")
+        .bind(&id).bind(&bot.id).fetch_optional(&state.db).await?;
+    conversation
+        .map(axum::Json)
+        .ok_or_else(|| AppError::forbidden("bot is not a member of this conversation"))
 }
 
 async fn bot_send_message(
@@ -1442,6 +1465,7 @@ async fn bot_send_message(
             attachment_ids: input.attachment_ids.unwrap_or_default(),
             urgent: input.urgent,
             attachment_owner: None,
+            client_message_id: input.client_message_id,
         },
     )
     .await?;
@@ -1877,6 +1901,7 @@ struct NewMessage<'a> {
     attachment_ids: Vec<String>,
     urgent: bool,
     attachment_owner: Option<&'a str>,
+    client_message_id: Option<String>,
 }
 
 async fn create_message(db: &SqlitePool, input: NewMessage<'_>) -> Result<Message, AppError> {
@@ -1888,12 +1913,24 @@ async fn create_message(db: &SqlitePool, input: NewMessage<'_>) -> Result<Messag
         attachment_ids,
         urgent,
         attachment_owner,
+        client_message_id,
     } = input;
+    let client_message_id = client_message_id
+        .map(|value| bounded(&value, "client_message_id", 200))
+        .transpose()?
+        .filter(|value| !value.trim().is_empty());
     let body = bounded(&body, "body", 10_000)?;
     if body.trim().is_empty() && attachment_ids.is_empty() {
         return Err(AppError::bad_request(
             "a message needs text or an attachment",
         ));
+    }
+    if let Some(client_message_id) = &client_message_id {
+        let existing: Option<String> = sqlx::query_scalar("SELECT id FROM messages WHERE conversation_id=? AND sender_kind=? AND sender_id=? AND client_message_id=?")
+            .bind(conversation_id).bind(sender_kind).bind(sender_id).bind(client_message_id).fetch_optional(db).await?;
+        if let Some(id) = existing {
+            return message(db, &id).await;
+        }
     }
     let now = chrono::Utc::now().timestamp();
     let id = Uuid::new_v4().to_string();
@@ -1924,7 +1961,7 @@ async fn create_message(db: &SqlitePool, input: NewMessage<'_>) -> Result<Messag
     let sequence: i64 = sqlx::query_scalar("SELECT last_insert_rowid()")
         .fetch_one(&mut *tx)
         .await?;
-    sqlx::query("INSERT INTO messages(id,conversation_id,sender_kind,sender_id,body,urgent,created_at,sequence) VALUES(?,?,?,?,?,?,?,?)")
+    sqlx::query("INSERT INTO messages(id,conversation_id,sender_kind,sender_id,body,urgent,created_at,sequence,client_message_id) VALUES(?,?,?,?,?,?,?,?,?)")
         .bind(&id)
         .bind(conversation_id)
         .bind(sender_kind)
@@ -1933,6 +1970,7 @@ async fn create_message(db: &SqlitePool, input: NewMessage<'_>) -> Result<Messag
         .bind(urgent)
         .bind(now)
         .bind(sequence)
+        .bind(client_message_id)
         .execute(&mut *tx)
         .await?;
     for attachment_id in attachment_ids {
@@ -2513,6 +2551,7 @@ mod tests {
                 attachment_ids: Vec::new(),
                 urgent: true,
                 attachment_owner: Some("alice"),
+                client_message_id: None,
             },
         )
         .await
@@ -2527,6 +2566,7 @@ mod tests {
                 attachment_ids: Vec::new(),
                 urgent: false,
                 attachment_owner: None,
+                client_message_id: None,
             },
         )
         .await

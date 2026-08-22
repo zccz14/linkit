@@ -82,3 +82,17 @@ curl --fail-with-body https://linkit.ntnl.io/bot/v1/messages \
 | 401 | Token 缺失、不是 `Bearer` 格式，或 Token 已失效。 | 使用当前 Owner 持有的 Bot Token。 |
 | 403 | Bot 未加入指定的群聊。 | 由 Bot Owner 先将 Bot 加入该群。 |
 | 404 | `recipient_username` 不存在。 | 确认该用户已存在于 Linkit。 |
+
+## 群聊预检与幂等发送
+
+Bot 可先调用 `GET /bot/v1/conversations/{conversation_id}`。该请求仅在 Bot 已加入目标会话时返回会话的 `id`、`kind` 和 `title`；外部信号发送方应要求 `kind` 为 `group` 后才启用群聊 relay。
+
+外部事件发送方可在 `POST /bot/v1/messages` 中附加可选的 `client_message_id`。该值在同一个 Bot 和会话内是幂等键：重复提交相同值会返回原消息而不会创建第二条消息。它应使用外部系统稳定的事件 ID，不应包含 Bot Token 或其他密钥。
+
+```json
+{
+  "conversation_id": "group-conversation-id",
+  "client_message_id": "bullet-live-signal-id",
+  "body": "Current live signal"
+}
+```
