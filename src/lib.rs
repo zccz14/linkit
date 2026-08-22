@@ -28,7 +28,12 @@ use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use sqlx::{FromRow, SqlitePool};
 use sysinfo::{Disks, Networks, System};
-use tower_http::{compression::CompressionLayer, limit::RequestBodyLimitLayer, trace::TraceLayer};
+use tower_http::{
+    compression::CompressionLayer,
+    cors::{Any, CorsLayer},
+    limit::RequestBodyLimitLayer,
+    trace::TraceLayer,
+};
 use uuid::Uuid;
 
 use crate::{
@@ -62,8 +67,8 @@ impl AppState {
         let complete: bool = meta(&db, "setup_complete").await?.parse()?;
         if complete {
             let issuer = meta(&db, "auth_issuer").await?;
-            let audience = meta(&db, "auth_audience").await?;
-            auth.configure(&issuer, &audience).await?;
+            let audiences = auth_audiences(&db).await?;
+            auth.configure(&issuer, &audiences).await?;
         }
         let (events, _) = tokio::sync::broadcast::channel(256);
         let bark = bark::BarkGateway::load().unwrap_or_else(|error| {
@@ -136,7 +141,19 @@ pub fn router(state: AppState) -> Router {
             "/api/bots/{id}/groups/{conversation_id}",
             post(add_bot_to_group).delete(remove_bot_from_group),
         )
-        .route_layer(from_fn_with_state(state.clone(), auth::authenticate));
+        .route_layer(from_fn_with_state(state.clone(), auth::authenticate))
+        .layer(
+            CorsLayer::new()
+                .allow_origin(Any)
+                .allow_methods([
+                    axum::http::Method::GET,
+                    axum::http::Method::POST,
+                    axum::http::Method::PUT,
+                    axum::http::Method::PATCH,
+                    axum::http::Method::DELETE,
+                ])
+                .allow_headers([header::AUTHORIZATION, header::CONTENT_TYPE]),
+        );
 
     Router::new()
         .route("/api/health", get(health))
@@ -442,6 +459,8 @@ struct SetupInput {
     root_user_id: String,
     auth_issuer: String,
     auth_audience: String,
+    #[serde(default)]
+    trusted_auth_audiences: Vec<String>,
     public_origin: String,
 }
 
@@ -455,6 +474,9 @@ async fn setup(
     }
     let issuer = valid_origin(&input.auth_issuer, "Auth Mini issuer")?;
     let audience = valid_audience(&input.auth_audience)?;
+    let trusted_audiences = normalize_trusted_audiences(&audience, input.trusted_auth_audiences)?;
+    let trusted_audiences_json = serde_json::to_string(&trusted_audiences)
+        .map_err(|_| AppError::bad_request("trusted_auth_audiences is not valid"))?;
     let public_origin = valid_origin(&input.public_origin, "public origin")?;
     if input.root_user_id.trim().is_empty() {
         return Err(AppError::bad_request("root_user_id is required"));
@@ -479,6 +501,7 @@ async fn setup(
         ("root_user_id", input.root_user_id.as_str()),
         ("auth_issuer", issuer.as_str()),
         ("auth_audience", audience.as_str()),
+        ("auth_trusted_audiences", trusted_audiences_json.as_str()),
         ("public_origin", public_origin.as_str()),
         ("setup_complete", "true"),
     ] {
@@ -494,7 +517,7 @@ async fn setup(
         .execute(&mut *tx)
         .await?;
     tx.commit().await?;
-    state.auth.configure(&issuer, &audience).await?;
+    state.auth.configure(&issuer, &trusted_audiences).await?;
     Ok(axum::Json(SetupStatus {
         setup_required: false,
     }))
@@ -2422,6 +2445,29 @@ fn valid_audience(value: &str) -> Result<String, AppError> {
     Ok(value)
 }
 
+async fn auth_audiences(db: &SqlitePool) -> Result<Vec<String>, AppError> {
+    let audience = meta(db, "auth_audience").await?;
+    let trusted = meta(db, "auth_trusted_audiences")
+        .await
+        .unwrap_or_else(|_| "[]".to_owned());
+    let values = serde_json::from_str::<Vec<String>>(&trusted).unwrap_or_default();
+    normalize_trusted_audiences(&audience, values)
+}
+
+fn normalize_trusted_audiences(
+    primary: &str,
+    trusted: Vec<String>,
+) -> Result<Vec<String>, AppError> {
+    let mut audiences = vec![valid_audience(primary)?];
+    for value in trusted {
+        let audience = valid_audience(&value)?;
+        if !audiences.contains(&audience) {
+            audiences.push(audience);
+        }
+    }
+    Ok(audiences)
+}
+
 fn direct_key(first: &str, second: &str) -> String {
     if first < second {
         format!("user:{first}:user:{second}")
@@ -2511,6 +2557,61 @@ mod tests {
             .write_to(&mut bytes, image::ImageFormat::Png)
             .unwrap();
         bytes.into_inner()
+    }
+
+    #[test]
+    fn trusted_auth_audiences_include_primary_without_duplicates() {
+        assert_eq!(
+            normalize_trusted_audiences(
+                "linkit.ntnl.io",
+                vec!["1ex.ntnl.io".to_owned(), "linkit.ntnl.io".to_owned()],
+            )
+            .unwrap(),
+            vec!["linkit.ntnl.io", "1ex.ntnl.io"],
+        );
+        assert!(
+            normalize_trusted_audiences("linkit.ntnl.io", vec!["https://evil.example".to_owned()])
+                .is_err()
+        );
+    }
+
+    #[tokio::test]
+    async fn signed_in_api_cors_preflight_allows_bearer_without_credentials() {
+        let app = router(test_state(db::connect_memory().await.unwrap()));
+        let response = app
+            .oneshot(
+                axum::http::Request::builder()
+                    .method("OPTIONS")
+                    .uri("/api/me")
+                    .header(header::ORIGIN, "https://1ex.ntnl.io")
+                    .header(header::ACCESS_CONTROL_REQUEST_METHOD, "GET")
+                    .header(header::ACCESS_CONTROL_REQUEST_HEADERS, "authorization")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            response
+                .headers()
+                .get(header::ACCESS_CONTROL_ALLOW_ORIGIN)
+                .unwrap(),
+            "*"
+        );
+        assert!(
+            response
+                .headers()
+                .get(header::ACCESS_CONTROL_ALLOW_CREDENTIALS)
+                .is_none()
+        );
+        assert!(
+            response.headers()[header::ACCESS_CONTROL_ALLOW_HEADERS]
+                .to_str()
+                .unwrap()
+                .to_ascii_lowercase()
+                .contains("authorization")
+        );
     }
 
     #[test]

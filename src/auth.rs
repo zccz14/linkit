@@ -1,4 +1,4 @@
-use std::{convert::Infallible, sync::Arc};
+use std::sync::Arc;
 
 use auth_mini_axum::{AuthMiniError, AuthMiniLayer, AuthMiniPrincipal, JwksCachePolicy};
 use axum::{
@@ -7,7 +7,6 @@ use axum::{
     response::{IntoResponse, Response},
 };
 use tokio::sync::RwLock;
-use tower::{Layer, ServiceExt, service_fn};
 
 use crate::{AppError, AppState};
 
@@ -18,31 +17,35 @@ pub struct UserIdentity {
 
 #[derive(Clone)]
 pub struct AuthManager {
-    layer: Arc<RwLock<Option<AuthMiniLayer>>>,
+    layers: Arc<RwLock<Vec<AuthMiniLayer>>>,
 }
 
 impl Default for AuthManager {
     fn default() -> Self {
         Self {
-            layer: Arc::new(RwLock::new(None)),
+            layers: Arc::new(RwLock::new(Vec::new())),
         }
     }
 }
 
 impl AuthManager {
-    pub async fn configure(&self, issuer: &str, audience: &str) -> Result<(), AppError> {
-        let layer = AuthMiniLayer::from_issuer(issuer, audience, JwksCachePolicy::default())
-            .await
-            .map_err(auth_error)?;
-        *self.layer.write().await = Some(layer);
+    pub async fn configure(&self, issuer: &str, audiences: &[String]) -> Result<(), AppError> {
+        let mut layers = Vec::with_capacity(audiences.len());
+        for audience in audiences {
+            layers.push(
+                AuthMiniLayer::from_issuer(issuer, audience, JwksCachePolicy::default())
+                    .await
+                    .map_err(auth_error)?,
+            );
+        }
+        *self.layers.write().await = layers;
         Ok(())
     }
 
-    async fn layer(&self) -> Result<AuthMiniLayer, AppError> {
-        self.layer
-            .read()
-            .await
-            .clone()
+    async fn layers(&self) -> Result<Vec<AuthMiniLayer>, AppError> {
+        let layers = self.layers.read().await.clone();
+        (!layers.is_empty())
+            .then_some(layers)
             .ok_or_else(|| AppError::unavailable("Linkit setup is not complete"))
     }
 }
@@ -55,40 +58,60 @@ fn auth_error(error: AuthMiniError) -> AppError {
     }
 }
 
-pub async fn authenticate(State(state): State<AppState>, request: Request, next: Next) -> Response {
-    let layer = match state.auth.layer().await {
-        Ok(layer) => layer,
+pub async fn authenticate(
+    State(state): State<AppState>,
+    mut request: Request,
+    next: Next,
+) -> Response {
+    let token = match bearer_token(request.headers()) {
+        Some(token) => token,
+        None => return AppError::unauthorized("invalid or expired bearer token").into_response(),
+    };
+    let layers = match state.auth.layers().await {
+        Ok(layers) => layers,
         Err(error) => return error.into_response(),
     };
-    let service = layer.layer(service_fn(move |mut request: Request| {
-        let state = state.clone();
-        let next = next.clone();
-        async move {
-            let principal = request
-                .extensions()
-                .get::<AuthMiniPrincipal>()
-                .cloned()
-                .expect("Auth Mini layer inserts a verified principal");
-            let identity = UserIdentity {
-                id: principal.subject,
-            };
-            let now = chrono::Utc::now().timestamp();
-            let result = sqlx::query(
-                "INSERT INTO users(id,created_at) VALUES(?,?) ON CONFLICT(id) DO NOTHING",
-            )
+    let mut jwks_unavailable = false;
+    let mut principal = None;
+    for layer in layers {
+        match layer.verifier().verify(token).await {
+            Ok(value) => {
+                principal = Some(value);
+                break;
+            }
+            Err(AuthMiniError::JwksUnavailable) => jwks_unavailable = true,
+            Err(AuthMiniError::InvalidIssuer | AuthMiniError::InvalidToken) => {}
+        }
+    }
+    let principal: AuthMiniPrincipal = match principal {
+        Some(value) => value,
+        None if jwks_unavailable => {
+            return AppError::unavailable("Auth Mini JWKS is unavailable").into_response();
+        }
+        None => return AppError::unauthorized("invalid or expired bearer token").into_response(),
+    };
+    let identity = UserIdentity {
+        id: principal.subject,
+    };
+    let now = chrono::Utc::now().timestamp();
+    if let Err(error) =
+        sqlx::query("INSERT INTO users(id,created_at) VALUES(?,?) ON CONFLICT(id) DO NOTHING")
             .bind(&identity.id)
             .bind(now)
             .execute(&state.db)
-            .await;
-            if let Err(error) = result {
-                return Ok::<_, Infallible>(AppError::from(error).into_response());
-            }
-            request.extensions_mut().insert(identity);
-            Ok::<_, Infallible>(next.run(request).await)
-        }
-    }));
-    match service.oneshot(request).await {
-        Ok(response) => response,
-        Err(never) => match never {},
+            .await
+    {
+        return AppError::from(error).into_response();
     }
+    request.extensions_mut().insert(identity);
+    next.run(request).await
+}
+
+fn bearer_token(headers: &axum::http::HeaderMap) -> Option<&str> {
+    headers
+        .get(axum::http::header::AUTHORIZATION)?
+        .to_str()
+        .ok()?
+        .strip_prefix("Bearer ")
+        .filter(|token| !token.is_empty())
 }
