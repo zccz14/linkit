@@ -26,6 +26,14 @@ jobs:
       - name: Validate frontend
         working-directory: web
         run: npm ci && npm run check
+      - name: Validate Linkit React components
+        working-directory: packages/linkit-react-components
+        run: |
+          npm ci
+          npm run typecheck
+          npm test
+          npm run build
+          npm run pack:check
       - name: Validate Rust
         run: |
           cargo fmt --check
