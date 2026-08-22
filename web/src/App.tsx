@@ -110,6 +110,7 @@ import { shouldSendMessageOnEnter } from "@/lib/message";
 import {
   api,
   attachmentObjectUrl,
+  avatarObjectUrl,
   openPagePath,
   publicApi,
   subscribeToEvents,
@@ -2008,7 +2009,7 @@ function ProfileEditor({ me, sdk }: { me: Me; sdk: AuthMiniApi }) {
       >
         <FieldGroup>
           <Field>
-            <FieldLabel>{t("profileEditor.avatar")}</FieldLabel>
+            <FieldLabel>{t("profileEditor.avatar")}</FieldLabel><FieldDescription>头像会居中裁剪为方形并压缩为 WebP；原始上传保留，可重新处理。</FieldDescription>
             <div className="flex items-center gap-3">
               <ProfileAvatar
                 sdk={sdk}
@@ -2245,7 +2246,7 @@ function ProfileAvatar({
     }
     let active = true;
     let objectUrl = "";
-    void attachmentObjectUrl(sdk, id)
+    void avatarObjectUrl(sdk, id)
       .then((next) => {
         objectUrl = next;
         if (active) setUrl(next);

@@ -4,6 +4,7 @@ pub mod config;
 pub mod db;
 
 use std::{
+    io::Cursor,
     path::{Path as FilePath, PathBuf},
     sync::{Arc, Mutex},
     time::Instant,
@@ -19,6 +20,7 @@ use axum::{
     response::{IntoResponse, Response},
     routing::{get, patch, post, put},
 };
+use image::{ImageReader, imageops::FilterType};
 use rand::{Rng, distr::Alphanumeric};
 use rust_embed::RustEmbed;
 use serde::{Deserialize, Serialize};
@@ -35,6 +37,9 @@ use crate::{
 };
 
 const MAX_UPLOAD_BYTES: usize = 52_428_800;
+const AVATAR_EDGE: u32 = 256;
+const MAX_AVATAR_PIXELS: u64 = 16_777_216;
+const AVATAR_BACKFILL_INTERVAL: std::time::Duration = std::time::Duration::from_secs(5);
 const BARK_NOTIFICATION_BODY_MAX_BYTES: usize = 3_000;
 const MESSAGE_PAGE_SIZE: i64 = 50;
 const LIST_CONVERSATIONS_QUERY: &str = "SELECT c.id,c.kind,c.title,c.created_by,c.created_at,CASE WHEN c.kind='group' THEN c.avatar_attachment_id END avatar_attachment_id,CASE WHEN c.kind='direct' THEN COALESCE((SELECT p.display_name FROM conversation_members cm_peer JOIN profiles p ON p.user_id=cm_peer.user_id WHERE cm_peer.conversation_id=c.id AND cm_peer.user_id<>? LIMIT 1),(SELECT b.name FROM conversation_bots cb JOIN bots b ON b.id=cb.bot_id WHERE cb.conversation_id=c.id LIMIT 1)) END counterpart_name,CASE WHEN c.kind='direct' THEN (SELECT p.avatar_attachment_id FROM conversation_members cm_peer JOIN profiles p ON p.user_id=cm_peer.user_id WHERE cm_peer.conversation_id=c.id AND cm_peer.user_id<>? LIMIT 1) END counterpart_avatar_attachment_id,(SELECT body FROM messages WHERE conversation_id=c.id ORDER BY created_at DESC LIMIT 1) latest_body,(SELECT created_at FROM messages WHERE conversation_id=c.id ORDER BY created_at DESC LIMIT 1) latest_at,(SELECT COUNT(*) FROM messages WHERE conversation_id=c.id AND created_at>cm.last_read_at AND sender_id<>?) unread_count FROM conversations c JOIN conversation_members cm ON cm.conversation_id=c.id WHERE cm.user_id=? ORDER BY COALESCE(latest_at,c.created_at) DESC";
@@ -65,7 +70,7 @@ impl AppState {
             tracing::error!(%error, "Bark gateway disabled because its APNs configuration is invalid");
             bark::BarkGateway::disabled()
         });
-        Ok(Self {
+        let state = Self {
             db,
             auth,
             uploads: Arc::new(bootstrap.upload_dir),
@@ -73,7 +78,9 @@ impl AppState {
             database_path: Arc::new(bootstrap.database_path),
             system_monitor: Arc::new(Mutex::new(SystemMonitor::new())),
             events,
-        })
+        };
+        schedule_avatar_backfill(state.clone());
+        Ok(state)
     }
 }
 
@@ -119,6 +126,10 @@ pub fn router(state: AppState) -> Router {
             post(upload_attachment).layer(RequestBodyLimitLayer::new(MAX_UPLOAD_BYTES)),
         )
         .route("/api/attachments/{id}/content", get(download_attachment))
+        .route(
+            "/api/attachments/{id}/avatar",
+            get(download_avatar_derivative),
+        )
         .route("/api/bots", get(list_bots).post(create_bot))
         .route("/api/bots/{id}", patch(update_bot).delete(delete_bot))
         .route(
@@ -553,12 +564,10 @@ async fn public_profile_avatar(
     Path(user_id): Path<String>,
 ) -> Result<Response, AppError> {
     let row: Option<(String, String, String)> = sqlx::query_as(
-        "SELECT a.storage_name,a.file_name,a.media_type
-         FROM profiles p
-         JOIN attachments a ON a.id=p.avatar_attachment_id
-         WHERE p.user_id=?
-           AND a.owner_user_id=p.user_id
-           AND a.media_type LIKE 'image/%'",
+        "SELECT COALESCE(d.storage_name,a.storage_name),CASE WHEN d.source_attachment_id IS NULL THEN a.file_name ELSE 'avatar.webp' END,COALESCE(d.media_type,a.media_type)
+         FROM profiles p JOIN attachments a ON a.id=p.avatar_attachment_id
+         LEFT JOIN avatar_derivatives d ON d.source_attachment_id=a.id
+         WHERE p.user_id=? AND a.owner_user_id=p.user_id AND a.media_type LIKE 'image/%'",
     )
     .bind(user_id)
     .fetch_optional(&state.db)
@@ -574,9 +583,9 @@ async fn public_group_avatar(
     Path(id): Path<String>,
 ) -> Result<Response, AppError> {
     let row: Option<(String, String, String)> = sqlx::query_as(
-        "SELECT a.storage_name,a.file_name,a.media_type
-         FROM conversations c
-         JOIN attachments a ON a.id=c.avatar_attachment_id
+        "SELECT COALESCE(d.storage_name,a.storage_name),CASE WHEN d.source_attachment_id IS NULL THEN a.file_name ELSE 'avatar.webp' END,COALESCE(d.media_type,a.media_type)
+         FROM conversations c JOIN attachments a ON a.id=c.avatar_attachment_id
+         LEFT JOIN avatar_derivatives d ON d.source_attachment_id=a.id
          WHERE c.id=? AND c.kind='group' AND a.media_type LIKE 'image/%'",
     )
     .bind(id)
@@ -602,10 +611,127 @@ async fn attachment_inline_response(
                 header::CONTENT_DISPOSITION,
                 format!("inline; filename=\"{}\"", file_name.replace('\"', "_")),
             ),
+            (
+                header::CACHE_CONTROL,
+                "public, max-age=31536000, immutable".to_owned(),
+            ),
+            (header::X_CONTENT_TYPE_OPTIONS, "nosniff".to_owned()),
         ],
         Body::from(bytes),
     )
         .into_response())
+}
+
+async fn download_avatar_derivative(
+    State(state): State<AppState>,
+    axum::Extension(user): axum::Extension<UserIdentity>,
+    Path(id): Path<String>,
+) -> Result<Response, AppError> {
+    let row: Option<(String, String)> = sqlx::query_as(
+        "SELECT d.storage_name,d.media_type FROM avatar_derivatives d WHERE d.source_attachment_id=? AND (EXISTS(SELECT 1 FROM profiles p WHERE p.avatar_attachment_id=d.source_attachment_id) OR EXISTS(SELECT 1 FROM conversations c JOIN conversation_members cm ON cm.conversation_id=c.id WHERE c.avatar_attachment_id=d.source_attachment_id AND c.kind='group' AND cm.user_id=?))",
+    )
+    .bind(&id).bind(&user.id).fetch_optional(&state.db).await?;
+    let Some((storage_name, media_type)) = row else {
+        return Err(AppError::not_found("avatar not found"));
+    };
+    attachment_inline_response(
+        &state.uploads,
+        storage_name,
+        "avatar.webp".to_owned(),
+        media_type,
+    )
+    .await
+}
+
+fn schedule_avatar_backfill(state: AppState) {
+    tokio::spawn(async move {
+        loop {
+            tokio::time::sleep(AVATAR_BACKFILL_INTERVAL).await;
+            let source: Result<Option<(String, String)>, sqlx::Error> = sqlx::query_as(
+                "SELECT a.id,a.owner_user_id FROM attachments a WHERE a.media_type LIKE 'image/%' AND (EXISTS(SELECT 1 FROM profiles p WHERE p.avatar_attachment_id=a.id) OR EXISTS(SELECT 1 FROM conversations c WHERE c.kind='group' AND c.avatar_attachment_id=a.id)) AND NOT EXISTS(SELECT 1 FROM avatar_derivatives d WHERE d.source_attachment_id=a.id) ORDER BY a.created_at LIMIT 1",
+            ).fetch_optional(&state.db).await;
+            match source {
+                Ok(Some((id, owner))) => {
+                    if let Err(error) = normalize_avatar_attachment(&state, &id, &owner).await {
+                        tracing::warn!(%error, attachment_id=%id, "avatar backfill skipped invalid source");
+                    }
+                }
+                Ok(None) => return,
+                Err(error) => tracing::warn!(%error, "avatar backfill query failed"),
+            }
+        }
+    });
+}
+
+async fn normalize_avatar_attachment(
+    state: &AppState,
+    attachment_id: &str,
+    owner_user_id: &str,
+) -> Result<(), AppError> {
+    if sqlx::query_scalar::<_, i64>("SELECT 1 FROM avatar_derivatives WHERE source_attachment_id=?")
+        .bind(attachment_id)
+        .fetch_optional(&state.db)
+        .await?
+        .is_some()
+    {
+        return Ok(());
+    }
+    let source: Option<(String, String, i64)> = sqlx::query_as("SELECT storage_name,media_type,byte_size FROM attachments WHERE id=? AND owner_user_id=? AND media_type LIKE 'image/%'").bind(attachment_id).bind(owner_user_id).fetch_optional(&state.db).await?;
+    let Some((storage_name, media_type, source_byte_size)) = source else {
+        return Err(AppError::bad_request(
+            "avatar_attachment_id must be one of your image uploads",
+        ));
+    };
+    let source_bytes = tokio::fs::read(state.uploads.join(storage_name)).await?;
+    let normalized =
+        tokio::task::spawn_blocking(move || canonical_avatar(&source_bytes, &media_type))
+            .await
+            .map_err(|_| AppError::unavailable("avatar processing interrupted"))??;
+    let derivative_storage_name = format!("avatar-{attachment_id}.webp");
+    let temporary_storage_name = format!("{derivative_storage_name}.tmp-{}", Uuid::new_v4());
+    tokio::fs::write(state.uploads.join(&temporary_storage_name), &normalized).await?;
+    tokio::fs::rename(
+        state.uploads.join(&temporary_storage_name),
+        state.uploads.join(&derivative_storage_name),
+    )
+    .await?;
+    let now = chrono::Utc::now().timestamp();
+    sqlx::query("INSERT INTO avatar_derivatives(source_attachment_id,storage_name,media_type,byte_size,width,height,source_byte_size,created_at,updated_at) VALUES(?,?, 'image/webp', ?, ?, ?, ?, ?, ?) ON CONFLICT(source_attachment_id) DO UPDATE SET storage_name=excluded.storage_name,media_type=excluded.media_type,byte_size=excluded.byte_size,width=excluded.width,height=excluded.height,source_byte_size=excluded.source_byte_size,updated_at=excluded.updated_at")
+      .bind(attachment_id).bind(derivative_storage_name).bind(normalized.len() as i64).bind(i64::from(AVATAR_EDGE)).bind(i64::from(AVATAR_EDGE)).bind(source_byte_size).bind(now).bind(now).execute(&state.db).await?;
+    Ok(())
+}
+
+fn canonical_avatar(bytes: &[u8], media_type: &str) -> Result<Vec<u8>, AppError> {
+    if !matches!(
+        media_type,
+        "image/jpeg" | "image/png" | "image/webp" | "image/gif"
+    ) {
+        return Err(AppError::bad_request(
+            "avatars must be JPEG, PNG, WebP, or GIF images",
+        ));
+    }
+    let mut reader = ImageReader::new(Cursor::new(bytes));
+    reader.limits(image::Limits::default());
+    let image = reader
+        .with_guessed_format()
+        .map_err(|_| AppError::bad_request("avatar image format is invalid"))?
+        .decode()
+        .map_err(|_| AppError::bad_request("avatar image cannot be decoded"))?;
+    let (width, height) = (image.width(), image.height());
+    if width == 0 || height == 0 || u64::from(width) * u64::from(height) > MAX_AVATAR_PIXELS {
+        return Err(AppError::bad_request(
+            "avatar image dimensions are unsupported",
+        ));
+    }
+    let edge = width.min(height);
+    let cropped = image
+        .crop_imm((width - edge) / 2, (height - edge) / 2, edge, edge)
+        .resize_exact(AVATAR_EDGE, AVATAR_EDGE, FilterType::Lanczos3);
+    let mut output = Cursor::new(Vec::new());
+    cropped
+        .write_to(&mut output, image::ImageFormat::WebP)
+        .map_err(|_| AppError::bad_request("avatar image cannot be encoded"))?;
+    Ok(output.into_inner())
 }
 
 #[derive(Serialize)]
@@ -784,6 +910,7 @@ async fn update_profile(
     let display_name = nonempty(&input.display_name, "display_name", 80)?;
     let motto = bounded(&input.motto, "motto", 280)?;
     if let Some(attachment_id) = &input.avatar_attachment_id {
+        normalize_avatar_attachment(&state, attachment_id, &user.id).await?;
         let allowed: Option<String> = sqlx::query_scalar("SELECT id FROM attachments WHERE id=? AND owner_user_id=? AND media_type LIKE 'image/%'").bind(attachment_id).bind(&user.id).fetch_optional(&state.db).await?;
         if allowed.is_none() {
             return Err(AppError::bad_request(
@@ -927,6 +1054,7 @@ async fn update_group_title(
     }
     if let Some(avatar_attachment_id) = input.avatar_attachment_id {
         if let Some(attachment_id) = &avatar_attachment_id {
+            normalize_avatar_attachment(&state, attachment_id, &user.id).await?;
             let allowed: Option<String> = sqlx::query_scalar(
                 "SELECT id FROM attachments WHERE id=? AND owner_user_id=? AND media_type LIKE 'image/%'",
             )
@@ -2376,6 +2504,27 @@ mod tests {
         }
     }
 
+    fn canonical_avatar_png_fixture() -> Vec<u8> {
+        let image = image::RgbaImage::from_pixel(4, 2, image::Rgba([255, 0, 0, 128]));
+        let mut bytes = Cursor::new(Vec::new());
+        image::DynamicImage::ImageRgba8(image)
+            .write_to(&mut bytes, image::ImageFormat::Png)
+            .unwrap();
+        bytes.into_inner()
+    }
+
+    #[test]
+    fn canonical_avatar_center_crops_and_preserves_alpha() {
+        let normalized = canonical_avatar(&canonical_avatar_png_fixture(), "image/png").unwrap();
+        let image = ImageReader::new(Cursor::new(normalized))
+            .with_guessed_format()
+            .unwrap()
+            .decode()
+            .unwrap();
+        assert_eq!((image.width(), image.height()), (AVATAR_EDGE, AVATAR_EDGE));
+        assert_eq!(image.color().has_alpha(), true);
+    }
+
     #[tokio::test]
     async fn public_profile_lookup_exposes_only_display_fields_and_a_safe_avatar_url() {
         let pool = db::connect_memory().await.unwrap();
@@ -3188,7 +3337,14 @@ mod tests {
         .unwrap()
         .0;
         assert_eq!(renamed.title, "Renamed");
-        sqlx::query("INSERT INTO attachments(id,owner_user_id,file_name,media_type,byte_size,storage_name,created_at) VALUES('group-avatar','owner','group.png','image/png',1,'group-avatar-file',0)")
+        let avatar_bytes = canonical_avatar_png_fixture();
+        std::fs::write(
+            std::env::temp_dir().join("group-avatar-file"),
+            &avatar_bytes,
+        )
+        .unwrap();
+        sqlx::query("INSERT INTO attachments(id,owner_user_id,file_name,media_type,byte_size,storage_name,created_at) VALUES('group-avatar','owner','group.png','image/png',?,'group-avatar-file',0)")
+            .bind(avatar_bytes.len() as i64)
             .execute(&pool)
             .await
             .unwrap();

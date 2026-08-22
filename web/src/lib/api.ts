@@ -203,6 +203,12 @@ export async function attachmentObjectUrl(sdk: AuthMiniApi, id: string) {
   return URL.createObjectURL(await response.blob());
 }
 
+export async function avatarObjectUrl(sdk: AuthMiniApi, id: string) {
+  const response = await authenticatedFetch(sdk, `/api/attachments/${id}/avatar`);
+  if (!response.ok) throw new Error("Could not download avatar");
+  return URL.createObjectURL(await response.blob());
+}
+
 async function authenticatedFetch(
   sdk: AuthMiniApi,
   path: string,
