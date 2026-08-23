@@ -33,4 +33,4 @@ A Linkit username is the sole human-readable user identity. Linkit trims it befo
 
 ## Styles and dependencies
 
-Import `linkit-react-components/styles.css`. The package uses public Base UI primitives and shadcn-style semantic slots, rather than importing a consumer application's private `@/components/ui` files. Peer dependencies are React, React DOM, `@base-ui/react`, `lucide-react`, and `auth-mini-react-components`.
+Import `linkit-react-components/styles.css`. That stylesheet includes the App Header, UserInfo, and UserPicker form/listbox states. The package uses public Base UI primitives and shadcn-style semantic slots, rather than importing a consumer application's private `@/components/ui` files. Peer dependencies are React, React DOM, `@base-ui/react`, `lucide-react`, and `auth-mini-react-components`.

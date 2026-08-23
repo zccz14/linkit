@@ -121,7 +121,7 @@ export function LinkitUserPicker({ value, defaultValue = "", onValueChange, name
 
   const showList = open && Boolean(query.trim());
   const activeId = activeIndex >= 0 ? `${listboxId}-option-${activeIndex}` : undefined;
-  return <div className={className}>
+  return <div className={["linkit-user-picker", className].filter(Boolean).join(" ")}>
     {name ? <input type="hidden" name={name} value={selectedId ?? ""} /> : null}
     <label className="linkit-user-picker__label" htmlFor={`${listboxId}-input`}>{visibleLabel}</label>
     {selectedId ? <div className="linkit-user-picker__selection" aria-label={labels.selected}>
