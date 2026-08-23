@@ -34,7 +34,7 @@ describe("LinkitProvider", () => {
 
 describe("Linkit displays", () => {
   it("renders compact user and group fallbacks accessibly", () => {
-    render(<><LinkitAvatar profile={{ display_name: "Alice" }} /><LinkitUserDisplay userId="user-1" compact /><LinkitConversationDisplay conversation={{ id: "group-1", kind: "group", title: "Research" }} /></>);
+    render(<><LinkitAvatar profile={{ username: "Alice" }} /><LinkitUserDisplay userId="user-1" compact /><LinkitConversationDisplay conversation={{ id: "group-1", kind: "group", title: "Research" }} /></>);
     expect(screen.getByLabelText("Alice")).toHaveTextContent("A");
     expect(screen.getByText("Unknown user")).toBeInTheDocument();
     expect(screen.getByText("user-1")).toHaveAttribute("title", "user-1");
@@ -42,9 +42,8 @@ describe("Linkit displays", () => {
   });
 
   it("keeps profile identity and username ahead of the fallback identifier", () => {
-    render(<LinkitUserDisplay userId="user-1" showUsername profile={{ user_id: "user-1", display_name: "Alice", username: "alice" }} />);
-    expect(screen.getByText("Alice")).toBeInTheDocument();
-    expect(screen.getByText("@alice")).toBeInTheDocument();
+    render(<LinkitUserDisplay userId="user-1" profile={{ user_id: "user-1", username: "alice" }} />);
+    expect(screen.getByText("alice")).toBeInTheDocument();
     expect(screen.queryByText("user-1")).not.toBeInTheDocument();
   });
 });

@@ -7,7 +7,7 @@ notifications, and native Bot API tokens.
 
 ## Features
 
-- **Profiles and people directory** — username, nickname, avatar, motto, and
+- **Profiles and people directory** — username, avatar, motto, and
   search.
 - **Messaging** — direct and group conversations, image/file attachments, read
   state, cursor-paged history, and immediate SSE refresh.
@@ -56,9 +56,7 @@ creation flow, token handling, response contract, and error handling.
 ## External profile lookup
 
 Downstream products may resolve a known Auth Mini user ID to Linkit's minimal
-public display profile: username, display name, and an optional safe avatar URL.
-The API has no list or search endpoint and does not expose motto, messages, or
-notification data. See [the external profile API guide](docs/public-profile-api.md).
+public profile: username and an optional safe avatar URL. It does not expose motto, messages, or notification data. Signed-in clients may use the separately documented bounded username search API. See [the external profile API guide](docs/public-profile-api.md).
 
 ## Bark device binding
 

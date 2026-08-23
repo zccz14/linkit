@@ -26,8 +26,8 @@ export type LinkitUserPickerProps = {
 };
 
 const labelsByLanguage: Record<"en" | "zh", LinkitUserPickerLabels> = {
-  en: { label: "User", placeholder: "Search username or display name", clear: "Clear selection", loading: "Searching users…", empty: "No users found.", selected: "Selected user" },
-  zh: { label: "用户", placeholder: "搜索用户名或昵称", clear: "清除选择", loading: "正在搜索用户…", empty: "没有找到用户。", selected: "已选择用户" },
+  en: { label: "User", placeholder: "Search username", clear: "Clear selection", loading: "Searching users…", empty: "No users found.", selected: "Selected user" },
+  zh: { label: "用户", placeholder: "搜索用户名", clear: "清除选择", loading: "正在搜索用户…", empty: "没有找到用户。", selected: "已选择用户" },
 };
 
 export function LinkitUserPicker({ value, defaultValue = "", onValueChange, name, label, placeholder, lang = "en", className, disabled = false, required = false }: LinkitUserPickerProps) {
@@ -125,8 +125,8 @@ export function LinkitUserPicker({ value, defaultValue = "", onValueChange, name
     {name ? <input type="hidden" name={name} value={selectedId ?? ""} /> : null}
     <label className="linkit-user-picker__label" htmlFor={`${listboxId}-input`}>{visibleLabel}</label>
     {selectedId ? <div className="linkit-user-picker__selection" aria-label={labels.selected}>
-      <LinkitAvatar profile={selected} fallback={selected?.display_name || selectedId} size="sm" />
-      <span className="linkit-user-picker__selection-text"><strong>{selected?.display_name || selectedId}</strong>{selected ? <span>@{selected.username} · <code>{selected.user_id}</code></span> : null}</span>
+      <LinkitAvatar profile={selected} fallback={selected?.username || selectedId} size="sm" />
+      <span className="linkit-user-picker__selection-text"><strong>{selected?.username || selectedId}</strong>{selected ? <span><code>{selected.user_id}</code></span> : null}</span>
       <button type="button" className="linkit-user-picker__clear" disabled={disabled} onClick={clear}>{labels.clear}</button>
     </div> : null}
     <input
@@ -163,7 +163,7 @@ export function LinkitUserPicker({ value, defaultValue = "", onValueChange, name
         data-active={activeIndex === index || undefined}
         onMouseDown={(event) => event.preventDefault()}
         onClick={() => choose(user)}
-      ><LinkitAvatar profile={user} fallback={user.display_name || user.username} size="sm" /><span><strong>{user.display_name}</strong><span>@{user.username} · <code>{user.user_id}</code></span></span></button>) : null}
+      ><LinkitAvatar profile={user} fallback={user.username} size="sm" /><span><strong>{user.username}</strong><span><code>{user.user_id}</code></span></span></button>) : null}
     </div> : null}
   </div>;
 }

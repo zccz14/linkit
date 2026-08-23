@@ -72,7 +72,7 @@ test("renaming a group updates the loaded conversation cache without changing me
     created_by: "owner",
     created_at: 0,
     unread_count: 0,
-    members: [{ user_id: "owner", username: "owner", display_name: "Owner", role: "owner" }],
+    members: [{ user_id: "owner", username: "owner", role: "owner" }],
     bots: [],
   };
   const renamed = updatedConversationDetail(conversation, { title: "After", avatar_attachment_id: undefined });

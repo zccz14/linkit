@@ -47,8 +47,8 @@ const MAX_AVATAR_PIXELS: u64 = 16_777_216;
 const AVATAR_BACKFILL_INTERVAL: std::time::Duration = std::time::Duration::from_secs(5);
 const BARK_NOTIFICATION_BODY_MAX_BYTES: usize = 3_000;
 const MESSAGE_PAGE_SIZE: i64 = 50;
-const LIST_CONVERSATIONS_QUERY: &str = "SELECT c.id,c.kind,c.title,c.created_by,c.created_at,CASE WHEN c.kind='group' THEN c.avatar_attachment_id END avatar_attachment_id,CASE WHEN c.kind='direct' THEN COALESCE((SELECT p.display_name FROM conversation_members cm_peer JOIN profiles p ON p.user_id=cm_peer.user_id WHERE cm_peer.conversation_id=c.id AND cm_peer.user_id<>? LIMIT 1),(SELECT b.name FROM conversation_bots cb JOIN bots b ON b.id=cb.bot_id WHERE cb.conversation_id=c.id LIMIT 1)) END counterpart_name,CASE WHEN c.kind='direct' THEN (SELECT p.avatar_attachment_id FROM conversation_members cm_peer JOIN profiles p ON p.user_id=cm_peer.user_id WHERE cm_peer.conversation_id=c.id AND cm_peer.user_id<>? LIMIT 1) END counterpart_avatar_attachment_id,(SELECT body FROM messages WHERE conversation_id=c.id ORDER BY created_at DESC LIMIT 1) latest_body,(SELECT created_at FROM messages WHERE conversation_id=c.id ORDER BY created_at DESC LIMIT 1) latest_at,(SELECT COUNT(*) FROM messages WHERE conversation_id=c.id AND created_at>cm.last_read_at AND sender_id<>?) unread_count FROM conversations c JOIN conversation_members cm ON cm.conversation_id=c.id WHERE cm.user_id=? ORDER BY COALESCE(latest_at,c.created_at) DESC";
-const CONVERSATION_QUERY: &str = "SELECT c.id,c.kind,c.title,c.created_by,c.created_at,CASE WHEN c.kind='group' THEN c.avatar_attachment_id END avatar_attachment_id,CASE WHEN c.kind='direct' THEN COALESCE((SELECT p.display_name FROM conversation_members cm_peer JOIN profiles p ON p.user_id=cm_peer.user_id WHERE cm_peer.conversation_id=c.id AND cm_peer.user_id<>? LIMIT 1),(SELECT b.name FROM conversation_bots cb JOIN bots b ON b.id=cb.bot_id WHERE cb.conversation_id=c.id LIMIT 1)) END counterpart_name,CASE WHEN c.kind='direct' THEN (SELECT p.avatar_attachment_id FROM conversation_members cm_peer JOIN profiles p ON p.user_id=cm_peer.user_id WHERE cm_peer.conversation_id=c.id AND cm_peer.user_id<>? LIMIT 1) END counterpart_avatar_attachment_id,(SELECT body FROM messages WHERE conversation_id=c.id ORDER BY created_at DESC LIMIT 1) latest_body,(SELECT created_at FROM messages WHERE conversation_id=c.id ORDER BY created_at DESC LIMIT 1) latest_at,(SELECT COUNT(*) FROM messages WHERE conversation_id=c.id AND created_at>cm.last_read_at AND sender_id<>?) unread_count FROM conversations c JOIN conversation_members cm ON cm.conversation_id=c.id WHERE c.id=? AND cm.user_id=?";
+const LIST_CONVERSATIONS_QUERY: &str = "SELECT c.id,c.kind,c.title,c.created_by,c.created_at,CASE WHEN c.kind='group' THEN c.avatar_attachment_id END avatar_attachment_id,CASE WHEN c.kind='direct' THEN COALESCE((SELECT p.username FROM conversation_members cm_peer JOIN profiles p ON p.user_id=cm_peer.user_id WHERE cm_peer.conversation_id=c.id AND cm_peer.user_id<>? LIMIT 1),(SELECT b.name FROM conversation_bots cb JOIN bots b ON b.id=cb.bot_id WHERE cb.conversation_id=c.id LIMIT 1)) END counterpart_name,CASE WHEN c.kind='direct' THEN (SELECT p.avatar_attachment_id FROM conversation_members cm_peer JOIN profiles p ON p.user_id=cm_peer.user_id WHERE cm_peer.conversation_id=c.id AND cm_peer.user_id<>? LIMIT 1) END counterpart_avatar_attachment_id,(SELECT body FROM messages WHERE conversation_id=c.id ORDER BY created_at DESC LIMIT 1) latest_body,(SELECT created_at FROM messages WHERE conversation_id=c.id ORDER BY created_at DESC LIMIT 1) latest_at,(SELECT COUNT(*) FROM messages WHERE conversation_id=c.id AND created_at>cm.last_read_at AND sender_id<>?) unread_count FROM conversations c JOIN conversation_members cm ON cm.conversation_id=c.id WHERE cm.user_id=? ORDER BY COALESCE(latest_at,c.created_at) DESC";
+const CONVERSATION_QUERY: &str = "SELECT c.id,c.kind,c.title,c.created_by,c.created_at,CASE WHEN c.kind='group' THEN c.avatar_attachment_id END avatar_attachment_id,CASE WHEN c.kind='direct' THEN COALESCE((SELECT p.username FROM conversation_members cm_peer JOIN profiles p ON p.user_id=cm_peer.user_id WHERE cm_peer.conversation_id=c.id AND cm_peer.user_id<>? LIMIT 1),(SELECT b.name FROM conversation_bots cb JOIN bots b ON b.id=cb.bot_id WHERE cb.conversation_id=c.id LIMIT 1)) END counterpart_name,CASE WHEN c.kind='direct' THEN (SELECT p.avatar_attachment_id FROM conversation_members cm_peer JOIN profiles p ON p.user_id=cm_peer.user_id WHERE cm_peer.conversation_id=c.id AND cm_peer.user_id<>? LIMIT 1) END counterpart_avatar_attachment_id,(SELECT body FROM messages WHERE conversation_id=c.id ORDER BY created_at DESC LIMIT 1) latest_body,(SELECT created_at FROM messages WHERE conversation_id=c.id ORDER BY created_at DESC LIMIT 1) latest_at,(SELECT COUNT(*) FROM messages WHERE conversation_id=c.id AND created_at>cm.last_read_at AND sender_id<>?) unread_count FROM conversations c JOIN conversation_members cm ON cm.conversation_id=c.id WHERE c.id=? AND cm.user_id=?";
 
 #[derive(Clone)]
 pub struct AppState {
@@ -537,21 +537,19 @@ async fn setup(
 struct Profile {
     user_id: String,
     username: String,
-    display_name: String,
     motto: String,
     avatar_attachment_id: Option<String>,
     updated_at: i64,
 }
 
 async fn profile_for_user(db: &SqlitePool, user_id: &str) -> Result<Option<Profile>, AppError> {
-    Ok(sqlx::query_as("SELECT user_id,username,display_name,motto,avatar_attachment_id,updated_at FROM profiles WHERE user_id=?").bind(user_id).fetch_optional(db).await?)
+    Ok(sqlx::query_as("SELECT user_id,username,motto,avatar_attachment_id,updated_at FROM profiles WHERE user_id=?").bind(user_id).fetch_optional(db).await?)
 }
 
 #[derive(Debug, Serialize)]
 struct PublicProfile {
     user_id: String,
     username: String,
-    display_name: String,
     avatar_url: Option<String>,
 }
 
@@ -560,8 +558,8 @@ async fn public_profile(
     Path(user_id): Path<String>,
 ) -> Result<axum::Json<PublicProfile>, AppError> {
     let public_origin = meta(&state.db, "public_origin").await?;
-    let profile = sqlx::query_as::<_, (String, String, String, Option<String>, i64)>(
-        "SELECT p.user_id,p.username,p.display_name,
+    let profile = sqlx::query_as::<_, (String, String, Option<String>, i64)>(
+        "SELECT p.user_id,p.username,
                 CASE WHEN EXISTS(
                     SELECT 1 FROM attachments a
                     WHERE a.id=p.avatar_attachment_id
@@ -578,10 +576,9 @@ async fn public_profile(
     Ok(axum::Json(PublicProfile {
         user_id: profile.0,
         username: profile.1,
-        display_name: profile.2,
         avatar_url: profile
-            .3
-            .map(|_| public_profile_avatar_url(&public_origin, &user_id, profile.4)),
+            .2
+            .map(|_| public_profile_avatar_url(&public_origin, &user_id, profile.3)),
     }))
 }
 
@@ -900,7 +897,6 @@ async fn system_overview(
 
 #[derive(Serialize, FromRow)]
 struct BarkNotificationUser {
-    display_name: String,
     username: String,
     device_count: i64,
     last_device_updated_at: i64,
@@ -918,10 +914,10 @@ async fn list_bark_notification_users(
     db: &SqlitePool,
 ) -> Result<Vec<BarkNotificationUser>, AppError> {
     Ok(sqlx::query_as(
-        "SELECT p.display_name,p.username,COUNT(d.id) device_count,MAX(d.updated_at) last_device_updated_at
+        "SELECT p.username,COUNT(d.id) device_count,MAX(d.updated_at) last_device_updated_at
          FROM bark_user_devices d
          JOIN profiles p ON p.user_id=d.user_id
-         GROUP BY d.user_id,p.display_name,p.username
+         GROUP BY d.user_id,p.username
          ORDER BY last_device_updated_at DESC,p.username COLLATE NOCASE",
     )
     .fetch_all(db)
@@ -931,7 +927,6 @@ async fn list_bark_notification_users(
 #[derive(Deserialize)]
 struct ProfileInput {
     username: String,
-    display_name: String,
     motto: String,
     avatar_attachment_id: Option<String>,
 }
@@ -942,7 +937,6 @@ async fn update_profile(
     axum::Json(input): axum::Json<ProfileInput>,
 ) -> Result<axum::Json<Profile>, AppError> {
     let username = valid_username(&input.username)?;
-    let display_name = nonempty(&input.display_name, "display_name", 80)?;
     let motto = bounded(&input.motto, "motto", 280)?;
     if let Some(attachment_id) = &input.avatar_attachment_id {
         normalize_avatar_attachment(&state, attachment_id, &user.id).await?;
@@ -954,8 +948,8 @@ async fn update_profile(
         }
     }
     let now = chrono::Utc::now().timestamp();
-    let result = sqlx::query("INSERT INTO profiles(user_id,username,display_name,motto,avatar_attachment_id,updated_at) VALUES(?,?,?,?,?,?) ON CONFLICT(user_id) DO UPDATE SET username=excluded.username,display_name=excluded.display_name,motto=excluded.motto,avatar_attachment_id=excluded.avatar_attachment_id,updated_at=excluded.updated_at")
-        .bind(&user.id).bind(username).bind(display_name).bind(motto).bind(input.avatar_attachment_id).bind(now).execute(&state.db).await;
+    let result = sqlx::query("INSERT INTO profiles(user_id,username,motto,avatar_attachment_id,updated_at) VALUES(?,?,?,?,?) ON CONFLICT(user_id) DO UPDATE SET username=excluded.username,motto=excluded.motto,avatar_attachment_id=excluded.avatar_attachment_id,updated_at=excluded.updated_at")
+        .bind(&user.id).bind(username).bind(motto).bind(input.avatar_attachment_id).bind(now).execute(&state.db).await;
     if let Err(error) = result {
         if matches!(error, sqlx::Error::Database(ref database) if database.is_unique_violation()) {
             return Err(AppError::conflict("username is already taken"));
@@ -979,7 +973,11 @@ async fn list_users(
     Query(query): Query<UserQuery>,
 ) -> Result<axum::Json<Vec<Profile>>, AppError> {
     let query = query.query.unwrap_or_default().trim().to_owned();
-    let rows = sqlx::query_as("SELECT user_id,username,display_name,motto,avatar_attachment_id,updated_at FROM profiles WHERE username LIKE '%' || ? || '%' OR display_name LIKE '%' || ? || '%' ORDER BY username LIMIT 50").bind(&query).bind(&query).fetch_all(&state.db).await?;
+    let pattern = format!("%{}%", escape_like(&query));
+    let rows = sqlx::query_as("SELECT user_id,username,motto,avatar_attachment_id,updated_at FROM profiles WHERE username LIKE ? ESCAPE '\\\' COLLATE NOCASE ORDER BY username COLLATE NOCASE LIMIT 50")
+        .bind(pattern)
+        .fetch_all(&state.db)
+        .await?;
     Ok(axum::Json(rows))
 }
 
@@ -987,7 +985,6 @@ async fn list_users(
 struct UserSearchResult {
     user_id: String,
     username: String,
-    display_name: String,
     avatar_attachment_id: Option<String>,
     updated_at: i64,
 }
@@ -996,7 +993,6 @@ struct UserSearchResult {
 struct UserSearchResponse {
     user_id: String,
     username: String,
-    display_name: String,
     avatar_url: Option<String>,
 }
 
@@ -1010,16 +1006,13 @@ async fn search_users(
     }
     let prefix = format!("{}%", escape_like(&query));
     let rows = sqlx::query_as::<_, UserSearchResult>(
-        "SELECT user_id,username,display_name,avatar_attachment_id,updated_at
+        "SELECT user_id,username,avatar_attachment_id,updated_at
          FROM profiles
          WHERE username LIKE ? ESCAPE '\\' COLLATE NOCASE
-            OR display_name LIKE ? ESCAPE '\\' COLLATE NOCASE
-         ORDER BY CASE WHEN username=? COLLATE NOCASE THEN 0 WHEN display_name=? COLLATE NOCASE THEN 1 ELSE 2 END, username COLLATE NOCASE
+         ORDER BY CASE WHEN username=? COLLATE NOCASE THEN 0 ELSE 1 END, username COLLATE NOCASE
          LIMIT 5",
     )
     .bind(&prefix)
-    .bind(&prefix)
-    .bind(&query)
     .bind(&query)
     .fetch_all(&state.db)
     .await?;
@@ -1032,7 +1025,6 @@ async fn search_users(
                 }),
                 user_id: row.user_id,
                 username: row.username,
-                display_name: row.display_name,
             })
             .collect(),
     ))
@@ -1049,7 +1041,7 @@ async fn read_user(
     State(state): State<AppState>,
     Path(username): Path<String>,
 ) -> Result<axum::Json<Profile>, AppError> {
-    sqlx::query_as("SELECT user_id,username,display_name,motto,avatar_attachment_id,updated_at FROM profiles WHERE username=?").bind(username).fetch_optional(&state.db).await?.map(axum::Json).ok_or_else(|| AppError::not_found("user not found"))
+    sqlx::query_as("SELECT user_id,username,motto,avatar_attachment_id,updated_at FROM profiles WHERE username=? COLLATE NOCASE").bind(username).fetch_optional(&state.db).await?.map(axum::Json).ok_or_else(|| AppError::not_found("user not found"))
 }
 
 #[derive(Clone, Serialize, FromRow)]
@@ -1085,7 +1077,6 @@ async fn list_conversations(
 struct ConversationMember {
     user_id: String,
     username: String,
-    display_name: String,
     role: String,
 }
 
@@ -1103,7 +1094,7 @@ async fn conversation_detail(
     Path(id): Path<String>,
 ) -> Result<axum::Json<ConversationDetail>, AppError> {
     let conversation = conversation(&state.db, &id, &user.id).await?;
-    let members = sqlx::query_as("SELECT cm.user_id,p.username,p.display_name,cm.role FROM conversation_members cm JOIN profiles p ON p.user_id=cm.user_id WHERE cm.conversation_id=? ORDER BY cm.joined_at")
+    let members = sqlx::query_as("SELECT cm.user_id,p.username,cm.role FROM conversation_members cm JOIN profiles p ON p.user_id=cm.user_id WHERE cm.conversation_id=? ORDER BY cm.joined_at")
         .bind(&id)
         .fetch_all(&state.db)
         .await?;
@@ -2262,7 +2253,7 @@ async fn messages_for(
 
     let (mut rows, direction) = if let Some(cursor) = before_cursor {
         let (created_at, sequence) = parse_message_cursor(&cursor)?;
-        let rows = sqlx::query_as("SELECT m.id,m.conversation_id,m.sender_kind,m.sender_id,COALESCE(p.display_name,b.name,m.sender_id) sender_name,(m.sender_kind='bot' AND b.id IS NULL) sender_deleted,m.body,m.urgent,m.created_at,m.sequence FROM messages m LEFT JOIN profiles p ON m.sender_kind='user' AND p.user_id=m.sender_id LEFT JOIN bots b ON m.sender_kind='bot' AND b.id=m.sender_id WHERE m.conversation_id=? AND (m.created_at<? OR (m.created_at=? AND m.sequence<?)) ORDER BY m.created_at DESC,m.sequence DESC LIMIT ?")
+        let rows = sqlx::query_as("SELECT m.id,m.conversation_id,m.sender_kind,m.sender_id,COALESCE(p.username,b.name,m.sender_id) sender_name,(m.sender_kind='bot' AND b.id IS NULL) sender_deleted,m.body,m.urgent,m.created_at,m.sequence FROM messages m LEFT JOIN profiles p ON m.sender_kind='user' AND p.user_id=m.sender_id LEFT JOIN bots b ON m.sender_kind='bot' AND b.id=m.sender_id WHERE m.conversation_id=? AND (m.created_at<? OR (m.created_at=? AND m.sequence<?)) ORDER BY m.created_at DESC,m.sequence DESC LIMIT ?")
                 .bind(conversation_id)
                 .bind(created_at)
                 .bind(created_at)
@@ -2273,7 +2264,7 @@ async fn messages_for(
         (rows, PageDirection::Older)
     } else if let Some(cursor) = after_cursor {
         let (created_at, sequence) = parse_message_cursor(&cursor)?;
-        let rows = sqlx::query_as("SELECT m.id,m.conversation_id,m.sender_kind,m.sender_id,COALESCE(p.display_name,b.name,m.sender_id) sender_name,(m.sender_kind='bot' AND b.id IS NULL) sender_deleted,m.body,m.urgent,m.created_at,m.sequence FROM messages m LEFT JOIN profiles p ON m.sender_kind='user' AND p.user_id=m.sender_id LEFT JOIN bots b ON m.sender_kind='bot' AND b.id=m.sender_id WHERE m.conversation_id=? AND (m.created_at>? OR (m.created_at=? AND m.sequence>?)) ORDER BY m.created_at,m.sequence LIMIT ?")
+        let rows = sqlx::query_as("SELECT m.id,m.conversation_id,m.sender_kind,m.sender_id,COALESCE(p.username,b.name,m.sender_id) sender_name,(m.sender_kind='bot' AND b.id IS NULL) sender_deleted,m.body,m.urgent,m.created_at,m.sequence FROM messages m LEFT JOIN profiles p ON m.sender_kind='user' AND p.user_id=m.sender_id LEFT JOIN bots b ON m.sender_kind='bot' AND b.id=m.sender_id WHERE m.conversation_id=? AND (m.created_at>? OR (m.created_at=? AND m.sequence>?)) ORDER BY m.created_at,m.sequence LIMIT ?")
                 .bind(conversation_id)
                 .bind(created_at)
                 .bind(created_at)
@@ -2283,7 +2274,7 @@ async fn messages_for(
                 .await?;
         (rows, PageDirection::Newer)
     } else {
-        let rows = sqlx::query_as("SELECT m.id,m.conversation_id,m.sender_kind,m.sender_id,COALESCE(p.display_name,b.name,m.sender_id) sender_name,(m.sender_kind='bot' AND b.id IS NULL) sender_deleted,m.body,m.urgent,m.created_at,m.sequence FROM messages m LEFT JOIN profiles p ON m.sender_kind='user' AND p.user_id=m.sender_id LEFT JOIN bots b ON m.sender_kind='bot' AND b.id=m.sender_id WHERE m.conversation_id=? ORDER BY m.created_at DESC,m.sequence DESC LIMIT ?")
+        let rows = sqlx::query_as("SELECT m.id,m.conversation_id,m.sender_kind,m.sender_id,COALESCE(p.username,b.name,m.sender_id) sender_name,(m.sender_kind='bot' AND b.id IS NULL) sender_deleted,m.body,m.urgent,m.created_at,m.sequence FROM messages m LEFT JOIN profiles p ON m.sender_kind='user' AND p.user_id=m.sender_id LEFT JOIN bots b ON m.sender_kind='bot' AND b.id=m.sender_id WHERE m.conversation_id=? ORDER BY m.created_at DESC,m.sequence DESC LIMIT ?")
                 .bind(conversation_id)
                 .bind(MESSAGE_PAGE_SIZE + 1)
                 .fetch_all(db)
@@ -2314,7 +2305,7 @@ async fn messages_for(
 }
 
 async fn message(db: &SqlitePool, id: &str) -> Result<Message, AppError> {
-    let row: StoredMessage = sqlx::query_as("SELECT m.id,m.conversation_id,m.sender_kind,m.sender_id,COALESCE(p.display_name,b.name,m.sender_id) sender_name,(m.sender_kind='bot' AND b.id IS NULL) sender_deleted,m.body,m.urgent,m.created_at,m.sequence FROM messages m LEFT JOIN profiles p ON m.sender_kind='user' AND p.user_id=m.sender_id LEFT JOIN bots b ON m.sender_kind='bot' AND b.id=m.sender_id WHERE m.id=?").bind(id).fetch_optional(db).await?.ok_or_else(|| AppError::not_found("message not found"))?;
+    let row: StoredMessage = sqlx::query_as("SELECT m.id,m.conversation_id,m.sender_kind,m.sender_id,COALESCE(p.username,b.name,m.sender_id) sender_name,(m.sender_kind='bot' AND b.id IS NULL) sender_deleted,m.body,m.urgent,m.created_at,m.sequence FROM messages m LEFT JOIN profiles p ON m.sender_kind='user' AND p.user_id=m.sender_id LEFT JOIN bots b ON m.sender_kind='bot' AND b.id=m.sender_id WHERE m.id=?").bind(id).fetch_optional(db).await?.ok_or_else(|| AppError::not_found("message not found"))?;
     message_from_row(db, row).await
 }
 
@@ -2462,13 +2453,9 @@ fn bearer_token(headers: &HeaderMap) -> Result<&str, AppError> {
 
 fn valid_username(value: &str) -> Result<String, AppError> {
     let value = value.trim();
-    if !(3..=32).contains(&value.len())
-        || !value
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_' || byte == b'-')
-    {
+    if value.is_empty() || value.chars().count() > 80 || value.chars().any(char::is_control) {
         return Err(AppError::bad_request(
-            "username must be 3-32 letters, numbers, underscores, or hyphens",
+            "username must contain 1-80 non-control characters after trimming",
         ));
     }
     Ok(value.to_owned())
@@ -2698,10 +2685,12 @@ mod tests {
             .execute(&pool)
             .await
             .unwrap();
-        sqlx::query("INSERT INTO profiles(user_id,username,display_name,motto,updated_at) VALUES('alice','alice','Alice','',0)")
-            .execute(&pool)
-            .await
-            .unwrap();
+        sqlx::query(
+            "INSERT INTO profiles(user_id,username,motto,updated_at) VALUES('alice','alice','',0)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
         let app = router(test_state(pool));
         let response = app
             .clone()
@@ -2800,24 +2789,23 @@ mod tests {
         .execute(&pool)
         .await
         .unwrap();
-        for (id, username, display_name) in [
-            ("1", "alice", "Alice"),
-            ("2", "albert", "Alicia"),
-            ("3", "alex", "Alex"),
-            ("4", "alina", "Alina"),
-            ("5", "albertine", "Alberta"),
-            ("6", "aloysius", "Aloysius"),
-            ("7", "bob", "ALPHA"),
+        for (id, username) in [
+            ("1", "alice"),
+            ("2", "albert"),
+            ("3", "alex"),
+            ("4", "alina"),
+            ("5", "albertine"),
+            ("6", "aloysius"),
+            ("7", "bob"),
         ] {
             sqlx::query("INSERT INTO users(id,created_at) VALUES(?,0)")
                 .bind(id)
                 .execute(&pool)
                 .await
                 .unwrap();
-            sqlx::query("INSERT INTO profiles(user_id,username,display_name,motto,updated_at) VALUES(?,?,?,'private motto',0)")
+            sqlx::query("INSERT INTO profiles(user_id,username,motto,updated_at) VALUES(?,?,'private motto',0)")
                 .bind(id)
                 .bind(username)
-                .bind(display_name)
                 .execute(&pool)
                 .await
                 .unwrap();
@@ -2837,16 +2825,6 @@ mod tests {
         .unwrap();
         assert_eq!(matches.len(), 5);
         assert_eq!(matches[0].username, "albert");
-        let axum::Json(nickname_matches) = search_users(
-            State(test_state(pool.clone())),
-            Query(UserQuery {
-                query: Some("alp".to_owned()),
-            }),
-        )
-        .await
-        .unwrap();
-        assert_eq!(nickname_matches.len(), 1);
-        assert_eq!(nickname_matches[0].display_name, "ALPHA");
         let payload = serde_json::to_value(&matches).unwrap();
         assert!(payload[0].get("motto").is_none());
         assert!(payload[0].get("avatar_attachment_id").is_none());
@@ -2884,7 +2862,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn public_profile_lookup_exposes_only_display_fields_and_a_safe_avatar_url() {
+    async fn public_profile_lookup_exposes_only_username_and_a_safe_avatar_url() {
         let pool = db::connect_memory().await.unwrap();
         sqlx::query(
             "UPDATE app_meta SET value='https://linkit.example.test' WHERE key='public_origin'",
@@ -2896,7 +2874,7 @@ mod tests {
             .execute(&pool)
             .await
             .unwrap();
-        sqlx::query("INSERT INTO profiles(user_id,username,display_name,motto,avatar_attachment_id,updated_at) VALUES('user /?#','alice','Alice','private motto','avatar',0)")
+        sqlx::query("INSERT INTO profiles(user_id,username,motto,avatar_attachment_id,updated_at) VALUES('user /?#','alice','private motto','avatar',0)")
             .execute(&pool)
             .await
             .unwrap();
@@ -2912,7 +2890,6 @@ mod tests {
         let payload = serde_json::to_value(&profile).unwrap();
         assert_eq!(payload["user_id"], "user /?#");
         assert_eq!(payload["username"], "alice");
-        assert_eq!(payload["display_name"], "Alice");
         assert_eq!(
             payload["avatar_url"],
             "https://linkit.example.test/api/public/profiles/user%20%2F%3F%23/avatar?v=0"
@@ -2934,10 +2911,12 @@ mod tests {
             .execute(&pool)
             .await
             .unwrap();
-        sqlx::query("INSERT INTO profiles(user_id,username,display_name,motto,updated_at) VALUES('alice','alice','Alice','',0)")
-            .execute(&pool)
-            .await
-            .unwrap();
+        sqlx::query(
+            "INSERT INTO profiles(user_id,username,motto,updated_at) VALUES('alice','alice','',0)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
 
         let profile = public_profile(State(test_state(pool.clone())), Path("alice".into()))
             .await
@@ -2957,7 +2936,7 @@ mod tests {
             .execute(&pool)
             .await
             .unwrap();
-        sqlx::query("INSERT INTO profiles(user_id,username,display_name,motto,avatar_attachment_id,updated_at) VALUES('alice','alice','Alice','', 'avatar',0)")
+        sqlx::query("INSERT INTO profiles(user_id,username,motto,avatar_attachment_id,updated_at) VALUES('alice','alice','', 'avatar',0)")
             .execute(&pool)
             .await
             .unwrap();
@@ -3471,20 +3450,15 @@ mod tests {
     #[tokio::test]
     async fn bark_notification_users_include_only_bound_profiles_without_secrets() {
         let pool = db::connect_memory().await.unwrap();
-        for (id, username, display_name) in [
-            ("alice", "alice", "Alice"),
-            ("bob", "bob", "Bob"),
-            ("carol", "carol", "Carol"),
-        ] {
+        for (id, username) in [("alice", "alice"), ("bob", "bob"), ("carol", "carol")] {
             sqlx::query("INSERT INTO users(id,created_at) VALUES(?,0)")
                 .bind(id)
                 .execute(&pool)
                 .await
                 .unwrap();
-            sqlx::query("INSERT INTO profiles(user_id,username,display_name,motto,updated_at) VALUES(?,?,?,'',0)")
+            sqlx::query("INSERT INTO profiles(user_id,username,motto,updated_at) VALUES(?,?,'',0)")
                 .bind(id)
                 .bind(username)
-                .bind(display_name)
                 .execute(&pool)
                 .await
                 .unwrap();
@@ -3507,7 +3481,6 @@ mod tests {
 
         let users = list_bark_notification_users(&pool).await.unwrap();
         assert_eq!(users.len(), 2);
-        assert_eq!(users[0].display_name, "Bob");
         assert_eq!(users[0].username, "bob");
         assert_eq!(users[0].device_count, 2);
         assert_eq!(users[0].last_device_updated_at, 30);
@@ -3541,16 +3514,15 @@ mod tests {
     #[tokio::test]
     async fn direct_conversations_include_the_other_participant_name() {
         let pool = db::connect_memory().await.unwrap();
-        for (id, username, display_name) in [("alice", "alice", "Alice"), ("bob", "bob", "Bob")] {
+        for (id, username) in [("alice", "alice"), ("bob", "bob")] {
             sqlx::query("INSERT INTO users(id,created_at) VALUES(?,0)")
                 .bind(id)
                 .execute(&pool)
                 .await
                 .unwrap();
-            sqlx::query("INSERT INTO profiles(user_id,username,display_name,motto,avatar_attachment_id,updated_at) VALUES(?,?,?,'',?,0)")
+            sqlx::query("INSERT INTO profiles(user_id,username,motto,avatar_attachment_id,updated_at) VALUES(?,?,'',?,0)")
                 .bind(id)
                 .bind(username)
-                .bind(display_name)
                 .bind((id == "bob").then_some("bob-avatar"))
                 .execute(&pool)
                 .await
@@ -3570,7 +3542,7 @@ mod tests {
 
         let direct = conversation(&pool, "direct", "alice").await.unwrap();
 
-        assert_eq!(direct.counterpart_name.as_deref(), Some("Bob"));
+        assert_eq!(direct.counterpart_name.as_deref(), Some("bob"));
         assert_eq!(
             direct.counterpart_avatar_attachment_id.as_deref(),
             Some("bob-avatar")
@@ -3657,7 +3629,7 @@ mod tests {
                 .execute(&pool)
                 .await
                 .unwrap();
-            sqlx::query("INSERT INTO profiles(user_id,username,display_name,motto,updated_at) VALUES(?,?,?,'',0)")
+            sqlx::query("INSERT INTO profiles(user_id,username,motto,updated_at) VALUES(?,?,'',0)")
                 .bind(user_id)
                 .bind(user_id)
                 .bind(user_id)
@@ -3774,19 +3746,16 @@ mod tests {
     #[tokio::test]
     async fn profile_avatars_are_available_to_other_conversation_members() {
         let pool = db::connect_memory().await.unwrap();
-        for (id, username, display_name, avatar) in [
-            ("alice", "alice", "Alice", None),
-            ("bob", "bob", "Bob", Some("bob-avatar")),
-        ] {
+        for (id, username, avatar) in [("alice", "alice", None), ("bob", "bob", Some("bob-avatar"))]
+        {
             sqlx::query("INSERT INTO users(id,created_at) VALUES(?,0)")
                 .bind(id)
                 .execute(&pool)
                 .await
                 .unwrap();
-            sqlx::query("INSERT INTO profiles(user_id,username,display_name,motto,avatar_attachment_id,updated_at) VALUES(?,?,?,'',?,0)")
+            sqlx::query("INSERT INTO profiles(user_id,username,motto,avatar_attachment_id,updated_at) VALUES(?,?,'',?,0)")
                 .bind(id)
                 .bind(username)
-                .bind(display_name)
                 .bind(avatar)
                 .execute(&pool)
                 .await
@@ -3833,7 +3802,7 @@ mod tests {
             .execute(&pool)
             .await
             .unwrap();
-        sqlx::query("INSERT INTO profiles(user_id,username,display_name,motto,avatar_attachment_id,updated_at) VALUES('alice','alice','Alice','', 'alice-avatar',0)")
+        sqlx::query("INSERT INTO profiles(user_id,username,motto,avatar_attachment_id,updated_at) VALUES('alice','alice','', 'alice-avatar',0)")
             .execute(&pool)
             .await
             .unwrap();
@@ -3851,7 +3820,7 @@ mod tests {
                 conversation_id: "direct".into(),
                 sender_kind: "user".into(),
                 sender_id: "alice".into(),
-                sender_name: "Alice".into(),
+                sender_name: "alice".into(),
                 sender_deleted: false,
                 body: "hello".into(),
                 urgent: false,
@@ -3886,6 +3855,72 @@ mod tests {
         assert_eq!(
             bark_notification_icon(&pool, "https://linkit.test", "direct", &bot_message).await,
             "https://linkit.test/linkit-logo.png"
+        );
+    }
+
+    #[tokio::test]
+    async fn migration_removes_display_name_and_preserves_profile_data() {
+        let pool = db::connect_memory().await.unwrap();
+        let columns =
+            sqlx::query_scalar::<_, String>("SELECT name FROM pragma_table_info('profiles')")
+                .fetch_all(&pool)
+                .await
+                .unwrap();
+        assert!(!columns.iter().any(|column| column == "display_name"));
+        assert!(columns.iter().any(|column| column == "username"));
+        assert!(columns.iter().any(|column| column == "motto"));
+        assert!(
+            columns
+                .iter()
+                .any(|column| column == "avatar_attachment_id")
+        );
+    }
+
+    #[test]
+    fn usernames_trim_allow_special_characters_and_reject_controls() {
+        assert_eq!(
+            valid_username("  # ? / % space 😀 中文  ").unwrap(),
+            "# ? / % space 😀 中文"
+        );
+        assert!(valid_username("   ").is_err());
+        assert!(valid_username("ok\u{0000}").is_err());
+        assert!(valid_username("ok\nnext").is_err());
+        assert!(valid_username(&"a".repeat(81)).is_err());
+    }
+
+    #[tokio::test]
+    async fn username_lookup_uses_trimmed_special_character_values() {
+        let pool = db::connect_memory().await.unwrap();
+        sqlx::query("INSERT INTO users(id,created_at) VALUES('special',0)")
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query(
+            "INSERT INTO profiles(user_id,username,motto,updated_at) VALUES('special',?,'',0)",
+        )
+        .bind("# ? / % 😀")
+        .execute(&pool)
+        .await
+        .unwrap();
+        assert_eq!(
+            user_id_from_username(&pool, "  # ? / % 😀  ")
+                .await
+                .unwrap(),
+            "special"
+        );
+        let error = sqlx::query("INSERT INTO users(id,created_at) VALUES('duplicate',0)")
+            .execute(&pool)
+            .await
+            .unwrap();
+        assert_eq!(error.rows_affected(), 1);
+        let duplicate = sqlx::query(
+            "INSERT INTO profiles(user_id,username,motto,updated_at) VALUES('duplicate',?,'',0)",
+        )
+        .bind("# ? / % 😀")
+        .execute(&pool)
+        .await;
+        assert!(
+            matches!(duplicate, Err(sqlx::Error::Database(error)) if error.is_unique_violation())
         );
     }
 
