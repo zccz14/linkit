@@ -9,7 +9,7 @@ description = "Auth Mini-powered profiles and messaging in one Rust binary"
 [dependencies]
 anyhow = "1"
 async-stream = "0.3"
-auth-mini-axum = "=0.1.1"
+auth-mini-axum = "=0.1.2"
 axum = { version = "0.8", features = ["multipart"] }
 base64 = "0.22"
 chrono = "0.4"
