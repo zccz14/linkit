@@ -551,14 +551,15 @@ async fn public_profile(
     Path(user_id): Path<String>,
 ) -> Result<axum::Json<PublicProfile>, AppError> {
     let public_origin = meta(&state.db, "public_origin").await?;
-    let profile = sqlx::query_as::<_, (String, String, String, Option<String>)>(
+    let profile = sqlx::query_as::<_, (String, String, String, Option<String>, i64)>(
         "SELECT p.user_id,p.username,p.display_name,
                 CASE WHEN EXISTS(
                     SELECT 1 FROM attachments a
                     WHERE a.id=p.avatar_attachment_id
                       AND a.owner_user_id=p.user_id
                       AND a.media_type LIKE 'image/%'
-                ) THEN p.avatar_attachment_id END
+                ) THEN p.avatar_attachment_id END,
+                p.updated_at
          FROM profiles p WHERE p.user_id=?",
     )
     .bind(&user_id)
@@ -571,15 +572,16 @@ async fn public_profile(
         display_name: profile.2,
         avatar_url: profile
             .3
-            .map(|_| public_profile_avatar_url(&public_origin, &user_id)),
+            .map(|_| public_profile_avatar_url(&public_origin, &user_id, profile.4)),
     }))
 }
 
-fn public_profile_avatar_url(public_origin: &str, user_id: &str) -> String {
+fn public_profile_avatar_url(public_origin: &str, user_id: &str, version: i64) -> String {
     let mut url = url::Url::parse(public_origin).expect("configured public origin is valid");
     url.path_segments_mut()
         .expect("configured public origin is a base URL")
         .extend(["api", "public", "profiles", user_id, "avatar"]);
+    url.query_pairs_mut().append_pair("v", &version.to_string());
     url.into()
 }
 
@@ -978,6 +980,7 @@ struct UserSearchResult {
     username: String,
     display_name: String,
     avatar_attachment_id: Option<String>,
+    updated_at: i64,
 }
 
 #[derive(Serialize)]
@@ -998,7 +1001,7 @@ async fn search_users(
     }
     let prefix = format!("{}%", escape_like(&query));
     let rows = sqlx::query_as::<_, UserSearchResult>(
-        "SELECT user_id,username,display_name,avatar_attachment_id
+        "SELECT user_id,username,display_name,avatar_attachment_id,updated_at
          FROM profiles
          WHERE username LIKE ? ESCAPE '\\' COLLATE NOCASE
             OR display_name LIKE ? ESCAPE '\\' COLLATE NOCASE
@@ -1015,9 +1018,9 @@ async fn search_users(
     Ok(axum::Json(
         rows.into_iter()
             .map(|row| UserSearchResponse {
-                avatar_url: row
-                    .avatar_attachment_id
-                    .map(|_| public_profile_avatar_url(&public_origin, &row.user_id)),
+                avatar_url: row.avatar_attachment_id.map(|_| {
+                    public_profile_avatar_url(&public_origin, &row.user_id, row.updated_at)
+                }),
                 user_id: row.user_id,
                 username: row.username,
                 display_name: row.display_name,
@@ -2041,8 +2044,8 @@ async fn bark_notification_icon(
             public_group_avatar_url(public_origin, conversation_id)
         }
         Some((kind, _)) if kind == "direct" && message.message.sender_kind == "user" => {
-            let avatar: Option<String> = sqlx::query_scalar(
-                "SELECT p.avatar_attachment_id FROM profiles p
+            let avatar: Option<(String, i64)> = sqlx::query_as(
+                "SELECT p.avatar_attachment_id,p.updated_at FROM profiles p
                  JOIN attachments a ON a.id=p.avatar_attachment_id
                  WHERE p.user_id=? AND a.owner_user_id=p.user_id AND a.media_type LIKE 'image/%'",
             )
@@ -2052,7 +2055,9 @@ async fn bark_notification_icon(
             .ok()
             .flatten();
             avatar
-                .map(|_| public_profile_avatar_url(public_origin, &message.message.sender_id))
+                .map(|(_, updated_at)| {
+                    public_profile_avatar_url(public_origin, &message.message.sender_id, updated_at)
+                })
                 .unwrap_or(fallback)
         }
         _ => fallback,
@@ -2757,7 +2762,7 @@ mod tests {
                 .unwrap()
                 .avatar_url
                 .as_deref(),
-            Some("https://linkit.example.test/api/public/profiles/1/avatar")
+            Some("https://linkit.example.test/api/public/profiles/1/avatar?v=0")
         );
 
         let axum::Json(empty) = search_users(
@@ -2815,7 +2820,7 @@ mod tests {
         assert_eq!(payload["display_name"], "Alice");
         assert_eq!(
             payload["avatar_url"],
-            "https://linkit.example.test/api/public/profiles/user%20%2F%3F%23/avatar"
+            "https://linkit.example.test/api/public/profiles/user%20%2F%3F%23/avatar?v=0"
         );
         assert!(payload.get("motto").is_none());
         assert!(payload.get("avatar_attachment_id").is_none());
@@ -3772,7 +3777,7 @@ mod tests {
         };
         assert_eq!(
             bark_notification_icon(&pool, "https://linkit.test", "direct", &user_message).await,
-            "https://linkit.test/api/public/profiles/alice/avatar"
+            "https://linkit.test/api/public/profiles/alice/avatar?v=0"
         );
         assert_eq!(
             bark_notification_icon(&pool, "https://linkit.test", "group", &user_message).await,

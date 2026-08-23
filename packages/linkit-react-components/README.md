@@ -112,11 +112,12 @@ import "linkit-react-components/styles.css";
 </header>
 ```
 
-已登录时，组件显示头像与昵称；激活后以原生无障碍 `dialog` 打开资料编辑器，支持：
+已登录时，组件显示头像与昵称；激活后以 **Base UI 风格的 shadcn 对话框**打开账户面板，支持：
 
-- 上传头像、编辑用户名、昵称与格言；保存使用 Linkit 的 `/api/attachments` 与 `/api/profile`，并显示 loading、错误、成功与未保存状态；
-- 显示完整 UID，提供复制按钮；clipboard 不可用或失败时给出可见、可朗读的手动复制提示；
-- 在同一资料弹窗内组合 `AuthMiniButton`，复用 Auth Mini 已发布的通行密钥注册与登录方式管理 UI；不复制认证安全逻辑；
+- `Avatar.Root / Image / Fallback` 显示当前公开头像；公开头像 URL 带 profile `updated_at` 版本参数，因此更新头像后不会命中旧的 `immutable` 浏览器缓存；图片不可用时自动回退到昵称首字母；
+- 使用 FieldGroup/Field 语义编辑用户名、昵称与格言，上传头像后保存到 Linkit 的 `/api/attachments` 与 `/api/profile`；提供 Skeleton、Spinner、Alert、错误、成功和未保存状态；
+- 显示完整 UID，提供复制按钮；Clipboard 不可用或失败时给出可见、可朗读的手动复制提示；
+- 在同一个 Linkit 对话框中直接调用外层 `AuthMiniProvider.openPasskeyRegistrationPage()` 打开通行密钥注册，并提供 Auth Mini 登录方式/安全设置链接；组件**不渲染或嵌入 `AuthMiniButton`**，也不复制 token、cookie、refresh、passkey 密钥材料或 audience 逻辑；
 - 调用外层 `signOut()` 登出，登出后回到可点击的登录按钮。
 
 | 属性 | 说明 |
@@ -125,10 +126,10 @@ import "linkit-react-components/styles.css";
 | `className` | 应用 header trigger 的样式类。 |
 | `loginLabel` | 未登录按钮的可选文案。 |
 | `labels` | 局部覆盖中英文可见文案。 |
-| `securitySettingsUrl` / `securitySettingsTarget` | 透传给复用的 `AuthMiniButton` 安全入口。 |
+| `securitySettingsUrl` / `securitySettingsTarget` | 覆盖 Auth Mini 登录方式/安全设置链接与打开目标；默认使用当前 Auth Mini 实例的账户设置页。 |
 | `onProfileSaved` / `onSignedOut` | 保存或登出完成后的可选通知回调。 |
 
-`styles.css` 是该组件必要样式，包含 44px 触控目标、焦点环、窄屏重排和减少动态效果的处理。原生 dialog 负责 Escape、焦点陷阱和关闭后的焦点恢复。
+`styles.css` 是该组件必要样式，提供与 Base UI shadcn `base-nova` 一致的语义 token、Button、Alert、Separator、Skeleton 和 Spinner 表现，并包含 44px 触控目标、焦点环、窄屏重排和减少动态效果处理。对话框由 Base UI 管理 Escape、焦点陷阱和关闭后的焦点恢复。因为 package 不能安全地导入每个消费应用私有的 `@/components/ui` 源文件，它直接使用公开的 `@base-ui/react` primitives 和同等 shadcn slot/token 结构；消费应用应已有 `@base-ui/react` 与 `lucide-react` peer dependencies。
 
 ### `LinkitUserPicker`
 
