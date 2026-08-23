@@ -26,12 +26,15 @@ export type LinkitUserDisplayProps = HTMLAttributes<HTMLSpanElement> & {
 };
 
 export function LinkitUserDisplay({ profile, userId, compact = false, showUsername = false, className, ...props }: LinkitUserDisplayProps) {
-  const label = profile?.display_name || userId || "Unknown user";
+  const displayName = profile?.display_name?.trim();
+  const fallback = !displayName;
+  const label = displayName || "Unknown user";
   return <span {...props} className={twMerge(clsx("inline-flex min-w-0 items-center gap-2", className))}>
     <LinkitAvatar profile={profile} size={compact ? "sm" : "md"} fallback={label} />
     <span className="min-w-0">
       <span className="block truncate font-medium">{label}</span>
-      {showUsername && profile?.username ? <span className="block truncate text-xs text-muted-foreground">@{profile.username}</span> : null}
+      {fallback && userId ? <code className="block max-w-full truncate font-mono text-xs text-muted-foreground" title={userId}>{userId}</code> : null}
+      {!fallback && showUsername && profile?.username ? <span className="block truncate text-xs text-muted-foreground">@{profile.username}</span> : null}
     </span>
   </span>;
 }
