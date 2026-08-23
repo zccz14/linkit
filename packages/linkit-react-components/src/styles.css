@@ -86,3 +86,30 @@
 @keyframes linkit-user-info-spin { to { transform: rotate(360deg); } }
 @media (max-width: 34rem) { .linkit-user-info__popup { width: min(100vw - 1rem, 24rem); } .linkit-user-info__dm { width: 100%; } }
 @media (prefers-reduced-motion: reduce) { .linkit-user-info__popup, .linkit-user-info__skeleton span, .linkit-user-info__spinner { animation: none; transition: none; } }
+
+
+/* User picker form control and search results. */
+.linkit-user-picker { position: relative; display: grid; min-width: min(100%, 17rem); gap: .375rem; color: var(--foreground, #0f172a); }
+.linkit-user-picker__label { color: var(--foreground, #0f172a); font-size: .875rem; font-weight: 500; line-height: 1.25; }
+.linkit-user-picker__input { width: 100%; min-width: 0; height: 2.5rem; padding: .5rem .7rem; color: inherit; font: inherit; font-size: .875rem; line-height: 1.25; background: var(--background, #fff); border: 1px solid var(--input, var(--border, #cbd5e1)); border-radius: .5rem; outline: none; transition: border-color 120ms ease-out, box-shadow 120ms ease-out; }
+.linkit-user-picker__input::placeholder { color: var(--muted-foreground, #64748b); opacity: 1; }
+.linkit-user-picker__input:hover:not(:disabled) { border-color: color-mix(in srgb, var(--foreground, #0f172a) 28%, var(--border, #cbd5e1)); }
+.linkit-user-picker__input:focus-visible { border-color: var(--ring, #2563eb); box-shadow: 0 0 0 3px color-mix(in srgb, var(--ring, #2563eb) 22%, transparent); }
+.linkit-user-picker__input:disabled { cursor: not-allowed; color: var(--muted-foreground, #64748b); background: var(--muted, #f1f5f9); opacity: .65; }
+.linkit-user-picker__selection { display: flex; min-width: 0; align-items: center; gap: .5rem; padding: .45rem .5rem; background: var(--muted, #f1f5f9); border: 1px solid var(--border, #e2e8f0); border-radius: .5rem; }
+.linkit-user-picker__selection-text { display: grid; min-width: 0; flex: 1; gap: .08rem; }
+.linkit-user-picker__selection-text strong, .linkit-user-picker__option strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: .875rem; line-height: 1.2; }
+.linkit-user-picker__selection-text > span, .linkit-user-picker__option > span > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted-foreground, #64748b); font-size: .7rem; line-height: 1.25; }
+.linkit-user-picker__selection-text code, .linkit-user-picker__option code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+.linkit-user-picker__clear { flex: none; min-height: 2rem; padding: .35rem .5rem; color: var(--foreground, #0f172a); font: inherit; font-size: .75rem; font-weight: 500; cursor: pointer; background: transparent; border: 0; border-radius: .375rem; }
+.linkit-user-picker__clear:hover:not(:disabled) { background: var(--background, #fff); }
+.linkit-user-picker__clear:focus-visible, .linkit-user-picker__option:focus-visible { outline: 3px solid color-mix(in srgb, var(--ring, #2563eb) 55%, transparent); outline-offset: -1px; }
+.linkit-user-picker__clear:disabled { cursor: not-allowed; opacity: .55; }
+.linkit-user-picker__results { position: absolute; z-index: 20; top: calc(100% + .25rem); right: 0; left: 0; display: grid; max-height: min(20rem, 45vh); overflow: auto; padding: .25rem; color: var(--popover-foreground, var(--foreground, #0f172a)); background: var(--popover, var(--background, #fff)); border: 1px solid var(--border, #e2e8f0); border-radius: .625rem; box-shadow: 0 .5rem 1rem rgb(15 23 42 / .12); }
+.linkit-user-picker__option { display: flex; min-width: 0; align-items: center; gap: .55rem; padding: .5rem; color: inherit; text-align: left; cursor: pointer; background: transparent; border: 0; border-radius: .5rem; }
+.linkit-user-picker__option > span { display: grid; min-width: 0; flex: 1; gap: .08rem; }
+.linkit-user-picker__option:hover, .linkit-user-picker__option[data-active] { background: var(--accent, var(--muted, #f1f5f9)); color: var(--accent-foreground, var(--foreground, #0f172a)); }
+.linkit-user-picker__status, .linkit-user-picker__error { margin: 0; padding: .6rem .65rem; color: var(--muted-foreground, #64748b); font-size: .8rem; line-height: 1.4; }
+.linkit-user-picker__error { color: var(--destructive, #b91c1c); background: color-mix(in srgb, var(--destructive, #b91c1c) 8%, transparent); border-radius: .5rem; }
+@media (max-width: 34rem) { .linkit-user-picker { min-width: 0; } .linkit-user-picker__results { max-height: min(18rem, 50vh); } }
+@media (prefers-reduced-motion: reduce) { .linkit-user-picker__input { transition: none; } }

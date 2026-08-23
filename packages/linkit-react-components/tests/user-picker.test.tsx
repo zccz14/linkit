@@ -18,7 +18,8 @@ describe("LinkitUserPicker", () => {
     vi.useFakeTimers();
     searchUsers.mockResolvedValue([alice]);
     const changed = vi.fn();
-    render(<form><LinkitUserPicker lang="en" name="investor_id" onValueChange={changed} /></form>);
+    render(<form><LinkitUserPicker className="consumer-picker" lang="en" name="investor_id" onValueChange={changed} /></form>);
+    expect(document.querySelector(".linkit-user-picker.consumer-picker")).toBeInTheDocument();
     const input = screen.getByRole("combobox");
     fireEvent.change(input, { target: { value: "ali" } });
     act(() => { vi.advanceTimersByTime(180); });
