@@ -48,3 +48,9 @@ describe("Linkit displays", () => {
     expect(screen.queryByText("user-1")).not.toBeInTheDocument();
   });
 });
+
+it("未知 profile 可使用本地化标签并保留完整用户 ID", () => {
+  render(<LinkitUserDisplay userId="550e8400-e29b-41d4-a716-446655440000" unknownLabel="未知用户" />);
+  expect(screen.getByText("未知用户")).toBeInTheDocument();
+  expect(screen.getByText("550e8400-e29b-41d4-a716-446655440000")).toBeInTheDocument();
+});
