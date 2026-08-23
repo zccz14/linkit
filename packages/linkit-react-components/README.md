@@ -10,6 +10,7 @@
 import { AuthMiniProvider } from "auth-mini-react-components";
 import {
   LinkitProvider,
+  LinkitAppHeaderUser,
   LinkitUserDisplay,
   useLinkit,
 } from "linkit-react-components";
@@ -29,6 +30,9 @@ export function App() {
       autoRedirectToLogin
     >
       <LinkitProvider linkitBaseUrl="https://linkit.ntnl.io">
+        <header>
+          <LinkitAppHeaderUser lang="zh-CN" />
+        </header>
         <CurrentUser />
       </LinkitProvider>
     </AuthMiniProvider>
@@ -63,13 +67,13 @@ Provider 只接受相对 API path，例如 `/api/me`。这避免调用方把 Aut
 
 ```tsx
 function ProfileButton() {
-  const { getMe, getProfile, request } = useLinkit();
+  const { getMe, getProfile, updateProfile, upload, request } = useLinkit();
 
   async function load() {
     const me = await getMe();
     const profile = await getProfile(me.id);
     const data = await request<{ ok: boolean }>("/api/example");
-    return { me, profile, data };
+    return { me, profile, data, updateProfile, upload };
   }
 
   return <button onClick={() => void load()}>读取 Linkit 资料</button>;
@@ -84,8 +88,45 @@ function ProfileButton() {
 | `request(path, init?)` | 对相对 Linkit API path 发起 Bearer 请求。遇到一次 `401` 时复用外层 Auth Mini SDK refresh 后重试一次。 |
 | `getMe()` | 请求当前 Linkit 用户的 `/api/me`。 |
 | `getProfile(userId)` | 请求指定用户的公开 Linkit profile。 |
+| `updateProfile(profile)` | 使用当前用户的 Linkit Profile API 保存 username、display name、motto 和已上传头像 ID。 |
+| `upload(file)` | 上传当前用户拥有的附件，供 Profile 头像保存时引用。 |
 
 对于密集表格，应优先使用业务后端已批量提供的 profile map，而不是让每一行调用 `getProfile()`，以避免 N+1 浏览器请求。
+
+### `LinkitAppHeaderUser`
+
+用于应用顶部栏的完整登录状态与个人资料入口。它**必须**放在 `AuthMiniProvider → LinkitProvider` 之下；未登录时调用外层 `AuthMiniProvider` 的既有登录流程，绝不接触密码、cookie、refresh token 或 audience 配置。
+
+```tsx
+import { LinkitAppHeaderUser } from "linkit-react-components";
+import "linkit-react-components/styles.css";
+
+<header className="app-header">
+  <LinkitAppHeaderUser
+    lang="zh-CN"
+    className="app-header-user"
+    securitySettingsTarget="_blank"
+  />
+</header>
+```
+
+已登录时，组件显示头像与昵称；激活后以原生无障碍 `dialog` 打开资料编辑器，支持：
+
+- 上传头像、编辑用户名、昵称与格言；保存使用 Linkit 的 `/api/attachments` 与 `/api/profile`，并显示 loading、错误、成功与未保存状态；
+- 显示完整 UID，提供复制按钮；clipboard 不可用或失败时给出可见、可朗读的手动复制提示；
+- 在同一资料弹窗内组合 `AuthMiniButton`，复用 Auth Mini 已发布的通行密钥注册与登录方式管理 UI；不复制认证安全逻辑；
+- 调用外层 `signOut()` 登出，登出后回到可点击的登录按钮。
+
+| 属性 | 说明 |
+| --- | --- |
+| `lang` | `zh` / `zh-CN` 使用中文，其它值使用英文。默认 `en`。 |
+| `className` | 应用 header trigger 的样式类。 |
+| `loginLabel` | 未登录按钮的可选文案。 |
+| `labels` | 局部覆盖中英文可见文案。 |
+| `securitySettingsUrl` / `securitySettingsTarget` | 透传给复用的 `AuthMiniButton` 安全入口。 |
+| `onProfileSaved` / `onSignedOut` | 保存或登出完成后的可选通知回调。 |
+
+`styles.css` 是该组件必要样式，包含 44px 触控目标、焦点环、窄屏重排和减少动态效果的处理。原生 dialog 负责 Escape、焦点陷阱和关闭后的焦点恢复。
 
 ### `LinkitAvatar`
 
@@ -162,6 +203,8 @@ type LinkitProfile = {
   display_name: string;
   avatar_url?: string | null;
   motto?: string | null;
+  avatar_attachment_id?: string | null;
+  updated_at?: number;
 };
 
 type LinkitConversation = {
@@ -200,4 +243,4 @@ npm install linkit-react-components auth-mini-react-components
 
 ## 组件范围
 
-本包只负责认证 Linkit 数据访问和紧凑身份/会话展示。消息列表、编辑器、通知设置、群组管理和业务域对象仍应由消费应用自行实现。
+本包只负责认证 Linkit 数据访问、紧凑身份/会话展示，以及可复用的 header 用户资料入口。消息列表、编辑器、通知设置、群组管理和业务域对象仍应由消费应用自行实现。

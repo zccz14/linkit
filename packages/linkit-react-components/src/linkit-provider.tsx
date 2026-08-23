@@ -1,6 +1,6 @@
 import { createContext, useCallback, useContext, useMemo, type ReactNode } from "react";
 import { useAuthMini } from "auth-mini-react-components";
-import type { LinkitMe, LinkitProfile } from "./types.js";
+import type { LinkitAttachment, LinkitMe, LinkitProfile, LinkitProfileUpdate } from "./types.js";
 
 export type LinkitProviderProps = {
   linkitBaseUrl: string;
@@ -12,6 +12,8 @@ export type LinkitContextValue = {
   request: <T>(path: string, init?: RequestInit) => Promise<T>;
   getMe: () => Promise<LinkitMe>;
   getProfile: (userId: string) => Promise<LinkitProfile>;
+  updateProfile: (profile: LinkitProfileUpdate) => Promise<LinkitProfile>;
+  upload: (file: File) => Promise<LinkitAttachment>;
 };
 
 const LinkitContext = createContext<LinkitContextValue | undefined>(undefined);
@@ -49,6 +51,12 @@ export function LinkitProvider({ linkitBaseUrl, children }: LinkitProviderProps)
     request,
     getMe: () => request<LinkitMe>("/api/me"),
     getProfile: (userId) => request<LinkitProfile>(`/api/public/profiles/${encodeURIComponent(userId)}`),
+    updateProfile: (profile) => request<LinkitProfile>("/api/profile", { method: "PUT", body: JSON.stringify(profile) }),
+    upload: (file) => {
+      const form = new FormData();
+      form.append("file", file);
+      return request<LinkitAttachment>("/api/attachments", { method: "POST", body: form });
+    },
   }), [baseUrl, request]);
   return <LinkitContext.Provider value={value}>{children}</LinkitContext.Provider>;
 }
