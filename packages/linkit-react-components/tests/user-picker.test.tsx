@@ -31,6 +31,20 @@ describe("LinkitUserPicker", () => {
     expect(screen.getByText("alice")).toBeInTheDocument();
   });
 
+  it("passes a UUID-character query through and presents the username with its UID", async () => {
+    vi.useFakeTimers();
+    const uuidUser = { user_id: "a1b2c3d4-0000-0000-0000-000000000001", username: "alice", avatar_url: null };
+    searchUsers.mockResolvedValue([uuidUser]);
+    render(<LinkitUserPicker lang="en" />);
+    const input = screen.getByRole("combobox");
+    fireEvent.change(input, { target: { value: "A1B2-" } });
+    act(() => { vi.advanceTimersByTime(180); });
+    await act(async () => {});
+    expect(searchUsers).toHaveBeenCalledWith("A1B2-", expect.any(AbortSignal));
+    expect(screen.getByRole("option", { name: /alice.*a1b2c3d4/i })).toBeInTheDocument();
+    expect(input).toHaveAttribute("placeholder", "Search username or UUID");
+  });
+
   it("supports keyboard selection, clearing, and Chinese copy", async () => {
     vi.useFakeTimers();
     searchUsers.mockResolvedValue([alice]);

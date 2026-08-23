@@ -1,6 +1,6 @@
 {
   "name": "linkit-react-components",
-  "version": "0.1.9",
+  "version": "0.1.10",
   "description": "Authenticated Linkit provider and compact React display primitives.",
   "license": "MIT",
   "repository": {

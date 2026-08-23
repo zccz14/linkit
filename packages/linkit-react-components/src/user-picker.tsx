@@ -26,8 +26,8 @@ export type LinkitUserPickerProps = {
 };
 
 const labelsByLanguage: Record<"en" | "zh", LinkitUserPickerLabels> = {
-  en: { label: "User", placeholder: "Search username", clear: "Clear selection", loading: "Searching users…", empty: "No users found.", selected: "Selected user" },
-  zh: { label: "用户", placeholder: "搜索用户名", clear: "清除选择", loading: "正在搜索用户…", empty: "没有找到用户。", selected: "已选择用户" },
+  en: { label: "User", placeholder: "Search username or UUID", clear: "Clear selection", loading: "Searching users…", empty: "No users found by username or UUID.", selected: "Selected user" },
+  zh: { label: "用户", placeholder: "搜索用户名或 UUID", clear: "清除选择", loading: "正在搜索用户…", empty: "未按用户名或 UUID 找到用户。", selected: "已选择用户" },
 };
 
 export function LinkitUserPicker({ value, defaultValue = "", onValueChange, name, label, placeholder, lang = "en", className, disabled = false, required = false }: LinkitUserPickerProps) {

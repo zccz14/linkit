@@ -18,7 +18,7 @@
 - `LinkitUserDisplay` renders a profile `username`; when the profile is unavailable it renders the localized unknown-user label and the complete source `user_id`.
 - `LinkitConversationDisplay` renders a group or direct conversation identity.
 - `LinkitAppHeaderUser` renders an application-header account trigger and Base UI dialog for username, motto, avatar upload, UID copy, passkey registration, sign-in-method settings, and sign out.
-- `LinkitUserPicker` searches username prefixes and writes the chosen `user_id` in controlled or uncontrolled form usage.
+- `LinkitUserPicker` searches username prefixes and UUID-character `user_id` prefixes, then writes the chosen `user_id` in controlled or uncontrolled form usage.
 
 ## Username and profile semantics
 

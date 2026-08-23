@@ -1004,18 +1004,52 @@ async fn search_users(
     if query.is_empty() {
         return Ok(axum::Json(Vec::new()));
     }
-    let prefix = format!("{}%", escape_like(&query));
-    let rows = sqlx::query_as::<_, UserSearchResult>(
-        "SELECT user_id,username,avatar_attachment_id,updated_at
-         FROM profiles
-         WHERE username LIKE ? ESCAPE '\\' COLLATE NOCASE
-         ORDER BY CASE WHEN username=? COLLATE NOCASE THEN 0 ELSE 1 END, username COLLATE NOCASE
-         LIMIT 5",
-    )
-    .bind(&prefix)
-    .bind(&query)
-    .fetch_all(&state.db)
-    .await?;
+    let username_prefix = format!("{}%", escape_like(&query));
+    let rows = if uuid_charset_query(&query) {
+        let user_id_prefix = format!("{query}%");
+        sqlx::query_as::<_, UserSearchResult>(
+            "WITH matches AS (
+                SELECT user_id,username,avatar_attachment_id,updated_at,0 AS source
+                FROM profiles
+                WHERE username LIKE ? ESCAPE '\\' COLLATE NOCASE
+                UNION ALL
+                SELECT user_id,username,avatar_attachment_id,updated_at,1 AS source
+                FROM profiles
+                WHERE user_id LIKE ? COLLATE NOCASE
+             ), deduplicated AS (
+                SELECT user_id,username,avatar_attachment_id,updated_at,MIN(source) AS source
+                FROM matches
+                GROUP BY user_id,username,avatar_attachment_id,updated_at
+             )
+             SELECT user_id,username,avatar_attachment_id,updated_at
+             FROM deduplicated
+             ORDER BY CASE
+                 WHEN user_id=? COLLATE NOCASE THEN 0
+                 WHEN username=? COLLATE NOCASE THEN 1
+                 WHEN source=0 THEN 2
+                 ELSE 3
+             END, username COLLATE NOCASE, user_id
+             LIMIT 5",
+        )
+        .bind(&username_prefix)
+        .bind(&user_id_prefix)
+        .bind(&query)
+        .bind(&query)
+        .fetch_all(&state.db)
+        .await?
+    } else {
+        sqlx::query_as::<_, UserSearchResult>(
+            "SELECT user_id,username,avatar_attachment_id,updated_at
+             FROM profiles
+             WHERE username LIKE ? ESCAPE '\\' COLLATE NOCASE
+             ORDER BY CASE WHEN username=? COLLATE NOCASE THEN 0 ELSE 1 END, username COLLATE NOCASE
+             LIMIT 5",
+        )
+        .bind(&username_prefix)
+        .bind(&query)
+        .fetch_all(&state.db)
+        .await?
+    };
     let public_origin = meta(&state.db, "public_origin").await?;
     Ok(axum::Json(
         rows.into_iter()
@@ -1028,6 +1062,13 @@ async fn search_users(
             })
             .collect(),
     ))
+}
+
+fn uuid_charset_query(value: &str) -> bool {
+    !value.is_empty()
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_hexdigit() || byte == b'-')
 }
 
 fn escape_like(value: &str) -> String {
@@ -2847,6 +2888,130 @@ mod tests {
         .await
         .unwrap();
         assert!(empty.is_empty());
+    }
+
+    #[tokio::test]
+    async fn user_search_matches_uuid_charset_user_id_prefixes_without_dropping_usernames() {
+        let pool = db::connect_memory().await.unwrap();
+        sqlx::query(
+            "UPDATE app_meta SET value='https://linkit.example.test' WHERE key='public_origin'",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        for (user_id, username) in [
+            ("a1b2c3d4-0000-0000-0000-000000000001", "ordinary"),
+            ("a1b2c3d4-0000-0000-0000-000000000002", "a1b2"),
+            ("a1b2c3d4-0000-0000-0000-000000000003", "another"),
+            ("a1b2c3d4-0000-0000-0000-000000000004", "fourth"),
+            ("a1b2c3d4-0000-0000-0000-000000000005", "fifth"),
+            ("a1b2c3d4-0000-0000-0000-000000000006", "sixth"),
+            ("z-user", "abcdefg-special"),
+            ("special-user", "#? special"),
+        ] {
+            sqlx::query("INSERT INTO users(id,created_at) VALUES(?,0)")
+                .bind(user_id)
+                .execute(&pool)
+                .await
+                .unwrap();
+            sqlx::query("INSERT INTO profiles(user_id,username,motto,updated_at) VALUES(?,?,'',0)")
+                .bind(user_id)
+                .bind(username)
+                .execute(&pool)
+                .await
+                .unwrap();
+        }
+
+        let axum::Json(prefix_matches) = search_users(
+            State(test_state(pool.clone())),
+            Query(UserQuery {
+                query: Some(" A1B2C3D4- ".to_owned()),
+            }),
+        )
+        .await
+        .unwrap();
+        assert_eq!(prefix_matches.len(), 5);
+        assert!(
+            prefix_matches
+                .iter()
+                .all(|user| user.user_id.starts_with("a1b2c3d4-"))
+        );
+        assert_eq!(
+            prefix_matches
+                .iter()
+                .filter(|user| user.user_id == "a1b2c3d4-0000-0000-0000-000000000002")
+                .count(),
+            1
+        );
+
+        let axum::Json(exact_match) = search_users(
+            State(test_state(pool.clone())),
+            Query(UserQuery {
+                query: Some("A1B2C3D4-0000-0000-0000-000000000001".to_owned()),
+            }),
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            exact_match.first().map(|user| user.user_id.as_str()),
+            Some("a1b2c3d4-0000-0000-0000-000000000001")
+        );
+
+        let axum::Json(username_matches) = search_users(
+            State(test_state(pool.clone())),
+            Query(UserQuery {
+                query: Some("a1b2".to_owned()),
+            }),
+        )
+        .await
+        .unwrap();
+        assert!(username_matches.iter().any(|user| user.username == "a1b2"));
+
+        let axum::Json(non_uuid_matches) = search_users(
+            State(test_state(pool.clone())),
+            Query(UserQuery {
+                query: Some("abcdefg".to_owned()),
+            }),
+        )
+        .await
+        .unwrap();
+        assert_eq!(non_uuid_matches.len(), 1);
+        assert_eq!(non_uuid_matches[0].username, "abcdefg-special");
+
+        let axum::Json(special_username_matches) = search_users(
+            State(test_state(pool.clone())),
+            Query(UserQuery {
+                query: Some("#?".to_owned()),
+            }),
+        )
+        .await
+        .unwrap();
+        assert_eq!(special_username_matches.len(), 1);
+        assert_eq!(special_username_matches[0].username, "#? special");
+    }
+
+    #[tokio::test]
+    async fn user_id_nocase_index_supports_uuid_prefix_search() {
+        let pool = db::connect_memory().await.unwrap();
+        let plan: Vec<(i64, i64, i64, String)> = sqlx::query_as(
+            "EXPLAIN QUERY PLAN SELECT user_id FROM profiles WHERE user_id LIKE 'a1b2%' COLLATE NOCASE",
+        )
+        .fetch_all(&pool)
+        .await
+        .unwrap();
+        assert!(
+            plan.iter()
+                .any(|(_, _, _, detail)| detail.contains("profiles_user_id_nocase"))
+        );
+    }
+
+    #[test]
+    fn uuid_charset_query_accepts_only_ascii_hex_and_hyphen() {
+        assert!(uuid_charset_query("a1B2-c3"));
+        assert!(!uuid_charset_query(""));
+        assert!(!uuid_charset_query("a1b2?"));
+        assert!(!uuid_charset_query("a1b2g"));
+        assert!(!uuid_charset_query("a1 b2"));
     }
 
     #[test]
