@@ -29,11 +29,11 @@ beforeEach(() => {
   publicProfileStatus = 200;
   vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const path = new URL(String(input)).pathname;
-    if (path === "/api/me") return json({ id: "uid-1", root: false, profile: { user_id: "uid-1", username: "alice", display_name: "Alice", motto: "Hello", avatar_attachment_id: "avatar-1" } });
+    if (path === "/api/me") return json({ id: "uid-1", root: false, profile: { user_id: "uid-1", username: "alice", motto: "Hello", avatar_attachment_id: "avatar-1" } });
     if (path === "/api/public/profiles/uid-1") return publicProfileStatus === 200
-      ? json({ user_id: "uid-1", username: "alice", display_name: "Alice", motto: "Hello", avatar_url: `https://cdn.example.test/alice.webp?v=${publicAvatarVersion}` })
+      ? json({ user_id: "uid-1", username: "alice", motto: "Hello", avatar_url: `https://cdn.example.test/alice.webp?v=${publicAvatarVersion}` })
       : new Response(JSON.stringify({ error: { message: "Public profile unavailable" } }), { status: publicProfileStatus, headers: { "content-type": "application/json" } });
-    if (path === "/api/profile" && init?.method === "PUT") { publicAvatarVersion = 2; return json({ user_id: "uid-1", username: "alice-next", display_name: "Alice Next", motto: "Updated", avatar_attachment_id: "avatar-1" }); }
+    if (path === "/api/profile" && init?.method === "PUT") { publicAvatarVersion = 2; return json({ user_id: "uid-1", username: "alice-next", motto: "Updated", avatar_attachment_id: "avatar-1" }); }
     return new Response("not found", { status: 404 });
   }));
 });
@@ -45,13 +45,12 @@ function subject() { return <LinkitProvider linkitBaseUrl="https://linkit.exampl
 describe("LinkitAppHeaderUser", () => {
   it("shows the signed-in avatar/name and saves the profile in its dialog", async () => {
     render(subject());
-    await screen.findByRole("button", { name: /Alice/ });
-    fireEvent.click(screen.getByRole("button", { name: /Alice/ }));
+    await screen.findByRole("button", { name: /alice/ });
+    fireEvent.click(screen.getByRole("button", { name: /alice/ }));
     expect(screen.getByRole("dialog")).toBeInTheDocument();
     expect(screen.getByDisplayValue("alice")).toBeInTheDocument();
     expect(screen.getByText("uid-1")).toBeInTheDocument();
     fireEvent.change(screen.getByLabelText("Username"), { target: { value: "alice-next" } });
-    fireEvent.change(screen.getByLabelText("Display name"), { target: { value: "Alice Next" } });
     fireEvent.change(screen.getByLabelText("Motto"), { target: { value: "Updated" } });
     fireEvent.click(screen.getByRole("button", { name: "Save profile" }));
     await waitFor(() => expect(screen.getByText("Profile saved.")).toBeInTheDocument());
@@ -61,7 +60,7 @@ describe("LinkitAppHeaderUser", () => {
 
   it("reads the public avatar without attaching the Auth Mini bearer token", async () => {
     render(subject());
-    await screen.findByRole("button", { name: /Alice/ });
+    await screen.findByRole("button", { name: /alice/ });
     await waitFor(() => expect((fetch as ReturnType<typeof vi.fn>).mock.calls.some(([input]) => String(input).includes("/api/public/profiles/uid-1"))).toBe(true));
     const call = (fetch as ReturnType<typeof vi.fn>).mock.calls.find(([input]) => String(input).includes("/api/public/profiles/uid-1"));
     expect(call?.[1]).toBeUndefined();
@@ -70,7 +69,7 @@ describe("LinkitAppHeaderUser", () => {
   it("shows an avatar fallback and a recoverable error when the public profile request fails", async () => {
     publicProfileStatus = 500;
     render(subject());
-    const trigger = await screen.findByRole("button", { name: /Alice/ });
+    const trigger = await screen.findByRole("button", { name: /alice/ });
     fireEvent.click(trigger);
     await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent("Public profile unavailable"));
     expect(trigger.querySelector("img")).toBeNull();
@@ -86,7 +85,7 @@ describe("LinkitAppHeaderUser", () => {
 
   it("organizes Auth Mini security actions inside its own dialog and signs out", async () => {
     render(subject());
-    fireEvent.click(await screen.findByRole("button", { name: /Alice/ }));
+    fireEvent.click(await screen.findByRole("button", { name: /alice/ }));
     fireEvent.click(screen.getByRole("button", { name: "Add passkey" }));
     expect(auth.openPasskeyRegistrationPage).toHaveBeenCalledOnce();
     expect(screen.getByRole("link", { name: "Manage sign-in methods" })).toHaveAttribute("href", "https://auth.example.test/web/#/");

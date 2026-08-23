@@ -11,7 +11,7 @@ import { LinkitUserPicker } from "../src/user-picker.js";
 
 afterEach(() => { cleanup(); vi.clearAllMocks(); vi.useRealTimers(); });
 
-const alice = { user_id: "user-alice", username: "alice", display_name: "Alice", avatar_url: null };
+const alice = { user_id: "user-alice", username: "alice", avatar_url: null };
 
 describe("LinkitUserPicker", () => {
   it("searches after a short debounce, chooses a user, and fills the hidden form value", async () => {
@@ -24,11 +24,11 @@ describe("LinkitUserPicker", () => {
     act(() => { vi.advanceTimersByTime(180); });
     await act(async () => {});
     expect(searchUsers).toHaveBeenCalledWith("ali", expect.any(AbortSignal));
-    const option = screen.getByRole("option", { name: /Alice/ });
+    const option = screen.getByRole("option", { name: /alice/ });
     fireEvent.click(option);
     expect(changed).toHaveBeenCalledWith("user-alice", alice);
     expect(screen.getByDisplayValue("user-alice")).toHaveAttribute("name", "investor_id");
-    expect(screen.getByText("Alice")).toBeInTheDocument();
+    expect(screen.getByText("alice")).toBeInTheDocument();
   });
 
   it("supports keyboard selection, clearing, and Chinese copy", async () => {

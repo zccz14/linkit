@@ -3,7 +3,6 @@ import type { AuthMiniApi } from "auth-mini/sdk/browser";
 export type Profile = {
   user_id: string;
   username: string;
-  display_name: string;
   motto: string;
   avatar_attachment_id?: string;
   updated_at: number;
@@ -35,8 +34,7 @@ export type ConversationDetail = Conversation & {
   members: Array<{
     user_id: string;
     username: string;
-    display_name: string;
-    role: string;
+      role: string;
   }>;
   bots: Bot[];
 };
@@ -100,7 +98,6 @@ export type SystemOverview = {
 };
 
 export type BarkNotificationUser = {
-  display_name: string;
   username: string;
   device_count: number;
   last_device_updated_at: number;

@@ -18,7 +18,6 @@ export type LinkitAppHeaderUserLabels = {
   avatar: string;
   uploadAvatar: string;
   username: string;
-  displayName: string;
   motto: string;
   uid: string;
   copyUid: string;
@@ -59,7 +58,6 @@ const labelsByLanguage: Record<"en" | "zh", LinkitAppHeaderUserLabels> = {
     avatar: "Avatar",
     uploadAvatar: "Upload image",
     username: "Username",
-    displayName: "Display name",
     motto: "Motto",
     uid: "UID",
     copyUid: "Copy UID",
@@ -87,7 +85,6 @@ const labelsByLanguage: Record<"en" | "zh", LinkitAppHeaderUserLabels> = {
     avatar: "头像",
     uploadAvatar: "上传图片",
     username: "用户名",
-    displayName: "昵称",
     motto: "格言",
     uid: "UID",
     copyUid: "复制 UID",
@@ -107,7 +104,7 @@ const labelsByLanguage: Record<"en" | "zh", LinkitAppHeaderUserLabels> = {
   },
 };
 
-type Editor = { username: string; displayName: string; motto: string; avatarAttachmentId: string };
+type Editor = { username: string; motto: string; avatarAttachmentId: string };
 
 export function LinkitAppHeaderUser({
   lang = "en",
@@ -157,9 +154,8 @@ export function LinkitAppHeaderUser({
   }, [avatarPreview]);
 
   const dirty = !profile
-    ? Boolean(editor.username || editor.displayName || editor.motto || editor.avatarAttachmentId)
+    ? Boolean(editor.username || editor.motto || editor.avatarAttachmentId)
     : editor.username !== profile.username
-      || editor.displayName !== profile.display_name
       || editor.motto !== (profile.motto ?? "")
       || editor.avatarAttachmentId !== (profile.avatar_attachment_id ?? "");
 
@@ -217,7 +213,6 @@ export function LinkitAppHeaderUser({
     try {
       const saved = await linkit.updateProfile({
         username: editor.username.trim(),
-        display_name: editor.displayName.trim(),
         motto: editor.motto.trim(),
         avatar_attachment_id: editor.avatarAttachmentId || undefined,
       });
@@ -266,13 +261,13 @@ export function LinkitAppHeaderUser({
     return <ButtonPrimitive className={className} type="button" onClick={auth.signIn}>{loginLabel ?? labels.signIn}</ButtonPrimitive>;
   }
 
-  const displayName = profile?.display_name?.trim() || profile?.username?.trim() || labels.account;
-  const avatarProfile = avatarPreview ? { display_name: displayName, avatar_url: avatarPreview } : profile;
+  const username = profile?.username?.trim() || labels.account;
+  const avatarProfile = avatarPreview ? { username, avatar_url: avatarPreview } : profile;
   const securityUrl = securitySettingsUrl ?? authMiniSecurityUrl(auth.authMiniBaseUrl);
   return <DialogPrimitive.Root open={open} onOpenChange={setOpen}>
     <DialogPrimitive.Trigger render={<ButtonPrimitive aria-haspopup="dialog" className={className} type="button" />}>
-      <HeaderAvatar profile={avatarProfile} label={displayName} />
-      <span className="linkit-app-header-user__name">{displayName}</span>
+      <HeaderAvatar profile={avatarProfile} label={username} />
+      <span className="linkit-app-header-user__name">{username}</span>
     </DialogPrimitive.Trigger>
     <DialogPrimitive.Portal>
       <DialogPrimitive.Backdrop className="linkit-app-header-user__backdrop" />
@@ -297,15 +292,14 @@ export function LinkitAppHeaderUser({
               <div className="linkit-app-header-user__field">
                 <span className="linkit-app-header-user__field-label">{labels.avatar}</span>
                 <div className="linkit-app-header-user__avatar-row">
-                  <HeaderAvatar profile={avatarProfile} label={displayName} size="lg" />
+                  <HeaderAvatar profile={avatarProfile} label={username} size="lg" />
                   <input accept="image/*" className="linkit-app-header-user__visually-hidden" ref={fileRef} type="file" onChange={(event) => void chooseAvatar(event)} />
                   <ButtonPrimitive className="linkit-app-header-user__button linkit-app-header-user__button--outline" type="button" onClick={() => fileRef.current?.click()}>
                     <UploadIcon data-icon="inline-start" />{labels.uploadAvatar}
                   </ButtonPrimitive>
                 </div>
               </div>
-              <label className="linkit-app-header-user__field" htmlFor={`${titleId}-username`}><span>{labels.username}</span><input autoComplete="username" id={`${titleId}-username`} maxLength={32} required value={editor.username} onChange={(event) => setEditor((current) => ({ ...current, username: event.target.value }))} /></label>
-              <label className="linkit-app-header-user__field" htmlFor={`${titleId}-display-name`}><span>{labels.displayName}</span><input id={`${titleId}-display-name`} maxLength={80} required value={editor.displayName} onChange={(event) => setEditor((current) => ({ ...current, displayName: event.target.value }))} /></label>
+              <label className="linkit-app-header-user__field" htmlFor={`${titleId}-username`}><span>{labels.username}</span><input autoComplete="username" id={`${titleId}-username`} maxLength={80} required value={editor.username} onChange={(event) => setEditor((current) => ({ ...current, username: event.target.value }))} /></label>
               <label className="linkit-app-header-user__field" htmlFor={`${titleId}-motto`}><span>{labels.motto}</span><textarea id={`${titleId}-motto`} maxLength={280} rows={3} value={editor.motto} onChange={(event) => setEditor((current) => ({ ...current, motto: event.target.value }))} /></label>
             </div>
           </section>
@@ -329,7 +323,7 @@ export function LinkitAppHeaderUser({
   </DialogPrimitive.Root>;
 }
 
-function HeaderAvatar({ profile, label, size = "sm" }: { profile: Pick<LinkitProfile, "display_name" | "avatar_url"> | null | undefined; label: string; size?: "sm" | "lg" }) {
+function HeaderAvatar({ profile, label, size = "sm" }: { profile: Pick<LinkitProfile, "username" | "avatar_url"> | null | undefined; label: string; size?: "sm" | "lg" }) {
   return <AvatarPrimitive.Root className="linkit-app-header-user__avatar" data-size={size}>
     {profile?.avatar_url ? <AvatarPrimitive.Image alt="" className="linkit-app-header-user__avatar-image" src={profile.avatar_url} /> : null}
     <AvatarPrimitive.Fallback className="linkit-app-header-user__avatar-fallback">{Array.from(label)[0]?.toLocaleUpperCase() ?? "?"}</AvatarPrimitive.Fallback>
@@ -344,8 +338,8 @@ function Alert({ children, variant = "default" }: { children: React.ReactNode; v
   return <div className="linkit-app-header-user__alert" data-variant={variant} role={variant === "destructive" ? "alert" : "status"}>{children}</div>;
 }
 
-function emptyEditor(): Editor { return { username: "", displayName: "", motto: "", avatarAttachmentId: "" }; }
-function toEditor(profile: LinkitProfile | null): Editor { return { username: profile?.username ?? "", displayName: profile?.display_name ?? "", motto: profile?.motto ?? "", avatarAttachmentId: profile?.avatar_attachment_id ?? "" }; }
+function emptyEditor(): Editor { return { username: "", motto: "", avatarAttachmentId: "" }; }
+function toEditor(profile: LinkitProfile | null): Editor { return { username: profile?.username ?? "", motto: profile?.motto ?? "", avatarAttachmentId: profile?.avatar_attachment_id ?? "" }; }
 function languageKey(lang: string): "en" | "zh" { const normalized = lang.toLowerCase(); return normalized === "zh" || normalized.startsWith("zh-") ? "zh" : "en"; }
 function authMiniSecurityUrl(authMiniBaseUrl: string) { const url = new URL("/web/", authMiniBaseUrl); url.hash = "/"; return url.toString(); }
 function status(cause: unknown): number | undefined { return typeof cause === "object" && cause !== null && "status" in cause && typeof cause.status === "number" ? cause.status : undefined; }

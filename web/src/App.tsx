@@ -464,10 +464,7 @@ function Shell({ me, sdk }: { me: Me; sdk: AuthMiniApi }) {
           <ProfileAvatar profile={me.profile} sdk={sdk} />
           <div className="min-w-0 flex-1">
             <p className="truncate text-sm font-medium">
-              {me.profile!.display_name}
-            </p>
-            <p className="truncate text-xs text-muted-foreground">
-              @{me.profile!.username}
+              {me.profile!.username}
             </p>
           </div>
           <LanguageMenu />
@@ -672,7 +669,7 @@ function ConversationAvatar({
       <ProfileAvatar
         sdk={sdk}
         profile={{
-          display_name: conversation.title || t("group.title"),
+          username: conversation.title || t("group.title"),
           avatar_attachment_id: conversation.avatar_attachment_id,
         }}
       />
@@ -681,7 +678,7 @@ function ConversationAvatar({
     <ProfileAvatar
       sdk={sdk}
       profile={{
-        display_name: conversation.counterpart_name,
+        username: conversation.counterpart_name,
         avatar_attachment_id: conversation.counterpart_avatar_attachment_id,
       }}
     />
@@ -827,7 +824,7 @@ function AdminBarkUsers({ sdk }: { sdk: AuthMiniApi }) {
   return <Page title={t("admin.barkUsersTitle")} description={t("admin.barkUsersPageDescription")}>
     {users.data.length ? <div className="divide-y rounded-lg border" aria-label={t("admin.barkUsersTitle")}>
       {users.data.map((user) => <div key={user.username} className="flex flex-col gap-3 p-4 sm:flex-row sm:items-center sm:justify-between">
-        <div className="min-w-0"><p className="truncate font-medium">{user.display_name}</p><p className="truncate text-sm text-muted-foreground">@{user.username}</p></div>
+        <div className="min-w-0"><p className="truncate font-medium">{user.username}</p><p className="truncate text-sm text-muted-foreground">@{user.username}</p></div>
         <div className="flex flex-wrap items-center gap-2 text-sm text-muted-foreground sm:justify-end"><Badge variant="secondary">{t("admin.barkUsersDevices", { count: String(user.device_count) })}</Badge><span>{t("admin.barkUsersLastUpdated", { time: new Date(user.last_device_updated_at * 1000).toLocaleString(locale) })}</span></div>
       </div>)}
     </div> : <Empty className="border"><EmptyHeader><EmptyMedia variant="icon"><BellIcon /></EmptyMedia><EmptyTitle>{t("admin.barkUsersEmptyTitle")}</EmptyTitle><EmptyDescription>{t("admin.barkUsersEmptyDescription")}</EmptyDescription></EmptyHeader></Empty>}
@@ -1300,7 +1297,7 @@ function GroupManagementContent({
                 <ProfileAvatar
                   sdk={sdk}
                   profile={{
-                    display_name: detail.title,
+                    username: detail.title,
                     avatar_attachment_id: groupAvatar || undefined,
                   }}
                 />
@@ -1340,12 +1337,12 @@ function GroupManagementContent({
               >
                 <Avatar>
                   <AvatarFallback>
-                    {member.display_name.slice(0, 1)}
+                    {member.username.slice(0, 1)}
                   </AvatarFallback>
                 </Avatar>
                 <div className="min-w-0 flex-1">
                   <p className="truncate text-sm font-medium">
-                    {member.display_name}
+                    {member.username}
                   </p>
                   <p className="truncate text-xs text-muted-foreground">
                     @{member.username}
@@ -1597,12 +1594,12 @@ function Person({ sdk }: { sdk: AuthMiniApi }) {
   const { username = "" } = useParams();
   const person = useQuery({
     queryKey: ["person", username],
-    queryFn: () => api<Profile>(sdk, `/api/users/${username}`),
+    queryFn: () => api<Profile>(sdk, `/api/users/${encodeURIComponent(username)}`),
   });
   const navigate = useNavigate();
   const open = useMutation({
     mutationFn: () =>
-      api<Conversation>(sdk, `/api/conversations/direct/${username}`, {
+      api<Conversation>(sdk, `/api/conversations/direct/${encodeURIComponent(username)}`, {
         method: "POST",
       }),
     onSuccess: (conversation) => navigate(`/conversations/${conversation.id}`),
@@ -1618,7 +1615,7 @@ function Person({ sdk }: { sdk: AuthMiniApi }) {
     );
   return (
     <Page
-      title={person.data.display_name}
+      title={person.data.username}
       description={`@${person.data.username}`}
     >
       <div className="flex flex-col gap-5">
@@ -1638,7 +1635,7 @@ function Compose({ sdk }: { sdk: AuthMiniApi }) {
   const navigate = useNavigate();
   const open = useMutation({
     mutationFn: () =>
-      api<Conversation>(sdk, `/api/conversations/direct/${username}`, {
+      api<Conversation>(sdk, `/api/conversations/direct/${encodeURIComponent(username)}`, {
         method: "POST",
       }),
     onSuccess: (conversation) => navigate(`/conversations/${conversation.id}`),
@@ -1956,9 +1953,6 @@ function ProfileEditor({ me, sdk }: { me: Me; sdk: AuthMiniApi }) {
   const { t } = useI18n();
   const queryClient = useQueryClient();
   const [username, setUsername] = useState(me.profile?.username ?? "");
-  const [displayName, setDisplayName] = useState(
-    me.profile?.display_name ?? "",
-  );
   const [motto, setMotto] = useState(me.profile?.motto ?? "");
   const [avatar, setAvatar] = useState(me.profile?.avatar_attachment_id ?? "");
   const fileRef = useRef<HTMLInputElement>(null);
@@ -1968,7 +1962,6 @@ function ProfileEditor({ me, sdk }: { me: Me; sdk: AuthMiniApi }) {
         method: "PUT",
         body: JSON.stringify({
           username,
-          display_name: displayName,
           motto,
           avatar_attachment_id: avatar || undefined,
         }),
@@ -2045,17 +2038,6 @@ function ProfileEditor({ me, sdk }: { me: Me; sdk: AuthMiniApi }) {
               required
               value={username}
               onChange={(event) => setUsername(event.target.value)}
-            />
-          </Field>
-          <Field>
-            <FieldLabel htmlFor="display-name">
-              {t("profileEditor.nickname")}
-            </FieldLabel>
-            <Input
-              id="display-name"
-              required
-              value={displayName}
-              onChange={(event) => setDisplayName(event.target.value)}
             />
           </Field>
           <Field>
@@ -2215,10 +2197,7 @@ function ProfileCard({ profile, sdk }: { profile: Profile; sdk: AuthMiniApi }) {
         <CardContent className="flex items-center gap-3 p-4">
           <ProfileAvatar profile={profile} sdk={sdk} />
           <div className="min-w-0">
-            <p className="truncate font-medium">{profile.display_name}</p>
-            <p className="truncate text-sm text-muted-foreground">
-              @{profile.username}
-            </p>
+            <p className="truncate font-medium">{profile.username}</p>
             <p className="mt-1 line-clamp-2 text-sm text-muted-foreground">
               {profile.motto}
             </p>
@@ -2236,7 +2215,7 @@ function ProfileAvatar({
   profile?: Partial<Profile>;
   sdk: AuthMiniApi;
 }) {
-  const fallback = profile?.display_name?.slice(0, 1).toUpperCase() ?? "?";
+  const fallback = profile?.username?.slice(0, 1).toUpperCase() ?? "?";
   const [url, setUrl] = useState("");
   useEffect(() => {
     const id = profile?.avatar_attachment_id;
@@ -2260,7 +2239,7 @@ function ProfileAvatar({
   }, [profile?.avatar_attachment_id, sdk]);
   return (
     <Avatar>
-      <AvatarImage src={url || undefined} alt={profile?.display_name ?? ""} />
+      <AvatarImage src={url || undefined} alt={profile?.username ?? ""} />
       <AvatarFallback>{fallback}</AvatarFallback>
     </Avatar>
   );

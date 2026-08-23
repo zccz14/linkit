@@ -1,7 +1,6 @@
 export type LinkitProfile = {
   user_id: string;
   username: string;
-  display_name: string;
   avatar_url?: string | null;
   motto?: string | null;
   avatar_attachment_id?: string | null;
@@ -18,7 +17,6 @@ export type LinkitAttachment = {
 
 export type LinkitProfileUpdate = {
   username: string;
-  display_name: string;
   motto: string;
   avatar_attachment_id?: string;
 };
@@ -40,6 +38,5 @@ export type LinkitMe = {
 export type LinkitUserSearchResult = {
   user_id: string;
   username: string;
-  display_name: string;
   avatar_url?: string | null;
 };
