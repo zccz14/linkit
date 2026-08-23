@@ -47,7 +47,7 @@
 
 
 /* Inline user identity and Base UI popover. */
-.linkit-user-info { display: inline-flex; min-width: 0; max-width: 100%; align-items: center; gap: .5rem; padding: .25rem; color: inherit; text-align: left; cursor: pointer; background: transparent; border: 0; border-radius: .5rem; }
+.linkit-user-info { display: inline-flex; min-width: 100px; max-width: 100%; align-items: center; gap: .5rem; padding: .25rem; color: inherit; text-align: left; cursor: pointer; background: transparent; border: 0; border-radius: .5rem; }
 .linkit-user-info:hover { background: var(--muted, #f1f5f9); }
 .linkit-user-info:focus-visible { outline: 3px solid color-mix(in srgb, var(--ring, #2563eb) 55%, transparent); outline-offset: 2px; }
 .linkit-user-info__avatar { display: inline-flex; flex: none; width: 2rem; height: 2rem; overflow: hidden; align-items: center; justify-content: center; border-radius: 999px; color: var(--muted-foreground, #64748b); background: var(--muted, #f1f5f9); }
