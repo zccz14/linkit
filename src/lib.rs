@@ -2691,7 +2691,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn public_profile_cors_allows_cross_origin_get_and_bearer_preflight_without_credentials() {
+    async fn public_profile_cors_allows_cross_origin_get_and_bearer_preflight_without_credentials()
+    {
         let pool = db::connect_memory().await.unwrap();
         sqlx::query("INSERT INTO users(id,created_at) VALUES('alice',0)")
             .execute(&pool)
@@ -2714,14 +2715,13 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(response.status(), StatusCode::OK);
-        assert_eq!(
-            response.headers()[header::ACCESS_CONTROL_ALLOW_ORIGIN],
-            "*"
+        assert_eq!(response.headers()[header::ACCESS_CONTROL_ALLOW_ORIGIN], "*");
+        assert!(
+            response
+                .headers()
+                .get(header::ACCESS_CONTROL_ALLOW_CREDENTIALS)
+                .is_none()
         );
-        assert!(response
-            .headers()
-            .get(header::ACCESS_CONTROL_ALLOW_CREDENTIALS)
-            .is_none());
 
         let response = app
             .clone()
@@ -2731,21 +2731,23 @@ mod tests {
                     .uri("/api/public/profiles/alice")
                     .header(header::ORIGIN, "https://1ex.ntnl.io")
                     .header(header::ACCESS_CONTROL_REQUEST_METHOD, "GET")
-                    .header(header::ACCESS_CONTROL_REQUEST_HEADERS, "authorization,content-type")
+                    .header(
+                        header::ACCESS_CONTROL_REQUEST_HEADERS,
+                        "authorization,content-type",
+                    )
                     .body(Body::empty())
                     .unwrap(),
             )
             .await
             .unwrap();
         assert_eq!(response.status(), StatusCode::OK);
-        assert_eq!(
-            response.headers()[header::ACCESS_CONTROL_ALLOW_ORIGIN],
-            "*"
+        assert_eq!(response.headers()[header::ACCESS_CONTROL_ALLOW_ORIGIN], "*");
+        assert!(
+            response
+                .headers()
+                .get(header::ACCESS_CONTROL_ALLOW_CREDENTIALS)
+                .is_none()
         );
-        assert!(response
-            .headers()
-            .get(header::ACCESS_CONTROL_ALLOW_CREDENTIALS)
-            .is_none());
         let allowed = response.headers()[header::ACCESS_CONTROL_ALLOW_HEADERS]
             .to_str()
             .unwrap()
@@ -2766,10 +2768,12 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(response.status(), StatusCode::METHOD_NOT_ALLOWED);
-        assert!(response
-            .headers()
-            .get(header::ACCESS_CONTROL_ALLOW_ORIGIN)
-            .is_none());
+        assert!(
+            response
+                .headers()
+                .get(header::ACCESS_CONTROL_ALLOW_ORIGIN)
+                .is_none()
+        );
     }
 
     #[tokio::test]
