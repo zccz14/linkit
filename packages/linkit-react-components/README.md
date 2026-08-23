@@ -12,13 +12,14 @@
 
 ## API
 
-- `LinkitProvider` supplies authenticated Linkit requests, `getMe`, `getProfile`, `updateProfile`, `upload`, and `searchUsers`.
+- `LinkitProvider` supplies authenticated Linkit requests, `getMe`, `getProfile`, `updateProfile`, `upload`, `searchUsers`, and `openDirectConversation`.
 - `useLinkit` reads that provider context.
 - `LinkitAvatar` renders a profile avatar with a Base UI fallback.
 - `LinkitUserDisplay` renders a profile `username`; when the profile is unavailable it renders the localized unknown-user label and the complete source `user_id`.
 - `LinkitConversationDisplay` renders a group or direct conversation identity.
 - `LinkitAppHeaderUser` renders an application-header account trigger and Base UI dialog for username, motto, avatar upload, UID copy, passkey registration, sign-in-method settings, and sign out.
 - `LinkitUserPicker` searches username prefixes and UUID-character `user_id` prefixes, then writes the chosen `user_id` in controlled or uncontrolled form usage.
+- `LinkitUserInfo` is an inline avatar, username, and complete `user_id` display. Its Base UI popover opens by click, keyboard, or desktop hover and presents the available profile motto plus a real Linkit direct-message action. Pass a prefetched `profile` for dense tables; otherwise the component fetches the public profile only after its popover opens.
 
 ## Username and profile semantics
 
@@ -28,7 +29,7 @@ A Linkit username is the sole human-readable user identity. Linkit trims it befo
 
 ## Public data and CORS
 
-`getProfile(userId)` reads the minimal public profile without sending a Bearer token. Public profile/search data contains only `user_id`, `username`, and optional versioned public `avatar_url`; it does not expose motto, attachment IDs, email, login methods, sessions, or security data. Authenticated API calls require an outer token whose `aud` includes `linkit.ntnl.io`; Bearer CORS never enables credentials.
+`getProfile(userId)` reads the minimal public profile without sending a Bearer token. Public profile data contains `user_id`, `username`, the user-authored `motto`, and optional versioned public `avatar_url`; search data remains limited to `user_id`, `username`, and optional avatar URL. Neither response exposes attachment IDs, email, login methods, sessions, or security data. Authenticated API calls require an outer token whose `aud` includes `linkit.ntnl.io`; Bearer CORS never enables credentials. The `LinkitUserInfo` direct-message action opens a protected Linkit conversation through `openDirectConversation(username)` and navigates a new Linkit window using only the returned conversation ID—no token is added to the URL.
 
 ## Styles and dependencies
 

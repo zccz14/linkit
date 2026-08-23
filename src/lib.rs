@@ -550,6 +550,7 @@ async fn profile_for_user(db: &SqlitePool, user_id: &str) -> Result<Option<Profi
 struct PublicProfile {
     user_id: String,
     username: String,
+    motto: String,
     avatar_url: Option<String>,
 }
 
@@ -558,8 +559,8 @@ async fn public_profile(
     Path(user_id): Path<String>,
 ) -> Result<axum::Json<PublicProfile>, AppError> {
     let public_origin = meta(&state.db, "public_origin").await?;
-    let profile = sqlx::query_as::<_, (String, String, Option<String>, i64)>(
-        "SELECT p.user_id,p.username,
+    let profile = sqlx::query_as::<_, (String, String, String, Option<String>, i64)>(
+        "SELECT p.user_id,p.username,p.motto,
                 CASE WHEN EXISTS(
                     SELECT 1 FROM attachments a
                     WHERE a.id=p.avatar_attachment_id
@@ -576,9 +577,10 @@ async fn public_profile(
     Ok(axum::Json(PublicProfile {
         user_id: profile.0,
         username: profile.1,
+        motto: profile.2,
         avatar_url: profile
-            .2
-            .map(|_| public_profile_avatar_url(&public_origin, &user_id, profile.3)),
+            .3
+            .map(|_| public_profile_avatar_url(&public_origin, &user_id, profile.4)),
     }))
 }
 
@@ -3027,7 +3029,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn public_profile_lookup_exposes_only_username_and_a_safe_avatar_url() {
+    async fn public_profile_lookup_exposes_username_motto_and_a_safe_avatar_url() {
         let pool = db::connect_memory().await.unwrap();
         sqlx::query(
             "UPDATE app_meta SET value='https://linkit.example.test' WHERE key='public_origin'",
@@ -3059,7 +3061,7 @@ mod tests {
             payload["avatar_url"],
             "https://linkit.example.test/api/public/profiles/user%20%2F%3F%23/avatar?v=0"
         );
-        assert!(payload.get("motto").is_none());
+        assert_eq!(payload["motto"], "private motto");
         assert!(payload.get("avatar_attachment_id").is_none());
     }
 

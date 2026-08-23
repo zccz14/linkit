@@ -1,6 +1,6 @@
 import { createContext, useCallback, useContext, useMemo, type ReactNode } from "react";
 import { useAuthMini } from "auth-mini-react-components";
-import type { LinkitAttachment, LinkitMe, LinkitProfile, LinkitProfileUpdate, LinkitUserSearchResult } from "./types.js";
+import type { LinkitAttachment, LinkitConversation, LinkitMe, LinkitProfile, LinkitProfileUpdate, LinkitUserSearchResult } from "./types.js";
 
 export type LinkitProviderProps = {
   linkitBaseUrl: string;
@@ -15,6 +15,7 @@ export type LinkitContextValue = {
   updateProfile: (profile: LinkitProfileUpdate) => Promise<LinkitProfile>;
   upload: (file: File) => Promise<LinkitAttachment>;
   searchUsers: (query: string, signal?: AbortSignal) => Promise<LinkitUserSearchResult[]>;
+  openDirectConversation: (username: string) => Promise<LinkitConversation>;
 };
 
 const LinkitContext = createContext<LinkitContextValue | undefined>(undefined);
@@ -54,6 +55,7 @@ export function LinkitProvider({ linkitBaseUrl, children }: LinkitProviderProps)
     getProfile: (userId) => publicRequest<LinkitProfile>(baseUrl, `/api/public/profiles/${encodeURIComponent(userId)}`),
     updateProfile: (profile) => request<LinkitProfile>("/api/profile", { method: "PUT", body: JSON.stringify(profile) }),
     searchUsers: (query, signal) => request<LinkitUserSearchResult[]>(`/api/users/search?query=${encodeURIComponent(query)}`, { signal }),
+    openDirectConversation: (username) => request<LinkitConversation>(`/api/conversations/direct/${encodeURIComponent(username)}`, { method: "POST" }),
     upload: (file) => {
       const form = new FormData();
       form.append("file", file);
