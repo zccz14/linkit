@@ -4,7 +4,7 @@ export default defineConfig({
   build: {
     lib: { entry: "src/index.ts", formats: ["es"], fileName: "index" },
     rollupOptions: {
-      external: ["auth-mini-react-components", "clsx", "react", "react-dom", "tailwind-merge"],
+      external: (id) => id.startsWith("@base-ui/react") || ["auth-mini-react-components", "clsx", "lucide-react", "react", "react-dom", "tailwind-merge"].includes(id),
       output: { banner: "'use client';" },
     },
   },

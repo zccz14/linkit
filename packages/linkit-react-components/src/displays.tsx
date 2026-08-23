@@ -1,3 +1,4 @@
+import { Avatar as AvatarPrimitive } from "@base-ui/react/avatar";
 import { clsx } from "clsx";
 import { twMerge } from "tailwind-merge";
 import type { HTMLAttributes, ImgHTMLAttributes } from "react";
@@ -13,9 +14,10 @@ export function LinkitAvatar({ profile, size = "md", fallback, className, ...pro
   const label = profile?.display_name?.trim() || fallback || "?";
   const initial = Array.from(label)[0]?.toLocaleUpperCase() ?? "?";
   const sizeClass = size === "sm" ? "size-6 text-[0.65rem]" : size === "lg" ? "size-10 text-base" : "size-7 text-xs";
-  return <span className={twMerge(clsx("inline-grid shrink-0 place-items-center overflow-hidden rounded-full bg-muted font-medium text-muted-foreground", sizeClass, className))} aria-label={label}>
-    {profile?.avatar_url ? <img {...props} className="size-full object-cover" src={profile.avatar_url} alt="" /> : initial}
-  </span>;
+  return <AvatarPrimitive.Root className={twMerge(clsx("inline-grid shrink-0 place-items-center overflow-hidden rounded-full bg-muted font-medium text-muted-foreground", sizeClass, className))} aria-label={label}>
+    {profile?.avatar_url ? <AvatarPrimitive.Image {...props} className="size-full object-cover" src={profile.avatar_url} alt="" /> : null}
+    <AvatarPrimitive.Fallback className="size-full">{initial}</AvatarPrimitive.Fallback>
+  </AvatarPrimitive.Root>;
 }
 
 export type LinkitUserDisplayProps = HTMLAttributes<HTMLSpanElement> & {
