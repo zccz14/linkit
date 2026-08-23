@@ -36,3 +36,10 @@ export type LinkitMe = {
   root: boolean;
   profile?: LinkitProfile | null;
 };
+
+export type LinkitUserSearchResult = {
+  user_id: string;
+  username: string;
+  display_name: string;
+  avatar_url?: string | null;
+};

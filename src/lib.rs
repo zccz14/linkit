@@ -107,6 +107,7 @@ pub fn router(state: AppState) -> Router {
             axum::routing::delete(delete_bark_device),
         )
         .route("/api/users", get(list_users))
+        .route("/api/users/search", get(search_users))
         .route("/api/users/{username}", get(read_user))
         .route(
             "/api/conversations",
@@ -969,6 +970,67 @@ async fn list_users(
     let query = query.query.unwrap_or_default().trim().to_owned();
     let rows = sqlx::query_as("SELECT user_id,username,display_name,motto,avatar_attachment_id,updated_at FROM profiles WHERE username LIKE '%' || ? || '%' OR display_name LIKE '%' || ? || '%' ORDER BY username LIMIT 50").bind(&query).bind(&query).fetch_all(&state.db).await?;
     Ok(axum::Json(rows))
+}
+
+#[derive(Serialize, FromRow)]
+struct UserSearchResult {
+    user_id: String,
+    username: String,
+    display_name: String,
+    avatar_attachment_id: Option<String>,
+}
+
+#[derive(Serialize)]
+struct UserSearchResponse {
+    user_id: String,
+    username: String,
+    display_name: String,
+    avatar_url: Option<String>,
+}
+
+async fn search_users(
+    State(state): State<AppState>,
+    Query(query): Query<UserQuery>,
+) -> Result<axum::Json<Vec<UserSearchResponse>>, AppError> {
+    let query = bounded(&query.query.unwrap_or_default(), "query", 80)?;
+    if query.is_empty() {
+        return Ok(axum::Json(Vec::new()));
+    }
+    let prefix = format!("{}%", escape_like(&query));
+    let rows = sqlx::query_as::<_, UserSearchResult>(
+        "SELECT user_id,username,display_name,avatar_attachment_id
+         FROM profiles
+         WHERE username LIKE ? ESCAPE '\\' COLLATE NOCASE
+            OR display_name LIKE ? ESCAPE '\\' COLLATE NOCASE
+         ORDER BY CASE WHEN username=? COLLATE NOCASE THEN 0 WHEN display_name=? COLLATE NOCASE THEN 1 ELSE 2 END, username COLLATE NOCASE
+         LIMIT 5",
+    )
+    .bind(&prefix)
+    .bind(&prefix)
+    .bind(&query)
+    .bind(&query)
+    .fetch_all(&state.db)
+    .await?;
+    let public_origin = meta(&state.db, "public_origin").await?;
+    Ok(axum::Json(
+        rows.into_iter()
+            .map(|row| UserSearchResponse {
+                avatar_url: row
+                    .avatar_attachment_id
+                    .map(|_| public_profile_avatar_url(&public_origin, &row.user_id)),
+                user_id: row.user_id,
+                username: row.username,
+                display_name: row.display_name,
+            })
+            .collect(),
+    ))
+}
+
+fn escape_like(value: &str) -> String {
+    value
+        .replace('\\', "\\\\")
+        .replace('%', "\\%")
+        .replace('_', "\\_")
 }
 
 async fn read_user(
@@ -2612,6 +2674,101 @@ mod tests {
                 .to_ascii_lowercase()
                 .contains("authorization")
         );
+    }
+
+    #[tokio::test]
+    async fn user_search_requires_bearer_authentication() {
+        let app = router(test_state(db::connect_memory().await.unwrap()));
+        let response = app
+            .oneshot(
+                axum::http::Request::builder()
+                    .uri("/api/users/search?query=alice")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn user_search_is_bounded_case_insensitive_and_exposes_only_picker_fields() {
+        let pool = db::connect_memory().await.unwrap();
+        sqlx::query(
+            "UPDATE app_meta SET value='https://linkit.example.test' WHERE key='public_origin'",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        for (id, username, display_name) in [
+            ("1", "alice", "Alice"),
+            ("2", "albert", "Alicia"),
+            ("3", "alex", "Alex"),
+            ("4", "alina", "Alina"),
+            ("5", "albertine", "Alberta"),
+            ("6", "aloysius", "Aloysius"),
+            ("7", "bob", "ALPHA"),
+        ] {
+            sqlx::query("INSERT INTO users(id,created_at) VALUES(?,0)")
+                .bind(id)
+                .execute(&pool)
+                .await
+                .unwrap();
+            sqlx::query("INSERT INTO profiles(user_id,username,display_name,motto,updated_at) VALUES(?,?,?,'private motto',0)")
+                .bind(id)
+                .bind(username)
+                .bind(display_name)
+                .execute(&pool)
+                .await
+                .unwrap();
+        }
+        sqlx::query("UPDATE profiles SET avatar_attachment_id='avatar' WHERE user_id='1'")
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        let axum::Json(matches) = search_users(
+            State(test_state(pool.clone())),
+            Query(UserQuery {
+                query: Some("  AL  ".to_owned()),
+            }),
+        )
+        .await
+        .unwrap();
+        assert_eq!(matches.len(), 5);
+        assert_eq!(matches[0].username, "albert");
+        let axum::Json(nickname_matches) = search_users(
+            State(test_state(pool.clone())),
+            Query(UserQuery {
+                query: Some("alp".to_owned()),
+            }),
+        )
+        .await
+        .unwrap();
+        assert_eq!(nickname_matches.len(), 1);
+        assert_eq!(nickname_matches[0].display_name, "ALPHA");
+        let payload = serde_json::to_value(&matches).unwrap();
+        assert!(payload[0].get("motto").is_none());
+        assert!(payload[0].get("avatar_attachment_id").is_none());
+        assert_eq!(
+            matches
+                .iter()
+                .find(|user| user.user_id == "1")
+                .unwrap()
+                .avatar_url
+                .as_deref(),
+            Some("https://linkit.example.test/api/public/profiles/1/avatar")
+        );
+
+        let axum::Json(empty) = search_users(
+            State(test_state(pool)),
+            Query(UserQuery {
+                query: Some("   ".to_owned()),
+            }),
+        )
+        .await
+        .unwrap();
+        assert!(empty.is_empty());
     }
 
     #[test]

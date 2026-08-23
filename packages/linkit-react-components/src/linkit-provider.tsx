@@ -1,6 +1,6 @@
 import { createContext, useCallback, useContext, useMemo, type ReactNode } from "react";
 import { useAuthMini } from "auth-mini-react-components";
-import type { LinkitAttachment, LinkitMe, LinkitProfile, LinkitProfileUpdate } from "./types.js";
+import type { LinkitAttachment, LinkitMe, LinkitProfile, LinkitProfileUpdate, LinkitUserSearchResult } from "./types.js";
 
 export type LinkitProviderProps = {
   linkitBaseUrl: string;
@@ -14,6 +14,7 @@ export type LinkitContextValue = {
   getProfile: (userId: string) => Promise<LinkitProfile>;
   updateProfile: (profile: LinkitProfileUpdate) => Promise<LinkitProfile>;
   upload: (file: File) => Promise<LinkitAttachment>;
+  searchUsers: (query: string, signal?: AbortSignal) => Promise<LinkitUserSearchResult[]>;
 };
 
 const LinkitContext = createContext<LinkitContextValue | undefined>(undefined);
@@ -52,6 +53,7 @@ export function LinkitProvider({ linkitBaseUrl, children }: LinkitProviderProps)
     getMe: () => request<LinkitMe>("/api/me"),
     getProfile: (userId) => request<LinkitProfile>(`/api/public/profiles/${encodeURIComponent(userId)}`),
     updateProfile: (profile) => request<LinkitProfile>("/api/profile", { method: "PUT", body: JSON.stringify(profile) }),
+    searchUsers: (query, signal) => request<LinkitUserSearchResult[]>(`/api/users/search?query=${encodeURIComponent(query)}`, { signal }),
     upload: (file) => {
       const form = new FormData();
       form.append("file", file);
