@@ -169,7 +169,7 @@ export function LinkitAppHeaderUser({
     try {
       const me = await linkit.getMe();
       setUserId(me.id);
-      const publicProfile = await linkit.getProfile(me.id).catch(() => null);
+      const publicProfile = await optionalPublicProfile(me.id);
       const next = me.profile ? { ...me.profile, avatar_url: publicProfile?.avatar_url ?? null } : null;
       setProfile(next);
       setEditor(toEditor(next));
@@ -177,6 +177,15 @@ export function LinkitAppHeaderUser({
       setError(message(cause));
     } finally {
       setLoading(false);
+    }
+  }
+
+  async function optionalPublicProfile(id: string) {
+    try {
+      return await linkit.getProfile(id);
+    } catch (cause) {
+      if (status(cause) !== 404) setError(message(cause));
+      return null;
     }
   }
 
@@ -212,7 +221,7 @@ export function LinkitAppHeaderUser({
         motto: editor.motto.trim(),
         avatar_attachment_id: editor.avatarAttachmentId || undefined,
       });
-      const publicProfile = await linkit.getProfile(saved.user_id).catch(() => null);
+      const publicProfile = await optionalPublicProfile(saved.user_id);
       const next = { ...saved, avatar_url: publicProfile?.avatar_url ?? null };
       setProfile(next);
       setUserId(saved.user_id);
@@ -339,4 +348,5 @@ function emptyEditor(): Editor { return { username: "", displayName: "", motto: 
 function toEditor(profile: LinkitProfile | null): Editor { return { username: profile?.username ?? "", displayName: profile?.display_name ?? "", motto: profile?.motto ?? "", avatarAttachmentId: profile?.avatar_attachment_id ?? "" }; }
 function languageKey(lang: string): "en" | "zh" { const normalized = lang.toLowerCase(); return normalized === "zh" || normalized.startsWith("zh-") ? "zh" : "en"; }
 function authMiniSecurityUrl(authMiniBaseUrl: string) { const url = new URL("/web/", authMiniBaseUrl); url.hash = "/"; return url.toString(); }
+function status(cause: unknown): number | undefined { return typeof cause === "object" && cause !== null && "status" in cause && typeof cause.status === "number" ? cause.status : undefined; }
 function message(cause: unknown): string { return cause instanceof Error ? cause.message : String(cause); }

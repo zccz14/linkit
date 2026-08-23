@@ -88,7 +88,7 @@ function ProfileButton() {
 | `linkitBaseUrl` | 已规范化的 Linkit 基础地址。 |
 | `request(path, init?)` | 对相对 Linkit API path 发起 Bearer 请求。遇到一次 `401` 时复用外层 Auth Mini SDK refresh 后重试一次。 |
 | `getMe()` | 请求当前 Linkit 用户的 `/api/me`。 |
-| `getProfile(userId)` | 请求指定用户的公开 Linkit profile。 |
+| `getProfile(userId)` | 请求指定用户的公开 Linkit profile；此请求不会附带 Auth Mini Bearer token。 |
 | `updateProfile(profile)` | 使用当前用户的 Linkit Profile API 保存 username、display name、motto 和已上传头像 ID。 |
 | `upload(file)` | 上传当前用户拥有的附件，供 Profile 头像保存时引用。 |
 | `searchUsers(query, signal?)` | 以 username 或昵称前缀检索最多五名最小公开选择数据；空白 query 不会请求。 |
@@ -254,12 +254,11 @@ type LinkitMe = {
 
 在不同 Origin 的应用中使用 Linkit API，需要同时满足：
 
-1. Linkit 部署允许无 cookie 的 Bearer CORS preflight；
-2. 浏览器请求携带来自外层 `AuthMiniProvider` 的 access token；
-3. token `aud` 包含 `linkit.ntnl.io`；
-4. Linkit 仍验证 issuer、签名、过期时间、token 类型和 audience membership。
+1. Linkit 的**签名 API**允许无 cookie 的 Bearer CORS preflight；调用这些 API 时，浏览器请求携带来自外层 `AuthMiniProvider` 的 access token，且 token `aud` 必须包含 `linkit.ntnl.io`；
+2. `/api/public/profiles/{user_id}` 和其公开头像路由拥有独立、仅限公开读取的 CORS 规则，允许 GET/HEAD/OPTIONS 与 `Authorization`/`Content-Type` 预检，但 `getProfile()` 本身不会附带 Bearer token；
+3. Linkit 的签名 API 仍验证 issuer、签名、过期时间、token 类型和 audience membership。
 
-CORS 只允许浏览器发起请求，不授予资源访问权限。Linkit 不应启用 `Access-Control-Allow-Credentials`，本包也不使用 cookie 身份。
+CORS 只允许浏览器发起请求，不授予资源访问权限。Linkit 不应启用 `Access-Control-Allow-Credentials`，本包也不使用 cookie 身份；公开 Profile 只返回 user ID、用户名、昵称和安全的版本化头像 URL。
 
 ## 安装
 
