@@ -1,6 +1,6 @@
 {
   "name": "linkit-react-components",
-  "version": "0.1.6",
+  "version": "0.1.7",
   "description": "Authenticated Linkit provider and compact React display primitives.",
   "license": "MIT",
   "repository": {
@@ -43,7 +43,7 @@
     "react": "^18.0.0 || ^19.0.0",
     "react-dom": "^18.0.0 || ^19.0.0",
     "@base-ui/react": "^1.6.0",
-    "lucide-react": "^0.544.0"
+    "lucide-react": "^0.544.0 || ^1.0.0"
   },
   "dependencies": {
     "clsx": "^2.1.1",
