@@ -11,6 +11,7 @@ import { AuthMiniProvider } from "auth-mini-react-components";
 import {
   LinkitProvider,
   LinkitAppHeaderUser,
+  LinkitUserPicker,
   LinkitUserDisplay,
   useLinkit,
 } from "linkit-react-components";
@@ -90,6 +91,7 @@ function ProfileButton() {
 | `getProfile(userId)` | 请求指定用户的公开 Linkit profile。 |
 | `updateProfile(profile)` | 使用当前用户的 Linkit Profile API 保存 username、display name、motto 和已上传头像 ID。 |
 | `upload(file)` | 上传当前用户拥有的附件，供 Profile 头像保存时引用。 |
+| `searchUsers(query, signal?)` | 以 username 或昵称前缀检索最多五名最小公开选择数据；空白 query 不会请求。 |
 
 对于密集表格，应优先使用业务后端已批量提供的 profile map，而不是让每一行调用 `getProfile()`，以避免 N+1 浏览器请求。
 
@@ -127,6 +129,31 @@ import "linkit-react-components/styles.css";
 | `onProfileSaved` / `onSignedOut` | 保存或登出完成后的可选通知回调。 |
 
 `styles.css` 是该组件必要样式，包含 44px 触控目标、焦点环、窄屏重排和减少动态效果的处理。原生 dialog 负责 Escape、焦点陷阱和关闭后的焦点恢复。
+
+### `LinkitUserPicker`
+
+`LinkitUserPicker` 是可复用的表单用户选择器：输入 username 或昵称前缀后，它通过受认证的 Linkit API 返回最多五名匹配用户，并将选中用户的 `user_id` 写入受控/非受控值和可选 hidden form input。它必须位于 `AuthMiniProvider → LinkitProvider` 下。
+
+```tsx
+const [investorId, setInvestorId] = useState("");
+
+<LinkitUserPicker
+  lang="zh-CN"
+  name="investor_id"
+  value={investorId}
+  onValueChange={(userId) => setInvestorId(userId)}
+/>
+```
+
+| 属性 | 说明 |
+| --- | --- |
+| `value` / `onValueChange` | 显式受控模式；回调接收 `(userId, user)`。 |
+| `defaultValue` | 非受控初始 `user_id`。 |
+| `name` | 填入表单的 hidden input 名称。 |
+| `lang` | `zh` / `zh-CN` 使用中文。 |
+| `label` / `placeholder` | 覆盖可见表单文案。 |
+
+组件有 180ms 防抖并取消过期请求，支持方向键、Enter、Escape、鼠标、焦点与 loading/empty/error 状态。结果只显示头像、昵称、用户名和 UID；搜索 API 不返回 email、格言、登录方式、会话或安全资料。空白输入不会发起搜索或返回用户列表。
 
 ### `LinkitAvatar`
 
