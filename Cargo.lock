@@ -1384,7 +1384,7 @@ dependencies = [
 
 [[package]]
 name = "linkit"
-version = "0.1.38"
+version = "0.1.39"
 dependencies = [
  "anyhow",
  "async-stream",
