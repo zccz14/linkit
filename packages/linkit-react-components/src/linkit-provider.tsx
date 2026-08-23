@@ -51,7 +51,7 @@ export function LinkitProvider({ linkitBaseUrl, children }: LinkitProviderProps)
     linkitBaseUrl: baseUrl,
     request,
     getMe: () => request<LinkitMe>("/api/me"),
-    getProfile: (userId) => request<LinkitProfile>(`/api/public/profiles/${encodeURIComponent(userId)}`),
+    getProfile: (userId) => publicRequest<LinkitProfile>(baseUrl, `/api/public/profiles/${encodeURIComponent(userId)}`),
     updateProfile: (profile) => request<LinkitProfile>("/api/profile", { method: "PUT", body: JSON.stringify(profile) }),
     searchUsers: (query, signal) => request<LinkitUserSearchResult[]>(`/api/users/search?query=${encodeURIComponent(query)}`, { signal }),
     upload: (file) => {
@@ -81,4 +81,15 @@ function normalizeBaseUrl(value: string) {
 function resolvePath(baseUrl: string, path: string) {
   if (!path.startsWith("/")) throw new Error("Linkit request paths must begin with '/'.");
   return new URL(path, `${baseUrl}/`).toString();
+}
+
+async function publicRequest<T>(baseUrl: string, path: string): Promise<T> {
+  const response = await fetch(resolvePath(baseUrl, path));
+  if (!response.ok) {
+    const body = await response.json().catch(() => undefined) as { error?: { message?: string } } | undefined;
+    const error = new Error(body?.error?.message ?? `Linkit public request failed (${response.status}).`);
+    Object.assign(error, { status: response.status });
+    throw error;
+  }
+  return await response.json() as T;
 }

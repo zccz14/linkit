@@ -156,14 +156,23 @@ pub fn router(state: AppState) -> Router {
                 .allow_headers([header::AUTHORIZATION, header::CONTENT_TYPE]),
         );
 
-    Router::new()
-        .route("/api/health", get(health))
-        .route("/api/config", get(public_config))
+    let public_profiles = Router::new()
         .route("/api/public/profiles/{user_id}", get(public_profile))
         .route(
             "/api/public/profiles/{user_id}/avatar",
             get(public_profile_avatar),
         )
+        .layer(
+            CorsLayer::new()
+                .allow_origin(Any)
+                .allow_methods([axum::http::Method::GET, axum::http::Method::HEAD])
+                .allow_headers([header::AUTHORIZATION, header::CONTENT_TYPE]),
+        );
+
+    Router::new()
+        .route("/api/health", get(health))
+        .route("/api/config", get(public_config))
+        .merge(public_profiles)
         .route(
             "/api/public/conversations/{id}/avatar",
             get(public_group_avatar),
@@ -2679,6 +2688,88 @@ mod tests {
                 .to_ascii_lowercase()
                 .contains("authorization")
         );
+    }
+
+    #[tokio::test]
+    async fn public_profile_cors_allows_cross_origin_get_and_bearer_preflight_without_credentials() {
+        let pool = db::connect_memory().await.unwrap();
+        sqlx::query("INSERT INTO users(id,created_at) VALUES('alice',0)")
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query("INSERT INTO profiles(user_id,username,display_name,motto,updated_at) VALUES('alice','alice','Alice','',0)")
+            .execute(&pool)
+            .await
+            .unwrap();
+        let app = router(test_state(pool));
+        let response = app
+            .clone()
+            .oneshot(
+                axum::http::Request::builder()
+                    .uri("/api/public/profiles/alice")
+                    .header(header::ORIGIN, "https://1ex.ntnl.io")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            response.headers()[header::ACCESS_CONTROL_ALLOW_ORIGIN],
+            "*"
+        );
+        assert!(response
+            .headers()
+            .get(header::ACCESS_CONTROL_ALLOW_CREDENTIALS)
+            .is_none());
+
+        let response = app
+            .clone()
+            .oneshot(
+                axum::http::Request::builder()
+                    .method("OPTIONS")
+                    .uri("/api/public/profiles/alice")
+                    .header(header::ORIGIN, "https://1ex.ntnl.io")
+                    .header(header::ACCESS_CONTROL_REQUEST_METHOD, "GET")
+                    .header(header::ACCESS_CONTROL_REQUEST_HEADERS, "authorization,content-type")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            response.headers()[header::ACCESS_CONTROL_ALLOW_ORIGIN],
+            "*"
+        );
+        assert!(response
+            .headers()
+            .get(header::ACCESS_CONTROL_ALLOW_CREDENTIALS)
+            .is_none());
+        let allowed = response.headers()[header::ACCESS_CONTROL_ALLOW_HEADERS]
+            .to_str()
+            .unwrap()
+            .to_ascii_lowercase();
+        assert!(allowed.contains("authorization"));
+        assert!(allowed.contains("content-type"));
+
+        let response = app
+            .oneshot(
+                axum::http::Request::builder()
+                    .method("OPTIONS")
+                    .uri("/api/setup")
+                    .header(header::ORIGIN, "https://1ex.ntnl.io")
+                    .header(header::ACCESS_CONTROL_REQUEST_METHOD, "GET")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::METHOD_NOT_ALLOWED);
+        assert!(response
+            .headers()
+            .get(header::ACCESS_CONTROL_ALLOW_ORIGIN)
+            .is_none());
     }
 
     #[tokio::test]
