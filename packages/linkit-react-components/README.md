@@ -34,3 +34,15 @@ A Linkit username is the sole human-readable user identity. Linkit trims it befo
 ## Styles and dependencies
 
 Import `linkit-react-components/styles.css`. That stylesheet includes the App Header, UserInfo, and UserPicker form/listbox states. The package uses public Base UI primitives and shadcn-style semantic slots, rather than importing a consumer application's private `@/components/ui` files. Peer dependencies are React, React DOM, `@base-ui/react`, `lucide-react`, and `auth-mini-react-components`.
+
+### Portal layering contract
+
+`LinkitUserInfo` renders its Base UI popover through `PopoverPrimitive.Portal` so it can escape local overflow clipping. The consuming application owns the document-level stacking context: apply `isolation: isolate` to the React mount root that calls `createRoot` (for the standard Vite mount, `#root`). Keep the application layer scale coherent—for example, ordinary content < popovers/menus < sticky UI < modal backdrop < dialog < toast.
+
+```css
+#root {
+  isolation: isolate;
+}
+```
+
+The package deliberately does **not** target `#root`, `body`, `html`, `:root`, or any host application root. It also deliberately assigns no elevated `z-index` to `.linkit-user-info__popup`, so consumer dialogs, sheets, and toast layers remain authoritative.
