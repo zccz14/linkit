@@ -10,7 +10,8 @@
     "format": "prettier --write \"**/*.{ts,tsx}\"",
     "typecheck": "tsc -b --noEmit",
     "test": "node --experimental-strip-types --test tests/*.test.ts",
-    "check": "npm run test && npm run typecheck && npm run lint && npm run build",
+    "check:portal-layering": "node scripts/check-portal-layering.mjs",
+    "check": "npm run test && npm run typecheck && npm run lint && npm run build && npm run check:portal-layering",
     "preview": "vite preview"
   },
   "dependencies": {

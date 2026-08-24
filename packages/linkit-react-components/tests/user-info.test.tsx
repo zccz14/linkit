@@ -38,6 +38,7 @@ describe("LinkitUserInfo", () => {
   });
 
   it("uses the localized unknown-user fallback and default user icon when no profile exists", async () => {
+    vi.spyOn(globalThis, "fetch").mockRejectedValue(new Error("profile unavailable"));
     renderInfo({ lang: "zh", profile: null });
     expect(screen.getByText("未知用户")).toBeInTheDocument();
     const trigger = screen.getByRole("button", { name: /用户资料: 未知用户/ });
