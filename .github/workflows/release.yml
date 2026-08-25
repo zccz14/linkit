@@ -20,7 +20,12 @@ jobs:
         with:
           node-version: 24
           cache: npm
-          cache-dependency-path: web/package-lock.json
+          cache-dependency-path: |
+            web/package-lock.json
+            packages/linkit-react-components/package-lock.json
+      - name: Install Linkit React component dependencies
+        working-directory: packages/linkit-react-components
+        run: npm ci
       - working-directory: web
         run: npm ci && npm run build
       - uses: actions/upload-artifact@v7
