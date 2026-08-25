@@ -22,7 +22,10 @@
     "erasableSyntaxOnly": true,
     "noFallthroughCasesInSwitch": true,
     "paths": {
-      "@/*": ["./src/*"]
+      "@/*": ["./src/*"],
+      "linkit-react-components": [
+        "../packages/linkit-react-components/src/index.ts"
+      ]
     }
   },
   "include": ["src"]

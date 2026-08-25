@@ -1,16 +1,36 @@
 import { readFileSync } from "node:fs";
 
-const stylesheet = readFileSync(new URL("../src/styles.css", import.meta.url), "utf8");
+const stylesheet = readFileSync(
+  new URL("../src/styles.css", import.meta.url),
+  "utf8",
+);
 const required = [
   ".linkit-user-picker { position: relative; display: grid;",
   ".linkit-user-picker__input {",
   ".linkit-user-picker__selection {",
-  ".linkit-user-picker__results { position: absolute;",
+  ".linkit-user-picker__selected-users {",
+  ".linkit-user-picker__selected-user {",
+  ".linkit-user-picker__clear, .linkit-user-picker__remove {",
+  ".linkit-user-picker__results { position: absolute; z-index: 20;",
   ".linkit-user-picker__option {",
   ".linkit-user-picker__option:hover, .linkit-user-picker__option[data-active]",
   ".linkit-user-picker__status, .linkit-user-picker__error",
   "@media (prefers-reduced-motion: reduce) { .linkit-user-picker__input",
 ];
 for (const selector of required) {
-  if (!stylesheet.includes(selector)) throw new Error(`LinkitUserPicker stylesheet is missing ${selector}.`);
+  if (!stylesheet.includes(selector)) {
+    throw new Error(`LinkitUserPicker stylesheet is missing ${selector}.`);
+  }
+}
+for (const selector of ["#root", "body", "html", ":root"]) {
+  if (
+    new RegExp(
+      `(^|[\n,])\s*${selector.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\b`,
+      "m",
+    ).test(stylesheet)
+  ) {
+    throw new Error(
+      `LinkitUserPicker stylesheet must not target host selector ${selector}.`,
+    );
+  }
 }

@@ -1,7 +1,7 @@
-import path from "path"
-import tailwindcss from "@tailwindcss/vite"
-import react from "@vitejs/plugin-react"
-import { defineConfig } from "vite"
+import path from "path";
+import tailwindcss from "@tailwindcss/vite";
+import react from "@vitejs/plugin-react";
+import { defineConfig } from "vite";
 
 // https://vite.dev/config/
 export default defineConfig({
@@ -14,8 +14,22 @@ export default defineConfig({
     },
   },
   resolve: {
-    alias: {
-      "@": path.resolve(__dirname, "./src"),
-    },
+    alias: [
+      {
+        find: "linkit-react-components/styles.css",
+        replacement: path.resolve(
+          __dirname,
+          "../packages/linkit-react-components/src/styles.css",
+        ),
+      },
+      {
+        find: "linkit-react-components",
+        replacement: path.resolve(
+          __dirname,
+          "../packages/linkit-react-components/src/index.ts",
+        ),
+      },
+      { find: "@", replacement: path.resolve(__dirname, "./src") },
+    ],
   },
-})
+});
