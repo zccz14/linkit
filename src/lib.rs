@@ -26,7 +26,7 @@ use rust_embed::RustEmbed;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
-use sqlx::{FromRow, SqlitePool};
+use sqlx::{FromRow, Sqlite, SqlitePool, Transaction};
 use sysinfo::{Disks, Networks, System};
 use tower_http::{
     compression::CompressionLayer,
@@ -1155,7 +1155,7 @@ async fn conversation_detail(
 #[derive(Deserialize)]
 struct GroupInput {
     title: String,
-    usernames: Vec<String>,
+    user_ids: Vec<String>,
 }
 
 #[derive(Deserialize)]
@@ -1227,8 +1227,8 @@ async fn create_group(
     .execute(&mut *tx)
     .await?;
     sqlx::query("INSERT INTO conversation_members(conversation_id,user_id,role,joined_at) VALUES(?,?,'owner',?)").bind(&id).bind(&user.id).bind(now).execute(&mut *tx).await?;
-    for username in input.usernames {
-        add_member_by_username(&mut tx, &id, &username, now).await?;
+    for member_id in input.user_ids {
+        add_member_by_user_id(&mut tx, &id, &user.id, &member_id, now).await?;
     }
     tx.commit().await?;
     conversation(&state.db, &id, &user.id).await.map(axum::Json)
@@ -2422,6 +2422,35 @@ fn file_size(path: &FilePath) -> Result<u64, AppError> {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(0),
         Err(error) => Err(error.into()),
     }
+}
+
+async fn add_member_by_user_id(
+    tx: &mut Transaction<'_, Sqlite>,
+    conversation_id: &str,
+    owner_id: &str,
+    user_id: &str,
+    now: i64,
+) -> Result<(), AppError> {
+    if user_id == owner_id {
+        return Err(AppError::bad_request("a group owner is already a member"));
+    }
+    let exists: Option<String> = sqlx::query_scalar("SELECT user_id FROM profiles WHERE user_id=?")
+        .bind(user_id)
+        .fetch_optional(&mut **tx)
+        .await?;
+    if exists.is_none() {
+        return Err(AppError::not_found("user not found"));
+    }
+    let result = sqlx::query("INSERT INTO conversation_members(conversation_id,user_id,role,joined_at) VALUES(?,?,'member',?) ON CONFLICT DO NOTHING")
+        .bind(conversation_id)
+        .bind(user_id)
+        .bind(now)
+        .execute(&mut **tx)
+        .await?;
+    if result.rows_affected() == 0 {
+        return Err(AppError::bad_request("user is already a group member"));
+    }
+    Ok(())
 }
 
 async fn add_member_by_username(
@@ -3785,6 +3814,73 @@ mod tests {
                 .iter()
                 .any(|column| column == "avatar_attachment_id")
         );
+    }
+
+    #[tokio::test]
+    async fn group_creation_accepts_existing_member_ids_and_rolls_back_invalid_batches() {
+        let pool = db::connect_memory().await.unwrap();
+        for user_id in ["owner", "member"] {
+            sqlx::query("INSERT INTO users(id,created_at) VALUES(?,0)")
+                .bind(user_id)
+                .execute(&pool)
+                .await
+                .unwrap();
+            sqlx::query("INSERT INTO profiles(user_id,username,motto,updated_at) VALUES(?,?,'',0)")
+                .bind(user_id)
+                .bind(user_id)
+                .execute(&pool)
+                .await
+                .unwrap();
+        }
+        let state = test_state(pool.clone());
+        let owner = axum::Extension(UserIdentity { id: "owner".into() });
+
+        let group = create_group(
+            State(state.clone()),
+            owner.clone(),
+            axum::Json(GroupInput {
+                title: "Valid members".into(),
+                user_ids: vec!["member".into()],
+            }),
+        )
+        .await
+        .unwrap()
+        .0;
+        let member_ids: Vec<String> = sqlx::query_scalar(
+            "SELECT user_id FROM conversation_members WHERE conversation_id=? ORDER BY joined_at,user_id",
+        )
+        .bind(&group.id)
+        .fetch_all(&pool)
+        .await
+        .unwrap();
+        assert_eq!(member_ids, vec!["member", "owner"]);
+
+        let group_count = || async {
+            sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM conversations WHERE kind='group'")
+                .fetch_one(&pool)
+                .await
+                .unwrap()
+        };
+        assert_eq!(group_count().await, 1);
+        for user_ids in [
+            vec!["owner".into()],
+            vec!["member".into(), "member".into()],
+            vec!["missing".into()],
+        ] {
+            assert!(
+                create_group(
+                    State(state.clone()),
+                    owner.clone(),
+                    axum::Json(GroupInput {
+                        title: "Rejected members".into(),
+                        user_ids,
+                    }),
+                )
+                .await
+                .is_err()
+            );
+            assert_eq!(group_count().await, 1);
+        }
     }
 
     #[tokio::test]

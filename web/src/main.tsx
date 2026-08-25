@@ -4,6 +4,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { HashRouter } from "react-router-dom";
 
 import "./index.css";
+import "linkit-react-components/styles.css";
 import App from "./App.tsx";
 import { I18nProvider } from "@/components/i18n-provider.tsx";
 import { RenderErrorBoundary } from "@/components/render-error-boundary.tsx";

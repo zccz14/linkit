@@ -1,4 +1,10 @@
-import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
+import {
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
 import {
   type InfiniteData,
   useInfiniteQuery,
@@ -40,6 +46,7 @@ import {
   XIcon,
 } from "lucide-react";
 import { toast } from "sonner";
+import { LinkitProvider, LinkitUserPicker } from "linkit-react-components";
 import { QRCodeSVG } from "qrcode.react";
 
 import { LanguageMenu } from "@/components/language-menu";
@@ -136,7 +143,10 @@ function appendMessage(
   data: InfiniteData<MessagePage> | undefined,
   message: Message,
 ) {
-  if (!data || data.pages.some((page) => page.messages.some(({ id }) => id === message.id)))
+  if (
+    !data ||
+    data.pages.some((page) => page.messages.some(({ id }) => id === message.id))
+  )
     return data;
   const lastPage = data.pages.length - 1;
   return {
@@ -180,7 +190,11 @@ export default function App() {
       callbackUrl={callbackUrl}
       onAuthError={(error) => toast.error(error.message)}
     >
-      <AuthedApp />
+      <LinkitProvider
+        linkitBaseUrl={config.data.public_origin ?? window.location.origin}
+      >
+        <AuthedApp />
+      </LinkitProvider>
     </AuthMiniProvider>
   );
 }
@@ -511,7 +525,10 @@ function Shell({ me, sdk }: { me: Me; sdk: AuthMiniApi }) {
             element={<ProfileEditor me={me} sdk={sdk} />}
           />
           <Route path="/admin/system" element={<SystemDashboard sdk={sdk} />} />
-          <Route path="/admin/bark-users" element={<AdminBarkUsers sdk={sdk} />} />
+          <Route
+            path="/admin/bark-users"
+            element={<AdminBarkUsers sdk={sdk} />}
+          />
           <Route path="*" element={<Navigate to="/conversations" replace />} />
         </Routes>
       </main>
@@ -819,16 +836,63 @@ function AdminBarkUsers({ sdk }: { sdk: AuthMiniApi }) {
     queryKey: ["admin", "bark-users"],
     queryFn: () => api<BarkNotificationUser[]>(sdk, "/api/admin/bark-users"),
   });
-  if (users.isPending) return <LoadingScreen>{t("profile.loading")}</LoadingScreen>;
-  if (users.isError) return <LoadingScreen>{users.error.message}</LoadingScreen>;
-  return <Page title={t("admin.barkUsersTitle")} description={t("admin.barkUsersPageDescription")}>
-    {users.data.length ? <div className="divide-y rounded-lg border" aria-label={t("admin.barkUsersTitle")}>
-      {users.data.map((user) => <div key={user.username} className="flex flex-col gap-3 p-4 sm:flex-row sm:items-center sm:justify-between">
-        <div className="min-w-0"><p className="truncate font-medium">{user.username}</p><p className="truncate text-sm text-muted-foreground">@{user.username}</p></div>
-        <div className="flex flex-wrap items-center gap-2 text-sm text-muted-foreground sm:justify-end"><Badge variant="secondary">{t("admin.barkUsersDevices", { count: String(user.device_count) })}</Badge><span>{t("admin.barkUsersLastUpdated", { time: new Date(user.last_device_updated_at * 1000).toLocaleString(locale) })}</span></div>
-      </div>)}
-    </div> : <Empty className="border"><EmptyHeader><EmptyMedia variant="icon"><BellIcon /></EmptyMedia><EmptyTitle>{t("admin.barkUsersEmptyTitle")}</EmptyTitle><EmptyDescription>{t("admin.barkUsersEmptyDescription")}</EmptyDescription></EmptyHeader></Empty>}
-  </Page>;
+  if (users.isPending)
+    return <LoadingScreen>{t("profile.loading")}</LoadingScreen>;
+  if (users.isError)
+    return <LoadingScreen>{users.error.message}</LoadingScreen>;
+  return (
+    <Page
+      title={t("admin.barkUsersTitle")}
+      description={t("admin.barkUsersPageDescription")}
+    >
+      {users.data.length ? (
+        <div
+          className="divide-y rounded-lg border"
+          aria-label={t("admin.barkUsersTitle")}
+        >
+          {users.data.map((user) => (
+            <div
+              key={user.username}
+              className="flex flex-col gap-3 p-4 sm:flex-row sm:items-center sm:justify-between"
+            >
+              <div className="min-w-0">
+                <p className="truncate font-medium">{user.username}</p>
+                <p className="truncate text-sm text-muted-foreground">
+                  @{user.username}
+                </p>
+              </div>
+              <div className="flex flex-wrap items-center gap-2 text-sm text-muted-foreground sm:justify-end">
+                <Badge variant="secondary">
+                  {t("admin.barkUsersDevices", {
+                    count: String(user.device_count),
+                  })}
+                </Badge>
+                <span>
+                  {t("admin.barkUsersLastUpdated", {
+                    time: new Date(
+                      user.last_device_updated_at * 1000,
+                    ).toLocaleString(locale),
+                  })}
+                </span>
+              </div>
+            </div>
+          ))}
+        </div>
+      ) : (
+        <Empty className="border">
+          <EmptyHeader>
+            <EmptyMedia variant="icon">
+              <BellIcon />
+            </EmptyMedia>
+            <EmptyTitle>{t("admin.barkUsersEmptyTitle")}</EmptyTitle>
+            <EmptyDescription>
+              {t("admin.barkUsersEmptyDescription")}
+            </EmptyDescription>
+          </EmptyHeader>
+        </Empty>
+      )}
+    </Page>
+  );
 }
 
 function MetricCard({
@@ -884,14 +948,15 @@ function ConversationPage({ me, sdk }: { me: Me; sdk: AuthMiniApi }) {
     queryKey: ["messages", id],
     initialPageParam: "",
     queryFn: ({ pageParam }) =>
-      api<MessagePage>(
-        sdk,
-        `/api/conversations/${id}/messages${pageParam}`,
-      ),
+      api<MessagePage>(sdk, `/api/conversations/${id}/messages${pageParam}`),
     getPreviousPageParam: (page) =>
-      page.older_cursor ? `?before_cursor=${encodeURIComponent(page.older_cursor)}` : undefined,
+      page.older_cursor
+        ? `?before_cursor=${encodeURIComponent(page.older_cursor)}`
+        : undefined,
     getNextPageParam: (page) =>
-      page.newer_cursor ? `?after_cursor=${encodeURIComponent(page.newer_cursor)}` : undefined,
+      page.newer_cursor
+        ? `?after_cursor=${encodeURIComponent(page.newer_cursor)}`
+        : undefined,
   });
   const detail = useQuery({
     queryKey: ["conversation", id],
@@ -1006,16 +1071,18 @@ function ConversationPage({ me, sdk }: { me: Me; sdk: AuthMiniApi }) {
                 : t("conversation.loadOlder")}
             </Button>
           ) : null}
-          {messages.data?.pages.flatMap((page) => page.messages).map((message) => (
-            <MessageRow
-              key={message.id}
-              message={message}
-              mine={
-                message.sender_kind === "user" && message.sender_id === me.id
-              }
-              sdk={sdk}
-            />
-          ))}
+          {messages.data?.pages
+            .flatMap((page) => page.messages)
+            .map((message) => (
+              <MessageRow
+                key={message.id}
+                message={message}
+                mine={
+                  message.sender_kind === "user" && message.sender_id === me.id
+                }
+                sdk={sdk}
+              />
+            ))}
         </div>
       </section>
       <form
@@ -1043,7 +1110,11 @@ function ConversationPage({ me, sdk }: { me: Me; sdk: AuthMiniApi }) {
             />
             {t("conversation.urgent")}
           </label>
-          {urgent ? <span className="text-xs font-medium text-destructive">{t("conversation.urgentNotice")}</span> : null}
+          {urgent ? (
+            <span className="text-xs font-medium text-destructive">
+              {t("conversation.urgentNotice")}
+            </span>
+          ) : null}
         </div>
         <div className="flex items-end gap-2">
           <input
@@ -1077,7 +1148,8 @@ function ConversationPage({ me, sdk }: { me: Me; sdk: AuthMiniApi }) {
                 !shouldSendMessageOnEnter({
                   key: event.key,
                   shiftKey: event.shiftKey,
-                  isComposing: event.nativeEvent.isComposing || composingRef.current,
+                  isComposing:
+                    event.nativeEvent.isComposing || composingRef.current,
                 })
               )
                 return;
@@ -1164,7 +1236,9 @@ function GroupManagementContent({
   const { t } = useI18n();
   const queryClient = useQueryClient();
   const [groupTitle, setGroupTitle] = useState(detail.title);
-  const [groupAvatar, setGroupAvatar] = useState(detail.avatar_attachment_id ?? "");
+  const [groupAvatar, setGroupAvatar] = useState(
+    detail.avatar_attachment_id ?? "",
+  );
   const [username, setUsername] = useState("");
   const [botId, setBotId] = useState("");
   useEffect(() => {
@@ -1180,7 +1254,10 @@ function GroupManagementContent({
       queryKey: ["conversation", detail.id],
     });
   const updateGroup = useMutation({
-    mutationFn: (input: { title?: string; avatar_attachment_id?: string | null }) =>
+    mutationFn: (input: {
+      title?: string;
+      avatar_attachment_id?: string | null;
+    }) =>
       api<Conversation>(sdk, `/api/conversations/${detail.id}`, {
         method: "PATCH",
         body: JSON.stringify(input),
@@ -1200,7 +1277,9 @@ function GroupManagementContent({
     if (!groupTitle.trim()) return;
     updateGroup.mutate({ title: groupTitle });
   };
-  const chooseGroupAvatar = async (event: React.ChangeEvent<HTMLInputElement>) => {
+  const chooseGroupAvatar = async (
+    event: React.ChangeEvent<HTMLInputElement>,
+  ) => {
     const file = event.currentTarget.files?.[0];
     event.currentTarget.value = "";
     if (!file) return;
@@ -1208,7 +1287,9 @@ function GroupManagementContent({
       const attachment = await upload(sdk, file);
       updateGroup.mutate({ avatar_attachment_id: attachment.id });
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : t("profileEditor.uploadError"));
+      toast.error(
+        error instanceof Error ? error.message : t("profileEditor.uploadError"),
+      );
     }
   };
 
@@ -1292,7 +1373,9 @@ function GroupManagementContent({
               </Button>
             </form>
             <Field>
-              <FieldLabel htmlFor="group-avatar">{t("conversation.groupAvatar")}</FieldLabel>
+              <FieldLabel htmlFor="group-avatar">
+                {t("conversation.groupAvatar")}
+              </FieldLabel>
               <div className="flex items-center gap-3">
                 <ProfileAvatar
                   sdk={sdk}
@@ -1313,13 +1396,17 @@ function GroupManagementContent({
                     type="button"
                     variant="outline"
                     disabled={updateGroup.isPending}
-                    onClick={() => updateGroup.mutate({ avatar_attachment_id: null })}
+                    onClick={() =>
+                      updateGroup.mutate({ avatar_attachment_id: null })
+                    }
                   >
                     {t("conversation.removeGroupAvatar")}
                   </Button>
                 ) : null}
               </div>
-              <FieldDescription>{t("conversation.groupAvatarHint")}</FieldDescription>
+              <FieldDescription>
+                {t("conversation.groupAvatarHint")}
+              </FieldDescription>
             </Field>
           </section>
         ) : null}
@@ -1336,9 +1423,7 @@ function GroupManagementContent({
                 className="flex items-center gap-3 rounded-lg px-2 py-2"
               >
                 <Avatar>
-                  <AvatarFallback>
-                    {member.username.slice(0, 1)}
-                  </AvatarFallback>
+                  <AvatarFallback>{member.username.slice(0, 1)}</AvatarFallback>
                 </Avatar>
                 <div className="min-w-0 flex-1">
                   <p className="truncate text-sm font-medium">
@@ -1491,7 +1576,9 @@ function MessageRow({
       </div>
       <Card className={mine ? "bg-primary text-primary-foreground" : ""}>
         <CardContent className="flex flex-col gap-3 p-3">
-          {message.body ? <MessageMarkdown>{message.body}</MessageMarkdown> : null}
+          {message.body ? (
+            <MessageMarkdown>{message.body}</MessageMarkdown>
+          ) : null}
           {message.attachments.map((attachment) => (
             <AttachmentView
               key={attachment.id}
@@ -1594,14 +1681,19 @@ function Person({ sdk }: { sdk: AuthMiniApi }) {
   const { username = "" } = useParams();
   const person = useQuery({
     queryKey: ["person", username],
-    queryFn: () => api<Profile>(sdk, `/api/users/${encodeURIComponent(username)}`),
+    queryFn: () =>
+      api<Profile>(sdk, `/api/users/${encodeURIComponent(username)}`),
   });
   const navigate = useNavigate();
   const open = useMutation({
     mutationFn: () =>
-      api<Conversation>(sdk, `/api/conversations/direct/${encodeURIComponent(username)}`, {
-        method: "POST",
-      }),
+      api<Conversation>(
+        sdk,
+        `/api/conversations/direct/${encodeURIComponent(username)}`,
+        {
+          method: "POST",
+        },
+      ),
     onSuccess: (conversation) => navigate(`/conversations/${conversation.id}`),
     onError: (error) => toast.error(error.message),
   });
@@ -1614,10 +1706,7 @@ function Person({ sdk }: { sdk: AuthMiniApi }) {
       <Page title={t("profile.title")} description={person.error.message} />
     );
   return (
-    <Page
-      title={person.data.username}
-      description={`@${person.data.username}`}
-    >
+    <Page title={person.data.username} description={`@${person.data.username}`}>
       <div className="flex flex-col gap-5">
         <ProfileCard profile={person.data} sdk={sdk} />
         <Button className="w-fit" onClick={() => open.mutate()}>
@@ -1635,9 +1724,13 @@ function Compose({ sdk }: { sdk: AuthMiniApi }) {
   const navigate = useNavigate();
   const open = useMutation({
     mutationFn: () =>
-      api<Conversation>(sdk, `/api/conversations/direct/${encodeURIComponent(username)}`, {
-        method: "POST",
-      }),
+      api<Conversation>(
+        sdk,
+        `/api/conversations/direct/${encodeURIComponent(username)}`,
+        {
+          method: "POST",
+        },
+      ),
     onSuccess: (conversation) => navigate(`/conversations/${conversation.id}`),
     onError: (error) => toast.error(error.message),
   });
@@ -1655,7 +1748,7 @@ function Compose({ sdk }: { sdk: AuthMiniApi }) {
 function GroupCreator({ sdk }: { sdk: AuthMiniApi }) {
   const { t } = useI18n();
   const [title, setTitle] = useState("");
-  const [usernames, setUsernames] = useState("");
+  const [memberIds, setMemberIds] = useState<string[]>([]);
   const navigate = useNavigate();
   const create = useMutation({
     mutationFn: () =>
@@ -1663,10 +1756,7 @@ function GroupCreator({ sdk }: { sdk: AuthMiniApi }) {
         method: "POST",
         body: JSON.stringify({
           title,
-          usernames: usernames
-            .split(",")
-            .map((value) => value.trim())
-            .filter(Boolean),
+          user_ids: memberIds,
         }),
       }),
     onSuccess: (conversation) => navigate(`/conversations/${conversation.id}`),
@@ -1692,13 +1782,12 @@ function GroupCreator({ sdk }: { sdk: AuthMiniApi }) {
             />
           </Field>
           <Field>
-            <FieldLabel htmlFor="group-members">
-              {t("group.members")}
-            </FieldLabel>
-            <Input
-              id="group-members"
-              value={usernames}
-              onChange={(event) => setUsernames(event.target.value)}
+            <LinkitUserPicker
+              multiple
+              value={memberIds}
+              onValueChange={(userIds) => setMemberIds(userIds)}
+              label={t("group.members")}
+              lang={document.documentElement.lang}
               placeholder={t("group.membersPlaceholder")}
             />
           </Field>
@@ -2002,7 +2091,10 @@ function ProfileEditor({ me, sdk }: { me: Me; sdk: AuthMiniApi }) {
       >
         <FieldGroup>
           <Field>
-            <FieldLabel>{t("profileEditor.avatar")}</FieldLabel><FieldDescription>头像会居中裁剪为方形并压缩为 WebP；原始上传保留，可重新处理。</FieldDescription>
+            <FieldLabel>{t("profileEditor.avatar")}</FieldLabel>
+            <FieldDescription>
+              头像会居中裁剪为方形并压缩为 WebP；原始上传保留，可重新处理。
+            </FieldDescription>
             <div className="flex items-center gap-3">
               <ProfileAvatar
                 sdk={sdk}
@@ -2061,13 +2153,18 @@ function ProfileEditor({ me, sdk }: { me: Me; sdk: AuthMiniApi }) {
 function BarkNotifications({ sdk }: { sdk: AuthMiniApi }) {
   const { locale, t } = useI18n();
   const queryClient = useQueryClient();
-  const [confirmation, setConfirmation] = useState<"reset" | "revoke" | null>(null);
+  const [confirmation, setConfirmation] = useState<"reset" | "revoke" | null>(
+    null,
+  );
   const settings = useQuery({
     queryKey: ["settings", "bark"],
     queryFn: () => api<BarkNotificationSettings>(sdk, "/api/settings/bark"),
   });
   const reset = useMutation({
-    mutationFn: () => api<BarkNotificationSettings>(sdk, "/api/settings/bark", { method: "POST" }),
+    mutationFn: () =>
+      api<BarkNotificationSettings>(sdk, "/api/settings/bark", {
+        method: "POST",
+      }),
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ["settings", "bark"] });
       setConfirmation(null);
@@ -2085,7 +2182,10 @@ function BarkNotifications({ sdk }: { sdk: AuthMiniApi }) {
     onError: (error) => toast.error(error.message),
   });
   const removeDevice = useMutation({
-    mutationFn: (id: string) => api(sdk, `/api/settings/bark/devices/${encodeURIComponent(id)}`, { method: "DELETE" }),
+    mutationFn: (id: string) =>
+      api(sdk, `/api/settings/bark/devices/${encodeURIComponent(id)}`, {
+        method: "DELETE",
+      }),
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ["settings", "bark"] });
       toast.success(t("barkSettings.deviceRemoved"));
@@ -2103,7 +2203,10 @@ function BarkNotifications({ sdk }: { sdk: AuthMiniApi }) {
   };
 
   return (
-    <Page title={t("barkSettings.title")} description={t("barkSettings.description")}>
+    <Page
+      title={t("barkSettings.title")}
+      description={t("barkSettings.description")}
+    >
       <div className="grid max-w-3xl gap-5 lg:grid-cols-[minmax(0,1fr)_13rem]">
         <Card>
           <CardHeader className="gap-3">
@@ -2112,77 +2215,187 @@ function BarkNotifications({ sdk }: { sdk: AuthMiniApi }) {
             </div>
             <div>
               <CardTitle>{t("barkSettings.cardTitle")}</CardTitle>
-              <CardDescription className="mt-1">{t("barkSettings.cardDescription")}</CardDescription>
+              <CardDescription className="mt-1">
+                {t("barkSettings.cardDescription")}
+              </CardDescription>
             </div>
           </CardHeader>
           <CardContent className="space-y-5">
             <p className="text-sm leading-6 text-muted-foreground">
-              {t("barkSettings.iosPrompt")} {" "}
-              <a className="font-medium text-foreground underline underline-offset-4" href="https://apps.apple.com/app/bark-customed-notifications/id1403753865" target="_blank" rel="noreferrer">
+              {t("barkSettings.iosPrompt")}{" "}
+              <a
+                className="font-medium text-foreground underline underline-offset-4"
+                href="https://apps.apple.com/app/bark-customed-notifications/id1403753865"
+                target="_blank"
+                rel="noreferrer"
+              >
                 {t("barkSettings.downloadBark")}
               </a>
             </p>
-            {settings.isLoading ? <p className="text-sm text-muted-foreground">{t("barkSettings.loading")}</p> : null}
-            {baseUrl ? <>
-              <Field>
-                <FieldLabel htmlFor="bark-base-url">{t("barkSettings.baseUrl")}</FieldLabel>
-                <div className="flex gap-2">
-                  <Input id="bark-base-url" readOnly value={baseUrl} aria-describedby="bark-base-url-help" />
-                  <Button type="button" variant="outline" size="icon" aria-label={t("barkSettings.copy")} onClick={() => void copy()}>
-                    <CopyIcon aria-hidden="true" />
+            {settings.isLoading ? (
+              <p className="text-sm text-muted-foreground">
+                {t("barkSettings.loading")}
+              </p>
+            ) : null}
+            {baseUrl ? (
+              <>
+                <Field>
+                  <FieldLabel htmlFor="bark-base-url">
+                    {t("barkSettings.baseUrl")}
+                  </FieldLabel>
+                  <div className="flex gap-2">
+                    <Input
+                      id="bark-base-url"
+                      readOnly
+                      value={baseUrl}
+                      aria-describedby="bark-base-url-help"
+                    />
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="icon"
+                      aria-label={t("barkSettings.copy")}
+                      onClick={() => void copy()}
+                    >
+                      <CopyIcon aria-hidden="true" />
+                    </Button>
+                  </div>
+                  <FieldDescription id="bark-base-url-help">
+                    {t("barkSettings.baseUrlHint")}
+                  </FieldDescription>
+                </Field>
+                {!settings.data?.apns_configured ? (
+                  <p className="text-sm text-destructive">
+                    {t("barkSettings.apnsUnavailable")}
+                  </p>
+                ) : null}
+                <div className="flex flex-wrap gap-3">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    disabled={reset.isPending}
+                    onClick={() => setConfirmation("reset")}
+                  >
+                    <RotateCcwIcon data-icon="inline-start" />
+                    {t("barkSettings.reset")}
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="destructive"
+                    disabled={revoke.isPending}
+                    onClick={() => setConfirmation("revoke")}
+                  >
+                    <Trash2Icon data-icon="inline-start" />
+                    {t("barkSettings.revoke")}
                   </Button>
                 </div>
-                <FieldDescription id="bark-base-url-help">{t("barkSettings.baseUrlHint")}</FieldDescription>
-              </Field>
-              {!settings.data?.apns_configured ? <p className="text-sm text-destructive">{t("barkSettings.apnsUnavailable")}</p> : null}
-              <div className="flex flex-wrap gap-3">
-                <Button type="button" variant="outline" disabled={reset.isPending} onClick={() => setConfirmation("reset")}>
-                  <RotateCcwIcon data-icon="inline-start" />
-                  {t("barkSettings.reset")}
-                </Button>
-                <Button type="button" variant="destructive" disabled={revoke.isPending} onClick={() => setConfirmation("revoke")}>
-                  <Trash2Icon data-icon="inline-start" />
-                  {t("barkSettings.revoke")}
-                </Button>
-              </div>
-            </> : null}
+              </>
+            ) : null}
           </CardContent>
         </Card>
         <Card className="self-start">
           <CardHeader>
-            <CardTitle className="text-base">{t("barkSettings.scanTitle")}</CardTitle>
-            <CardDescription>{t("barkSettings.scanDescription")}</CardDescription>
+            <CardTitle className="text-base">
+              {t("barkSettings.scanTitle")}
+            </CardTitle>
+            <CardDescription>
+              {t("barkSettings.scanDescription")}
+            </CardDescription>
           </CardHeader>
           <CardContent className="flex justify-center pb-6">
-            {baseUrl ? <div className="rounded-lg bg-white p-3 ring-1 ring-foreground/10"><QRCodeSVG value={baseUrl} size={164} level="M" includeMargin /></div> : <div className="grid size-44 place-items-center rounded-lg bg-muted text-sm text-muted-foreground">{t("barkSettings.loading")}</div>}
+            {baseUrl ? (
+              <div className="rounded-lg bg-white p-3 ring-1 ring-foreground/10">
+                <QRCodeSVG value={baseUrl} size={164} level="M" includeMargin />
+              </div>
+            ) : (
+              <div className="grid size-44 place-items-center rounded-lg bg-muted text-sm text-muted-foreground">
+                {t("barkSettings.loading")}
+              </div>
+            )}
           </CardContent>
         </Card>
       </div>
       <Card className="mt-5 max-w-3xl">
         <CardHeader>
           <CardTitle>{t("barkSettings.devicesTitle")}</CardTitle>
-          <CardDescription>{t("barkSettings.devicesDescription")}</CardDescription>
+          <CardDescription>
+            {t("barkSettings.devicesDescription")}
+          </CardDescription>
         </CardHeader>
         <CardContent>
-          {settings.data?.devices.length ? <ul className="divide-y rounded-lg border" aria-label={t("barkSettings.devicesTitle")}>
-            {settings.data.devices.map((device) => <li key={device.id} className="flex items-center gap-3 px-3 py-3">
-              <SmartphoneIcon className="size-4 text-muted-foreground" aria-hidden="true" />
-              <div className="min-w-0"><p className="font-medium">{t("barkSettings.device")}</p><p className="text-xs text-muted-foreground">{new Date(device.updated_at * 1000).toLocaleString(locale)}</p></div>
-              <code className="ml-auto text-xs text-muted-foreground">{device.id.slice(0, 8)}</code>
-              <Button type="button" variant="ghost" size="icon" aria-label={t("barkSettings.removeDevice")} disabled={removeDevice.isPending} onClick={() => removeDevice.mutate(device.id)}><Trash2Icon aria-hidden="true" /></Button>
-            </li>)}
-          </ul> : <p className="text-sm text-muted-foreground">{t("barkSettings.noDevices")}</p>}
+          {settings.data?.devices.length ? (
+            <ul
+              className="divide-y rounded-lg border"
+              aria-label={t("barkSettings.devicesTitle")}
+            >
+              {settings.data.devices.map((device) => (
+                <li
+                  key={device.id}
+                  className="flex items-center gap-3 px-3 py-3"
+                >
+                  <SmartphoneIcon
+                    className="size-4 text-muted-foreground"
+                    aria-hidden="true"
+                  />
+                  <div className="min-w-0">
+                    <p className="font-medium">{t("barkSettings.device")}</p>
+                    <p className="text-xs text-muted-foreground">
+                      {new Date(device.updated_at * 1000).toLocaleString(
+                        locale,
+                      )}
+                    </p>
+                  </div>
+                  <code className="ml-auto text-xs text-muted-foreground">
+                    {device.id.slice(0, 8)}
+                  </code>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon"
+                    aria-label={t("barkSettings.removeDevice")}
+                    disabled={removeDevice.isPending}
+                    onClick={() => removeDevice.mutate(device.id)}
+                  >
+                    <Trash2Icon aria-hidden="true" />
+                  </Button>
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <p className="text-sm text-muted-foreground">
+              {t("barkSettings.noDevices")}
+            </p>
+          )}
         </CardContent>
       </Card>
-      <AlertDialog open={confirmation !== null} onOpenChange={(open) => !open && setConfirmation(null)}>
+      <AlertDialog
+        open={confirmation !== null}
+        onOpenChange={(open) => !open && setConfirmation(null)}
+      >
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>{confirmation === "reset" ? t("barkSettings.resetConfirmTitle") : t("barkSettings.revokeConfirmTitle")}</AlertDialogTitle>
-            <AlertDialogDescription>{confirmation === "reset" ? t("barkSettings.resetConfirmDescription") : t("barkSettings.revokeConfirmDescription")}</AlertDialogDescription>
+            <AlertDialogTitle>
+              {confirmation === "reset"
+                ? t("barkSettings.resetConfirmTitle")
+                : t("barkSettings.revokeConfirmTitle")}
+            </AlertDialogTitle>
+            <AlertDialogDescription>
+              {confirmation === "reset"
+                ? t("barkSettings.resetConfirmDescription")
+                : t("barkSettings.revokeConfirmDescription")}
+            </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel>{t("common.cancel")}</AlertDialogCancel>
-            <AlertDialogAction onClick={() => confirmation === "reset" ? reset.mutate() : revoke.mutate()}>{confirmation === "reset" ? t("barkSettings.reset") : t("barkSettings.revoke")}</AlertDialogAction>
+            <AlertDialogAction
+              onClick={() =>
+                confirmation === "reset" ? reset.mutate() : revoke.mutate()
+              }
+            >
+              {confirmation === "reset"
+                ? t("barkSettings.reset")
+                : t("barkSettings.revoke")}
+            </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>

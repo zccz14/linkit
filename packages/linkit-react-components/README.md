@@ -46,3 +46,32 @@ Import `linkit-react-components/styles.css`. That stylesheet includes the App He
 ```
 
 The package deliberately does **not** target `#root`, `body`, `html`, `:root`, or any host application root. It also deliberately assigns no elevated `z-index` to `.linkit-user-info__popup`, so consumer dialogs, sheets, and toast layers remain authoritative.
+
+## User picker selection modes
+
+`LinkitUserPicker` owns the authenticated Linkit lookup UI: it keeps the 180ms debounce, cancels obsolete searches, accepts username and UUID-character prefixes, and returns at most the results enforced by Linkit. Consumers must not recreate that search UI locally.
+
+Single selection is retained as the compatibility surface for existing Linkit, 1Exchange, and OpenAI-LB consumers. It supports controlled `value` or legacy uncontrolled `defaultValue`, with `onValueChange(userId, user)`. The owner is Linkit React Components; removal requires consumer migration, a major-version plan, package regression tests, and consumer builds.
+
+```tsx
+<LinkitUserPicker
+  name="investor_id"
+  value={investorId}
+  onValueChange={(userId, user) => setInvestorId(userId)}
+/>
+```
+
+Multi selection is controlled-first. Pass `multiple`, a `string[]` of selected Linkit user IDs, and `onValueChange`. The picker deduplicates IDs while preserving selection order; it displays readable username chips, supports individual removal, clear-all, and Backspace removal, and excludes already selected results. With `name`, it emits one hidden input per selected ID so normal form submission preserves the ordered values.
+
+```tsx
+<LinkitUserPicker
+  multiple
+  name="member_ids"
+  value={memberIds}
+  onValueChange={(userIds, users) => setMemberIds(userIds)}
+  label="Members"
+  lang="en"
+/>
+```
+
+The `users` callback argument contains the selected search records known to the picker. Server APIs must accept and authorize IDs independently: clients cannot treat picker output as permission to add a user, and selected chips intentionally do not expose raw IDs as ordinary visual identity.
