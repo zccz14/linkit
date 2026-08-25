@@ -14,6 +14,7 @@ export default defineConfig({
     },
   },
   resolve: {
+    dedupe: ["auth-mini-react-components", "react", "react-dom"],
     alias: [
       {
         find: "linkit-react-components/styles.css",
