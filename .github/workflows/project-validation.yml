@@ -18,14 +18,13 @@ jobs:
         with:
           node-version: 24
           cache: npm
-          cache-dependency-path: web/package-lock.json
+          cache-dependency-path: |
+            web/package-lock.json
+            packages/linkit-react-components/package-lock.json
       - uses: dtolnay/rust-toolchain@1.93.0
         with:
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
-      - name: Validate frontend
-        working-directory: web
-        run: npm ci && npm run check
       - name: Validate Linkit React components
         working-directory: packages/linkit-react-components
         run: |
@@ -34,6 +33,9 @@ jobs:
           npm test
           npm run build
           npm run pack:check
+      - name: Validate frontend
+        working-directory: web
+        run: npm ci && npm run check
       - name: Validate Rust
         run: |
           cargo fmt --check
