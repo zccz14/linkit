@@ -434,8 +434,8 @@ function Shell({ me, sdk }: { me: Me; sdk: AuthMiniApi }) {
   );
 
   return (
-    <div className="grid min-h-dvh grid-cols-[17rem_1fr] bg-muted/30 max-md:grid-cols-1">
-      <aside className="flex min-h-dvh flex-col gap-4 border-r bg-background p-4 max-md:hidden">
+    <div className="grid h-dvh min-h-0 grid-cols-[17rem_1fr] overflow-hidden bg-muted/30 max-md:grid-cols-1">
+      <aside className="flex min-h-0 flex-col gap-4 overflow-y-auto border-r bg-background p-4 max-md:hidden">
         <Link
           className="flex items-center gap-2 px-2 text-lg font-semibold"
           to="/conversations"
@@ -473,7 +473,7 @@ function Shell({ me, sdk }: { me: Me; sdk: AuthMiniApi }) {
             <PlusIcon />
           </Button>
         </div>
-        <div className="min-h-0 flex-1 overflow-y-auto">{conversationList}</div>
+        <div>{conversationList}</div>
         <div className="mt-auto flex items-center gap-2 border-t pt-4">
           <ProfileAvatar profile={me.profile} sdk={sdk} />
           <div className="min-w-0 flex-1">
@@ -492,7 +492,7 @@ function Shell({ me, sdk }: { me: Me; sdk: AuthMiniApi }) {
           </Button>
         </div>
       </aside>
-      <main className="min-w-0">
+      <main className="min-h-0 min-w-0 overflow-y-auto">
         <Routes>
           <Route
             path="/conversations"
