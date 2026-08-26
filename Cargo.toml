@@ -1,6 +1,6 @@
 [package]
 name = "linkit"
-version = "0.1.55"
+version = "0.1.56"
 edition = "2024"
 rust-version = "1.93"
 license = "MIT"
