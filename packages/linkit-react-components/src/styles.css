@@ -107,17 +107,17 @@
 .linkit-user-picker__selection { display: flex; min-width: 0; align-items: flex-start; justify-content: space-between; gap: .5rem; padding: .45rem .5rem; background: var(--muted, #f1f5f9); border: 1px solid var(--border, #e2e8f0); border-radius: .5rem; }
 .linkit-user-picker__selected-users { display: flex; min-width: 0; flex: 1; flex-wrap: wrap; gap: .35rem; }
 .linkit-user-picker__selected-user { display: flex; min-width: 0; max-width: 100%; align-items: center; gap: .35rem; padding: .2rem .25rem .2rem .35rem; color: var(--foreground, #0f172a); background: var(--background, #fff); border: 1px solid var(--border, #e2e8f0); border-radius: .375rem; }
-.linkit-user-picker__selected-user strong, .linkit-user-picker__option strong { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: .875rem; line-height: 1.2; }
-.linkit-user-picker__option > span > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted-foreground, #64748b); font-size: .7rem; line-height: 1.25; }
-.linkit-user-picker__option code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+.linkit-user-picker__selected-user strong, .linkit-user-picker__option-username { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: .875rem; line-height: 1.2; }
+.linkit-user-picker__option-id { display: block; min-width: 0; overflow-x: auto; overflow-y: hidden; color: var(--muted-foreground, #64748b); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .7rem; line-height: 1.25; white-space: nowrap; }
 .linkit-user-picker__clear, .linkit-user-picker__remove { flex: none; min-height: 2rem; padding: .35rem .5rem; color: var(--foreground, #0f172a); font: inherit; font-size: .75rem; font-weight: 500; cursor: pointer; background: transparent; border: 0; border-radius: .375rem; }
 .linkit-user-picker__remove { display: grid; min-width: 1.5rem; min-height: 1.5rem; place-items: center; padding: .1rem; line-height: 1; }
 .linkit-user-picker__clear:hover:not(:disabled), .linkit-user-picker__remove:hover:not(:disabled) { background: var(--accent, #e2e8f0); }
 .linkit-user-picker__clear:focus-visible, .linkit-user-picker__remove:focus-visible, .linkit-user-picker__option:focus-visible { outline: 3px solid color-mix(in srgb, var(--ring, #2563eb) 55%, transparent); outline-offset: -1px; }
 .linkit-user-picker__clear:disabled, .linkit-user-picker__remove:disabled { cursor: not-allowed; opacity: .55; }
 .linkit-user-picker__results { position: absolute; z-index: 20; top: calc(100% + .25rem); right: 0; left: 0; display: grid; max-height: min(20rem, 45vh); overflow: auto; padding: .25rem; color: var(--popover-foreground, var(--foreground, #0f172a)); background: var(--popover, var(--background, #fff)); border: 1px solid var(--border, #e2e8f0); border-radius: .625rem; box-shadow: 0 .5rem 1rem rgb(15 23 42 / .12); }
-.linkit-user-picker__option { display: flex; min-width: 0; align-items: center; gap: .55rem; padding: .5rem; color: inherit; text-align: left; cursor: pointer; background: transparent; border: 0; border-radius: .5rem; }
-.linkit-user-picker__option > span { display: grid; min-width: 0; flex: 1; gap: .08rem; }
+.linkit-user-picker__option { box-sizing: border-box; display: flex; width: 100%; min-width: 0; height: 64px; min-height: 64px; align-items: center; gap: .55rem; padding: .5rem; color: inherit; text-align: left; cursor: pointer; background: transparent; border: 0; border-radius: .5rem; }
+.linkit-user-picker__option-avatar { width: 28px; height: 28px; border-radius: 50%; }
+.linkit-user-picker__option-copy { display: grid; min-width: 0; flex: 1; gap: .08rem; }
 .linkit-user-picker__option:hover, .linkit-user-picker__option[data-active] { background: var(--accent, var(--muted, #f1f5f9)); color: var(--accent-foreground, var(--foreground, #0f172a)); }
 .linkit-user-picker__status, .linkit-user-picker__error { margin: 0; padding: .6rem .65rem; color: var(--muted-foreground, #64748b); font-size: .8rem; line-height: 1.4; }
 .linkit-user-picker__error { color: var(--destructive, #b91c1c); background: color-mix(in srgb, var(--destructive, #b91c1c) 8%, transparent); border-radius: .5rem; }

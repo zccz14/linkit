@@ -439,6 +439,7 @@ function PickerControl({
                   key={user.user_id}
                   type="button"
                   role="option"
+                  aria-label={`${user.username}, ${user.user_id}`}
                   aria-selected={activeIndex === index}
                   className="linkit-user-picker__option"
                   data-active={activeIndex === index || undefined}
@@ -446,12 +447,18 @@ function PickerControl({
                   onClick={() => choose(user)}
                 >
                   <LinkitAvatar
+                    className="linkit-user-picker__option-avatar"
                     profile={user}
                     fallback={user.username}
                     size="sm"
                   />
-                  <span>
-                    <strong>{user.username}</strong>
+                  <span className="linkit-user-picker__option-copy">
+                    <strong className="linkit-user-picker__option-username">
+                      {user.username}
+                    </strong>
+                    <code className="linkit-user-picker__option-id">
+                      {user.user_id}
+                    </code>
                   </span>
                 </button>
               ))
