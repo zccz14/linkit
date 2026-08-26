@@ -68,7 +68,7 @@ describe("LinkitUserPicker", () => {
     expect(screen.getByText("alice")).toBeInTheDocument();
   });
 
-  it("passes a UUID-character query through without visually exposing its raw ID", async () => {
+  it("passes a UUID-character query through and exposes its complete candidate-only identity", async () => {
     vi.useFakeTimers();
     const uuidUser = {
       user_id: "a1b2c3d4-0000-0000-0000-000000000001",
@@ -81,9 +81,10 @@ describe("LinkitUserPicker", () => {
     await searchFor("A1B2-");
 
     expect(searchUsers).toHaveBeenCalledWith("A1B2-", expect.any(AbortSignal));
-    const option = screen.getByRole("option", { name: /alice/i });
-    expect(option).toBeInTheDocument();
-    expect(option).not.toHaveTextContent(uuidUser.user_id);
+    const option = screen.getByRole("option", { name: `alice, ${uuidUser.user_id}` });
+    expect(option).toHaveTextContent(uuidUser.user_id);
+    expect(option).toHaveAttribute("aria-label", `alice, ${uuidUser.user_id}`);
+    expect(option.querySelector(".linkit-user-picker__option-id")).toHaveTextContent(uuidUser.user_id);
     expect(screen.getByRole("combobox")).toHaveAttribute(
       "placeholder",
       "Search username or UUID",
@@ -218,6 +219,30 @@ describe("LinkitUserPicker", () => {
 
     expect(document.querySelectorAll(".linkit-user-picker__selected-user .linkit-avatar.linkit-avatar--sm")).toHaveLength(2);
     expect(document.querySelectorAll(".linkit-user-picker__selected-user img.linkit-avatar__image")).toHaveLength(2);
+  });
+
+  it("keeps a long mixed-script candidate username and complete stable ID in a fixed row", async () => {
+    vi.useFakeTimers();
+    const longUsername = "超长用户名・emoji🙂・special_~!@#$%^&*()_ABCDEFGHIJKLMNOPQRSTUVWXYZ";
+    const stableId = "a1b2c3d4-e5f6-4a7b-8c9d-0123456789ab";
+    searchUsers.mockResolvedValue([{
+      user_id: stableId,
+      username: longUsername,
+      avatar_url: "https://linkit.example.test/api/public/profiles/user-long/avatar?v=2",
+    }]);
+    render(<LinkitUserPicker lang="zh-CN" />);
+
+    await searchFor("超长");
+
+    const option = screen.getByRole("option", { name: `${longUsername}, ${stableId}` });
+    expect(option).toHaveClass("linkit-user-picker__option");
+    expect(option).toHaveAttribute("aria-label", `${longUsername}, ${stableId}`);
+    expect(option).toHaveTextContent(longUsername);
+    expect(option).toHaveTextContent(stableId);
+    expect(option.querySelector(".linkit-avatar.linkit-avatar--sm.linkit-user-picker__option-avatar")).toBeInTheDocument();
+    expect(option.querySelector(".linkit-user-picker__option-id")).toHaveTextContent(stableId);
+    fireEvent.click(option);
+    expect(screen.queryByText(stableId)).not.toBeInTheDocument();
   });
 
   it("does not request users for whitespace-only input", () => {
