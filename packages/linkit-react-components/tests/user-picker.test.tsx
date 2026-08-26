@@ -25,9 +25,9 @@ afterEach(() => {
 const alice = {
   user_id: "user-alice",
   username: "alice",
-  avatar_url: null,
+  avatar_url: "https://linkit.example.test/api/public/profiles/user-alice/avatar?v=7",
 };
-const bob = { user_id: "user-bob", username: "bob", avatar_url: null };
+const bob = { user_id: "user-bob", username: "bob", avatar_url: "https://linkit.example.test/api/public/profiles/user-bob/avatar?v=9" };
 
 async function searchFor(value: string) {
   fireEvent.change(screen.getByRole("combobox"), { target: { value } });
@@ -68,7 +68,7 @@ describe("LinkitUserPicker", () => {
     expect(screen.getByText("alice")).toBeInTheDocument();
   });
 
-  it("passes a UUID-character query through and presents the username with its UID", async () => {
+  it("passes a UUID-character query through without visually exposing its raw ID", async () => {
     vi.useFakeTimers();
     const uuidUser = {
       user_id: "a1b2c3d4-0000-0000-0000-000000000001",
@@ -81,9 +81,9 @@ describe("LinkitUserPicker", () => {
     await searchFor("A1B2-");
 
     expect(searchUsers).toHaveBeenCalledWith("A1B2-", expect.any(AbortSignal));
-    expect(
-      screen.getByRole("option", { name: /alice.*a1b2c3d4/i }),
-    ).toBeInTheDocument();
+    const option = screen.getByRole("option", { name: /alice/i });
+    expect(option).toBeInTheDocument();
+    expect(option).not.toHaveTextContent(uuidUser.user_id);
     expect(screen.getByRole("combobox")).toHaveAttribute(
       "placeholder",
       "Search username or UUID",
@@ -195,6 +195,29 @@ describe("LinkitUserPicker", () => {
     fireEvent.click(screen.getByRole("button", { name: "Clear all members" }));
     expect(screen.queryByText("alice")).not.toBeInTheDocument();
     expect(screen.queryByText("bob")).not.toBeInTheDocument();
+  });
+
+  it("uses the package avatar for result rows and selected single and multiple identities", async () => {
+    vi.useFakeTimers();
+    searchUsers.mockImplementation((term: string) => Promise.resolve(term === "ali" ? [alice] : [bob]));
+    function ControlledPicker() {
+      const [value, setValue] = useState<string[]>([]);
+      return <LinkitUserPicker multiple value={value} onValueChange={(ids) => setValue(ids)} />;
+    }
+    render(<ControlledPicker />);
+
+    await searchFor("ali");
+    const aliceOption = screen.getByRole("option", { name: /alice/i });
+    expect(aliceOption.querySelector(".linkit-avatar.linkit-avatar--sm img")).toHaveAttribute("src", alice.avatar_url);
+    fireEvent.click(aliceOption);
+
+    await searchFor("bob");
+    const bobOption = screen.getByRole("option", { name: /bob/i });
+    expect(bobOption.querySelector(".linkit-avatar.linkit-avatar--sm img")).toHaveAttribute("src", bob.avatar_url);
+    fireEvent.click(bobOption);
+
+    expect(document.querySelectorAll(".linkit-user-picker__selected-user .linkit-avatar.linkit-avatar--sm")).toHaveLength(2);
+    expect(document.querySelectorAll(".linkit-user-picker__selected-user img.linkit-avatar__image")).toHaveLength(2);
   });
 
   it("does not request users for whitespace-only input", () => {

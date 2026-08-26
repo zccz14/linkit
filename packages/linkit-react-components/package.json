@@ -1,6 +1,6 @@
 {
   "name": "linkit-react-components",
-  "version": "0.1.15",
+  "version": "0.1.16",
   "description": "Authenticated Linkit provider and compact React display primitives.",
   "license": "MIT",
   "repository": {
@@ -34,7 +34,7 @@
   },
   "scripts": {
     "build": "vite build && tsc -p tsconfig.build.json && cp src/styles.css dist/styles.css",
-    "test": "vitest run && node scripts/check-user-info-css.mjs && node scripts/check-user-info-portal-contract.mjs && node scripts/check-user-picker-css.mjs",
+    "test": "vitest run && node scripts/check-user-info-css.mjs && node scripts/check-user-info-portal-contract.mjs && node scripts/check-user-picker-css.mjs && node scripts/check-user-picker-avatar-contract.mjs",
     "typecheck": "tsc --noEmit",
     "pack:check": "npm pack --dry-run"
   },

@@ -88,6 +88,14 @@
 @media (prefers-reduced-motion: reduce) { .linkit-user-info__popup, .linkit-user-info__skeleton span, .linkit-user-info__spinner { animation: none; transition: none; } }
 
 
+/* Native avatar primitive. The public versioned URL is passed through unchanged for browser caching. */
+.linkit-avatar { box-sizing: border-box; display: inline-grid; flex: none; width: 1.75rem; height: 1.75rem; overflow: hidden; place-items: center; border-radius: 999px; color: var(--muted-foreground, #64748b); background: var(--muted, #f1f5f9); font-size: .75rem; font-weight: 500; line-height: 1; }
+.linkit-avatar--sm { width: 1.5rem; height: 1.5rem; font-size: .65rem; }
+.linkit-avatar--lg { width: 2.5rem; height: 2.5rem; font-size: 1rem; }
+.linkit-avatar__image, .linkit-avatar__fallback { display: block; width: 100%; height: 100%; }
+.linkit-avatar__image { object-fit: cover; }
+.linkit-avatar__fallback { display: grid; place-items: center; }
+
 /* User picker form control and search results. */
 .linkit-user-picker { position: relative; display: grid; min-width: min(100%, 17rem); gap: .375rem; color: var(--foreground, #0f172a); }
 .linkit-user-picker__label { color: var(--foreground, #0f172a); font-size: .875rem; font-weight: 500; line-height: 1.25; }
@@ -99,7 +107,7 @@
 .linkit-user-picker__selection { display: flex; min-width: 0; align-items: flex-start; justify-content: space-between; gap: .5rem; padding: .45rem .5rem; background: var(--muted, #f1f5f9); border: 1px solid var(--border, #e2e8f0); border-radius: .5rem; }
 .linkit-user-picker__selected-users { display: flex; min-width: 0; flex: 1; flex-wrap: wrap; gap: .35rem; }
 .linkit-user-picker__selected-user { display: flex; min-width: 0; max-width: 100%; align-items: center; gap: .35rem; padding: .2rem .25rem .2rem .35rem; color: var(--foreground, #0f172a); background: var(--background, #fff); border: 1px solid var(--border, #e2e8f0); border-radius: .375rem; }
-.linkit-user-picker__selected-user strong, .linkit-user-picker__option strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: .875rem; line-height: 1.2; }
+.linkit-user-picker__selected-user strong, .linkit-user-picker__option strong { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: .875rem; line-height: 1.2; }
 .linkit-user-picker__option > span > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted-foreground, #64748b); font-size: .7rem; line-height: 1.25; }
 .linkit-user-picker__option code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
 .linkit-user-picker__clear, .linkit-user-picker__remove { flex: none; min-height: 2rem; padding: .35rem .5rem; color: var(--foreground, #0f172a); font: inherit; font-size: .75rem; font-weight: 500; cursor: pointer; background: transparent; border: 0; border-radius: .375rem; }
