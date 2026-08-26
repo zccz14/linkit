@@ -1,7 +1,6 @@
-import { Avatar as AvatarPrimitive } from "@base-ui/react/avatar";
 import { clsx } from "clsx";
 import { twMerge } from "tailwind-merge";
-import type { HTMLAttributes, ImgHTMLAttributes } from "react";
+import { useState, type HTMLAttributes, type ImgHTMLAttributes } from "react";
 import type { LinkitConversation, LinkitProfile } from "./types.js";
 
 export type LinkitAvatarProps = Omit<ImgHTMLAttributes<HTMLImageElement>, "src" | "alt"> & {
@@ -10,14 +9,19 @@ export type LinkitAvatarProps = Omit<ImgHTMLAttributes<HTMLImageElement>, "src" 
   fallback?: string;
 };
 
-export function LinkitAvatar({ profile, size = "md", fallback, className, ...props }: LinkitAvatarProps) {
+export function LinkitAvatar({ profile, size = "md", fallback, className, onError, ...props }: LinkitAvatarProps) {
   const label = profile?.username?.trim() || fallback || "?";
   const initial = Array.from(label)[0]?.toLocaleUpperCase() ?? "?";
-  const sizeClass = size === "sm" ? "size-6 text-[0.65rem]" : size === "lg" ? "size-10 text-base" : "size-7 text-xs";
-  return <AvatarPrimitive.Root className={twMerge(clsx("inline-grid shrink-0 place-items-center overflow-hidden rounded-full bg-muted font-medium text-muted-foreground", sizeClass, className))} aria-label={label}>
-    {profile?.avatar_url ? <AvatarPrimitive.Image {...props} className="size-full object-cover" src={profile.avatar_url} alt="" /> : null}
-    <AvatarPrimitive.Fallback className="size-full">{initial}</AvatarPrimitive.Fallback>
-  </AvatarPrimitive.Root>;
+  const avatarUrl = profile?.avatar_url ?? null;
+  const [failedUrl, setFailedUrl] = useState<string | null>(null);
+  const showImage = Boolean(avatarUrl && failedUrl !== avatarUrl);
+  return <span className={twMerge(clsx("linkit-avatar", `linkit-avatar--${size}`, className))} aria-label={label}>
+    {showImage ? <img {...props} className="linkit-avatar__image" src={avatarUrl!} alt="" onError={(event) => {
+      setFailedUrl(avatarUrl);
+      onError?.(event);
+    }} /> : null}
+    {!showImage ? <span className="linkit-avatar__fallback" aria-hidden="true">{initial}</span> : null}
+  </span>;
 }
 
 export type LinkitUserDisplayProps = HTMLAttributes<HTMLSpanElement> & {

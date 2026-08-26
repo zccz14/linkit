@@ -14,7 +14,7 @@
 
 - `LinkitProvider` supplies authenticated Linkit requests, `getMe`, `getProfile`, `updateProfile`, `upload`, `searchUsers`, and `openDirectConversation`.
 - `useLinkit` reads that provider context.
-- `LinkitAvatar` renders a profile avatar with a Base UI fallback.
+- `LinkitAvatar` renders a fixed-size profile avatar from its public, versioned `avatar_url` through a native `<img src>`; the browser reuses that URL through its normal HTTP cache, and a same-size initial fallback appears if the image fails.
 - `LinkitUserDisplay` renders a profile `username`; when the profile is unavailable it renders the localized unknown-user label and the complete source `user_id`.
 - `LinkitConversationDisplay` renders a group or direct conversation identity.
 - `LinkitAppHeaderUser` renders an application-header account trigger and Base UI dialog for username, motto, avatar upload, UID copy, passkey registration, sign-in-method settings, and sign out.

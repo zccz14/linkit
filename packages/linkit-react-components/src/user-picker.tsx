@@ -452,9 +452,6 @@ function PickerControl({
                   />
                   <span>
                     <strong>{user.username}</strong>
-                    <span>
-                      <code>{user.user_id}</code>
-                    </span>
                   </span>
                 </button>
               ))
