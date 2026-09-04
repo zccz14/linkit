@@ -3,7 +3,11 @@
 `linkit-react-components` provides small, reusable Linkit identity and profile controls for React applications. Every component must be rendered below `AuthMiniProvider → LinkitProvider`; the package reuses the outer Auth Mini session and never owns login callbacks, token refresh, passwords, cookies, or token audiences.
 
 ```tsx
-<AuthMiniProvider authMiniBaseUrl="https://auth.ntnl.io" audiences={["app.example.com", "linkit.ntnl.io"]} autoRedirectToLogin={false}>
+<AuthMiniProvider
+  authMiniBaseUrl="https://auth.ntnl.io"
+  audiences={["app.example.com", "linkit.ntnl.io"]}
+  autoRedirectToLogin={false}
+>
   <LinkitProvider linkitBaseUrl="https://linkit.ntnl.io">
     <LinkitAppHeaderUser lang="zh-CN" />
   </LinkitProvider>
@@ -12,7 +16,7 @@
 
 ## API
 
-- `LinkitProvider` supplies authenticated Linkit requests, `getMe`, `getProfile`, `updateProfile`, `upload`, `searchUsers`, and `openDirectConversation`.
+- `LinkitProvider` supplies authenticated Linkit requests, identity/profile methods, uploads, message/conversation reads and writes, member-authorized event subscriptions, and attachment downloads. It owns Auth Mini bearer use and the single refresh retry; consuming applications never receive or persist a token.
 - `useLinkit` reads that provider context.
 - `LinkitAvatar` renders a fixed-size profile avatar from its public, versioned `avatar_url` through a native `<img src>`; the browser reuses that URL through its normal HTTP cache, and a same-size initial fallback appears if the image fails.
 - `LinkitUserDisplay` renders a profile `username`; when the profile is unavailable it renders the localized unknown-user label and the complete source `user_id`.
@@ -20,6 +24,20 @@
 - `LinkitAppHeaderUser` renders an application-header account trigger and Base UI dialog for username, motto, avatar upload, UID copy, passkey registration, sign-in-method settings, and sign out.
 - `LinkitUserPicker` searches username prefixes and UUID-character `user_id` prefixes, then writes the chosen `user_id` in controlled or uncontrolled form usage.
 - `LinkitUserInfo` is an inline avatar, username, and complete `user_id` display. Its Base UI popover opens by click, keyboard, or desktop hover and presents the available profile motto plus a real Linkit direct-message action. Pass a prefetched `profile` for dense tables; otherwise the component fetches the public profile only after its popover opens.
+- `LinkitEmbeddedConversation` mounts a complete member-authorized direct or group conversation for a specific `conversationId`: it loads history, supports earlier-message paging, receives new message events with a bounded polling fallback, renders attachments, and includes file upload, urgent-message and accessible message-compose controls. The component never accepts a token, user ID, or membership flag from its consumer.
+
+## Embedded conversation
+
+Use `LinkitEmbeddedConversation` when an authenticated host application needs to place one specific Linkit conversation directly in a task surface. The current Auth Mini session is used by `LinkitProvider`; server membership checks remain authoritative for both direct and group chats. A nonexistent or inaccessible conversation renders a localized unavailable state and does not expose any message data.
+
+```tsx
+<LinkitEmbeddedConversation
+  conversationId="0d6d2b49-1d1f-4b92-ae53-47f0a7c2b613"
+  lang="zh-CN"
+/>
+```
+
+The component supports message history, earlier-message paging, event-driven updates with a five-second authenticated cursor fallback, file attachments, urgent messages, Enter-to-send, Shift+Enter line breaks, loading, empty, error, retry, and mobile layout states. It calls Linkit APIs only through the provider; do not proxy membership or send access tokens through component props. Import `linkit-react-components/styles.css` as usual.
 
 ## Username and profile semantics
 

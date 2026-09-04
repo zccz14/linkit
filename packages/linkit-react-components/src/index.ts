@@ -11,6 +11,7 @@ export {
 export { LinkitAppHeaderUser } from "./app-header-user.js";
 export { LinkitUserPicker } from "./user-picker.js";
 export { LinkitUserInfo } from "./user-info.js";
+export { LinkitEmbeddedConversation } from "./embedded-conversation.js";
 export type {
   LinkitAppHeaderUserLabels,
   LinkitAppHeaderUserProps,
@@ -23,6 +24,10 @@ export type {
 } from "./user-picker.js";
 export type { LinkitUserInfoLabels, LinkitUserInfoProps } from "./user-info.js";
 export type {
+  LinkitEmbeddedConversationLabels,
+  LinkitEmbeddedConversationProps,
+} from "./embedded-conversation.js";
+export type {
   LinkitAvatarProps,
   LinkitConversationDisplayProps,
   LinkitUserDisplayProps,
@@ -31,6 +36,8 @@ export type {
   LinkitAttachment,
   LinkitConversation,
   LinkitMe,
+  LinkitMessage,
+  LinkitMessagePage,
   LinkitProfile,
   LinkitProfileUpdate,
   LinkitUserSearchResult,
