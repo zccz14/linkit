@@ -51,7 +51,7 @@ export type LinkitConversationDisplayProps = HTMLAttributes<HTMLSpanElement> & {
 
 export function LinkitConversationDisplay({ conversation, compact = false, className, ...props }: LinkitConversationDisplayProps) {
   const group = conversation.kind === "group";
-  const label = group ? conversation.title || "Group" : conversation.counterpart?.username || conversation.title || "Direct message";
+  const label = group ? conversation.title || "Group" : conversation.counterpart?.username || conversation.counterpart_name || conversation.title || "Direct message";
   return <span {...props} className={twMerge(clsx("inline-flex min-w-0 items-center gap-2", className))}>
     {group ? <span className={clsx("inline-grid shrink-0 place-items-center rounded-full bg-muted font-semibold text-muted-foreground", compact ? "size-6 text-[0.6rem]" : "size-7 text-[0.7rem]")}>{conversation.avatar_url ? <img className="size-full rounded-full object-cover" src={conversation.avatar_url} alt="" /> : "#"}</span> : <LinkitAvatar profile={conversation.counterpart} size={compact ? "sm" : "md"} fallback={label} />}
     <span className="min-w-0"><span className="block truncate font-medium">{label}</span>{!compact && group ? <span className="block text-xs text-muted-foreground">Group</span> : null}</span>

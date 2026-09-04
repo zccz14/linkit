@@ -123,3 +123,373 @@
 .linkit-user-picker__error { color: var(--destructive, #b91c1c); background: color-mix(in srgb, var(--destructive, #b91c1c) 8%, transparent); border-radius: .5rem; }
 @media (max-width: 34rem) { .linkit-user-picker { min-width: 0; } .linkit-user-picker__results { max-height: min(18rem, 50vh); } }
 @media (prefers-reduced-motion: reduce) { .linkit-user-picker__input { transition: none; } }
+
+
+/* Embedded, member-authorized Linkit conversation. */
+.linkit-embedded-conversation {
+  position: relative;
+  display: grid;
+  min-height: min(38rem, 72vh);
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  overflow: hidden;
+  color: var(--foreground, #0f172a);
+  background: var(--background, #fff);
+  border: 1px solid var(--border, #e2e8f0);
+  border-radius: 0.75rem;
+}
+.linkit-embedded-conversation--loading,
+.linkit-embedded-conversation--error {
+  display: flex;
+  min-height: 12rem;
+  align-items: center;
+  justify-content: center;
+  gap: 0.6rem;
+  padding: 1rem;
+  color: var(--muted-foreground, #64748b);
+  text-align: center;
+}
+.linkit-embedded-conversation--error > div {
+  display: grid;
+  justify-items: center;
+  gap: 0.5rem;
+}
+.linkit-embedded-conversation--error p {
+  margin: 0;
+  font-size: 0.875rem;
+}
+.linkit-embedded-conversation__header {
+  display: flex;
+  min-height: 3.5rem;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 0.75rem 1rem;
+  background: var(--muted, #f8fafc);
+  border-bottom: 1px solid var(--border, #e2e8f0);
+}
+.linkit-embedded-conversation__status {
+  flex: none;
+  color: var(--muted-foreground, #64748b);
+  font-size: 0.75rem;
+  font-weight: 600;
+}
+.linkit-embedded-conversation__messages {
+  min-height: 0;
+  overflow: auto;
+  padding: 1rem;
+  scroll-behavior: smooth;
+}
+.linkit-embedded-conversation__messages > * + * {
+  margin-top: 0.85rem;
+}
+.linkit-embedded-conversation__message {
+  max-width: min(88%, 40rem);
+}
+.linkit-embedded-conversation__message--mine {
+  margin-left: auto;
+}
+.linkit-embedded-conversation__message header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.35rem 0.5rem;
+  margin: 0 0 0.25rem;
+  color: var(--muted-foreground, #64748b);
+  font-size: 0.72rem;
+}
+.linkit-embedded-conversation__message header strong {
+  color: var(--foreground, #0f172a);
+  font-size: 0.78rem;
+}
+.linkit-embedded-conversation__message header span {
+  padding: 0.1rem 0.3rem;
+  font-size: 0.65rem;
+  font-weight: 600;
+  background: var(--muted, #f1f5f9);
+  border-radius: 0.25rem;
+}
+.linkit-embedded-conversation__message
+  header
+  .linkit-embedded-conversation__urgent-badge {
+  color: var(--destructive, #b91c1c);
+  background: color-mix(in srgb, var(--destructive, #b91c1c) 10%, transparent);
+}
+.linkit-embedded-conversation__message header time {
+  margin-left: auto;
+}
+.linkit-embedded-conversation__bubble {
+  display: grid;
+  gap: 0.55rem;
+  padding: 0.65rem 0.75rem;
+  color: var(--foreground, #0f172a);
+  background: var(--muted, #f1f5f9);
+  border-radius: 0.65rem;
+  overflow-wrap: anywhere;
+}
+.linkit-embedded-conversation__message--mine
+  .linkit-embedded-conversation__bubble {
+  color: var(--primary-foreground, #fff);
+  background: var(--primary, #0f172a);
+}
+.linkit-embedded-conversation__bubble p {
+  margin: 0;
+  white-space: pre-wrap;
+  line-height: 1.48;
+}
+.linkit-embedded-conversation__attachment {
+  display: inline-flex;
+  width: fit-content;
+  min-width: 0;
+  align-items: center;
+  gap: 0.35rem;
+  color: inherit;
+  font-size: 0.8rem;
+  overflow-wrap: anywhere;
+}
+a.linkit-embedded-conversation__attachment {
+  text-decoration: underline;
+  text-underline-offset: 0.15em;
+}
+.linkit-embedded-conversation__load-older,
+.linkit-embedded-conversation__new-messages {
+  display: inline-flex;
+  min-height: 2rem;
+  align-items: center;
+  justify-content: center;
+  gap: 0.35rem;
+  padding: 0.35rem 0.55rem;
+  color: var(--foreground, #0f172a);
+  font: inherit;
+  font-size: 0.8rem;
+  font-weight: 500;
+  cursor: pointer;
+  background: var(--background, #fff);
+  border: 1px solid var(--border, #e2e8f0);
+  border-radius: 0.45rem;
+}
+.linkit-embedded-conversation__load-older {
+  margin: 0 auto 0.25rem;
+}
+.linkit-embedded-conversation__new-messages {
+  position: absolute;
+  z-index: 1;
+  bottom: 5.5rem;
+  left: 50%;
+  transform: translateX(-50%);
+  box-shadow: 0 0.25rem 0.75rem rgb(15 23 42 / 0.16);
+}
+.linkit-embedded-conversation__load-older:hover:not(:disabled),
+.linkit-embedded-conversation__new-messages:hover {
+  background: var(--muted, #f1f5f9);
+}
+.linkit-embedded-conversation__load-older:focus-visible,
+.linkit-embedded-conversation__new-messages:focus-visible {
+  outline: 3px solid color-mix(in srgb, var(--ring, #2563eb) 55%, transparent);
+  outline-offset: 2px;
+}
+.linkit-embedded-conversation__load-older:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+.linkit-embedded-conversation__empty {
+  margin: 3rem auto;
+  max-width: 28rem;
+  color: var(--muted-foreground, #64748b);
+  text-align: center;
+  font-size: 0.875rem;
+  line-height: 1.5;
+}
+.linkit-embedded-conversation__composer {
+  display: grid;
+  gap: 0.45rem;
+  padding: 0.75rem;
+  background: var(--background, #fff);
+  border-top: 1px solid var(--border, #e2e8f0);
+}
+.linkit-embedded-conversation__composer-row {
+  display: flex;
+  align-items: flex-end;
+  gap: 0.5rem;
+}
+.linkit-embedded-conversation__composer textarea {
+  box-sizing: border-box;
+  min-width: 0;
+  flex: 1;
+  min-height: 2.5rem;
+  max-height: 9rem;
+  padding: 0.55rem 0.65rem;
+  color: inherit;
+  font: inherit;
+  font-size: 0.9rem;
+  line-height: 1.35;
+  resize: vertical;
+  background: var(--background, #fff);
+  border: 1px solid var(--input, var(--border, #cbd5e1));
+  border-radius: 0.5rem;
+  outline: none;
+}
+.linkit-embedded-conversation__composer textarea:focus-visible {
+  border-color: var(--ring, #2563eb);
+  box-shadow: 0 0 0 3px
+    color-mix(in srgb, var(--ring, #2563eb) 22%, transparent);
+}
+.linkit-embedded-conversation__button,
+.linkit-embedded-conversation__icon-button {
+  display: inline-flex;
+  flex: none;
+  min-height: 2.5rem;
+  align-items: center;
+  justify-content: center;
+  gap: 0.35rem;
+  padding: 0.5rem 0.7rem;
+  color: var(--primary-foreground, #fff);
+  font: inherit;
+  font-size: 0.84rem;
+  font-weight: 600;
+  cursor: pointer;
+  background: var(--primary, #0f172a);
+  border: 1px solid transparent;
+  border-radius: 0.5rem;
+}
+.linkit-embedded-conversation__icon-button {
+  min-width: 2.5rem;
+  padding: 0.45rem;
+  color: var(--foreground, #0f172a);
+  background: var(--background, #fff);
+  border-color: var(--border, #e2e8f0);
+}
+.linkit-embedded-conversation__button--outline {
+  color: var(--foreground, #0f172a);
+  background: var(--background, #fff);
+  border-color: var(--border, #e2e8f0);
+}
+.linkit-embedded-conversation__button:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--primary, #0f172a) 84%, black);
+}
+.linkit-embedded-conversation__icon-button:hover:not(:disabled),
+.linkit-embedded-conversation__button--outline:hover:not(:disabled) {
+  background: var(--muted, #f1f5f9);
+}
+.linkit-embedded-conversation__button:focus-visible,
+.linkit-embedded-conversation__icon-button:focus-visible {
+  outline: 3px solid color-mix(in srgb, var(--ring, #2563eb) 55%, transparent);
+  outline-offset: 2px;
+}
+.linkit-embedded-conversation__button:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+.linkit-embedded-conversation__file {
+  display: none;
+}
+.linkit-embedded-conversation__attachments {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
+.linkit-embedded-conversation__attachments > span {
+  display: inline-flex;
+  max-width: 100%;
+  align-items: center;
+  gap: 0.3rem;
+  padding: 0.25rem 0.4rem;
+  color: var(--foreground, #0f172a);
+  background: var(--muted, #f1f5f9);
+  border-radius: 0.35rem;
+  font-size: 0.75rem;
+  overflow-wrap: anywhere;
+}
+.linkit-embedded-conversation__attachments button {
+  display: grid;
+  width: 1.25rem;
+  height: 1.25rem;
+  place-items: center;
+  padding: 0;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+  background: transparent;
+  border: 0;
+  border-radius: 0.25rem;
+}
+.linkit-embedded-conversation__attachments button:hover {
+  background: var(--accent, #e2e8f0);
+}
+.linkit-embedded-conversation__urgent {
+  display: flex;
+  width: fit-content;
+  align-items: center;
+  gap: 0.4rem;
+  color: var(--foreground, #0f172a);
+  font-size: 0.78rem;
+}
+.linkit-embedded-conversation__urgent input {
+  width: 1rem;
+  height: 1rem;
+}
+.linkit-embedded-conversation__urgent-notice,
+.linkit-embedded-conversation__hint {
+  margin: 0;
+  color: var(--muted-foreground, #64748b);
+  font-size: 0.72rem;
+  line-height: 1.35;
+}
+.linkit-embedded-conversation__urgent-notice {
+  color: var(--destructive, #b91c1c);
+}
+.linkit-embedded-conversation__error {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.4rem;
+  margin: 0;
+  padding: 0.55rem 0.7rem;
+  color: var(--destructive, #b91c1c);
+  background: color-mix(in srgb, var(--destructive, #b91c1c) 8%, transparent);
+  border-bottom: 1px solid
+    color-mix(in srgb, var(--destructive, #b91c1c) 20%, transparent);
+  font-size: 0.8rem;
+  line-height: 1.4;
+}
+.linkit-embedded-conversation__spinner {
+  animation: linkit-embedded-conversation-spin 1s linear infinite;
+}
+@keyframes linkit-embedded-conversation-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+@media (max-width: 34rem) {
+  .linkit-embedded-conversation {
+    min-height: min(34rem, 78vh);
+    border-radius: 0.5rem;
+  }
+  .linkit-embedded-conversation__header {
+    padding-inline: 0.75rem;
+  }
+  .linkit-embedded-conversation__messages {
+    padding: 0.75rem;
+  }
+  .linkit-embedded-conversation__message {
+    max-width: 94%;
+  }
+  .linkit-embedded-conversation__composer {
+    padding: 0.65rem;
+  }
+  .linkit-embedded-conversation__composer-row {
+    gap: 0.35rem;
+  }
+  .linkit-embedded-conversation__button {
+    padding-inline: 0.55rem;
+  }
+  .linkit-embedded-conversation__button svg + * {
+    display: none;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .linkit-embedded-conversation__messages {
+    scroll-behavior: auto;
+  }
+  .linkit-embedded-conversation__spinner {
+    animation: none;
+  }
+}
