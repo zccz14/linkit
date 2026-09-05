@@ -26,7 +26,7 @@ use rust_embed::RustEmbed;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
-use sqlx::{FromRow, Sqlite, SqlitePool, Transaction};
+use sqlx::{FromRow, QueryBuilder, Sqlite, SqlitePool, Transaction};
 use sysinfo::{Disks, Networks, System};
 use tower_http::{
     compression::CompressionLayer,
@@ -47,6 +47,7 @@ const MAX_AVATAR_PIXELS: u64 = 16_777_216;
 const AVATAR_BACKFILL_INTERVAL: std::time::Duration = std::time::Duration::from_secs(5);
 const BARK_NOTIFICATION_BODY_MAX_BYTES: usize = 3_000;
 const MESSAGE_PAGE_SIZE: i64 = 50;
+const PUBLIC_PROFILE_BATCH_SIZE: usize = 100;
 const LIST_CONVERSATIONS_QUERY: &str = "SELECT c.id,c.kind,c.title,c.created_by,c.created_at,CASE WHEN c.kind='group' THEN c.avatar_attachment_id END avatar_attachment_id,CASE WHEN c.kind='direct' THEN COALESCE((SELECT p.username FROM conversation_members cm_peer JOIN profiles p ON p.user_id=cm_peer.user_id WHERE cm_peer.conversation_id=c.id AND cm_peer.user_id<>? LIMIT 1),(SELECT b.name FROM conversation_bots cb JOIN bots b ON b.id=cb.bot_id WHERE cb.conversation_id=c.id LIMIT 1)) END counterpart_name,CASE WHEN c.kind='direct' THEN (SELECT p.avatar_attachment_id FROM conversation_members cm_peer JOIN profiles p ON p.user_id=cm_peer.user_id WHERE cm_peer.conversation_id=c.id AND cm_peer.user_id<>? LIMIT 1) END counterpart_avatar_attachment_id,(SELECT body FROM messages WHERE conversation_id=c.id ORDER BY created_at DESC LIMIT 1) latest_body,(SELECT created_at FROM messages WHERE conversation_id=c.id ORDER BY created_at DESC LIMIT 1) latest_at,(SELECT COUNT(*) FROM messages WHERE conversation_id=c.id AND created_at>cm.last_read_at AND sender_id<>?) unread_count FROM conversations c JOIN conversation_members cm ON cm.conversation_id=c.id WHERE cm.user_id=? ORDER BY COALESCE(latest_at,c.created_at) DESC";
 const CONVERSATION_QUERY: &str = "SELECT c.id,c.kind,c.title,c.created_by,c.created_at,CASE WHEN c.kind='group' THEN c.avatar_attachment_id END avatar_attachment_id,CASE WHEN c.kind='direct' THEN COALESCE((SELECT p.username FROM conversation_members cm_peer JOIN profiles p ON p.user_id=cm_peer.user_id WHERE cm_peer.conversation_id=c.id AND cm_peer.user_id<>? LIMIT 1),(SELECT b.name FROM conversation_bots cb JOIN bots b ON b.id=cb.bot_id WHERE cb.conversation_id=c.id LIMIT 1)) END counterpart_name,CASE WHEN c.kind='direct' THEN (SELECT p.avatar_attachment_id FROM conversation_members cm_peer JOIN profiles p ON p.user_id=cm_peer.user_id WHERE cm_peer.conversation_id=c.id AND cm_peer.user_id<>? LIMIT 1) END counterpart_avatar_attachment_id,(SELECT body FROM messages WHERE conversation_id=c.id ORDER BY created_at DESC LIMIT 1) latest_body,(SELECT created_at FROM messages WHERE conversation_id=c.id ORDER BY created_at DESC LIMIT 1) latest_at,(SELECT COUNT(*) FROM messages WHERE conversation_id=c.id AND created_at>cm.last_read_at AND sender_id<>?) unread_count FROM conversations c JOIN conversation_members cm ON cm.conversation_id=c.id WHERE c.id=? AND cm.user_id=?";
 
@@ -157,6 +158,7 @@ pub fn router(state: AppState) -> Router {
         );
 
     let public_profiles = Router::new()
+        .route("/api/public/profiles/batch", post(public_profiles_batch))
         .route("/api/public/profiles/{user_id}", get(public_profile))
         .route(
             "/api/public/profiles/{user_id}/avatar",
@@ -165,7 +167,11 @@ pub fn router(state: AppState) -> Router {
         .layer(
             CorsLayer::new()
                 .allow_origin(Any)
-                .allow_methods([axum::http::Method::GET, axum::http::Method::HEAD])
+                .allow_methods([
+                    axum::http::Method::GET,
+                    axum::http::Method::HEAD,
+                    axum::http::Method::POST,
+                ])
                 .allow_headers([header::AUTHORIZATION, header::CONTENT_TYPE]),
         );
 
@@ -554,19 +560,33 @@ struct PublicProfile {
     avatar_url: Option<String>,
 }
 
+#[derive(Deserialize)]
+struct PublicProfileBatchInput {
+    user_ids: Vec<String>,
+}
+
+#[derive(FromRow)]
+struct PublicProfileRow {
+    user_id: String,
+    username: String,
+    motto: String,
+    avatar_attachment_id: Option<String>,
+    updated_at: i64,
+}
+
 async fn public_profile(
     State(state): State<AppState>,
     Path(user_id): Path<String>,
 ) -> Result<axum::Json<PublicProfile>, AppError> {
     let public_origin = meta(&state.db, "public_origin").await?;
-    let profile = sqlx::query_as::<_, (String, String, String, Option<String>, i64)>(
+    let profile = sqlx::query_as::<_, PublicProfileRow>(
         "SELECT p.user_id,p.username,p.motto,
                 CASE WHEN EXISTS(
                     SELECT 1 FROM attachments a
                     WHERE a.id=p.avatar_attachment_id
                       AND a.owner_user_id=p.user_id
                       AND a.media_type LIKE 'image/%'
-                ) THEN p.avatar_attachment_id END,
+                ) THEN p.avatar_attachment_id END AS avatar_attachment_id,
                 p.updated_at
          FROM profiles p WHERE p.user_id=?",
     )
@@ -574,14 +594,66 @@ async fn public_profile(
     .fetch_optional(&state.db)
     .await?
     .ok_or_else(|| AppError::not_found("user not found"))?;
-    Ok(axum::Json(PublicProfile {
-        user_id: profile.0,
-        username: profile.1,
-        motto: profile.2,
-        avatar_url: profile
-            .3
-            .map(|_| public_profile_avatar_url(&public_origin, &user_id, profile.4)),
-    }))
+    Ok(axum::Json(public_profile_response(&public_origin, profile)))
+}
+
+async fn public_profiles_batch(
+    State(state): State<AppState>,
+    axum::Json(input): axum::Json<PublicProfileBatchInput>,
+) -> Result<axum::Json<Vec<PublicProfile>>, AppError> {
+    let mut user_ids = input
+        .user_ids
+        .into_iter()
+        .map(|user_id| nonempty(&user_id, "user_id", 128))
+        .collect::<Result<Vec<_>, _>>()?;
+    user_ids.sort();
+    user_ids.dedup();
+    if user_ids.len() > PUBLIC_PROFILE_BATCH_SIZE {
+        return Err(AppError::bad_request(format!(
+            "user_ids must contain at most {PUBLIC_PROFILE_BATCH_SIZE} entries"
+        )));
+    }
+    if user_ids.is_empty() {
+        return Ok(axum::Json(Vec::new()));
+    }
+    let public_origin = meta(&state.db, "public_origin").await?;
+    let mut query = QueryBuilder::<Sqlite>::new(
+        "SELECT p.user_id,p.username,p.motto,
+                CASE WHEN EXISTS(
+                    SELECT 1 FROM attachments a
+                    WHERE a.id=p.avatar_attachment_id
+                      AND a.owner_user_id=p.user_id
+                      AND a.media_type LIKE 'image/%'
+                ) THEN p.avatar_attachment_id END AS avatar_attachment_id,
+                p.updated_at
+         FROM profiles p WHERE p.user_id IN (",
+    );
+    let mut separated = query.separated(",");
+    for user_id in &user_ids {
+        separated.push_bind(user_id);
+    }
+    separated.push_unseparated(")");
+    let profiles = query
+        .build_query_as::<PublicProfileRow>()
+        .fetch_all(&state.db)
+        .await?;
+    Ok(axum::Json(
+        profiles
+            .into_iter()
+            .map(|profile| public_profile_response(&public_origin, profile))
+            .collect(),
+    ))
+}
+
+fn public_profile_response(public_origin: &str, profile: PublicProfileRow) -> PublicProfile {
+    PublicProfile {
+        avatar_url: profile.avatar_attachment_id.map(|_| {
+            public_profile_avatar_url(public_origin, &profile.user_id, profile.updated_at)
+        }),
+        user_id: profile.user_id,
+        username: profile.username,
+        motto: profile.motto,
+    }
 }
 
 fn public_profile_avatar_url(public_origin: &str, user_id: &str, version: i64) -> String {
@@ -2750,8 +2822,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn public_profile_cors_allows_cross_origin_get_and_bearer_preflight_without_credentials()
-    {
+    async fn public_profile_cors_allows_cross_origin_requests_without_credentials() {
         let pool = db::connect_memory().await.unwrap();
         sqlx::query("INSERT INTO users(id,created_at) VALUES('alice',0)")
             .execute(&pool)
@@ -2815,6 +2886,23 @@ mod tests {
             .to_ascii_lowercase();
         assert!(allowed.contains("authorization"));
         assert!(allowed.contains("content-type"));
+
+        let response = app
+            .clone()
+            .oneshot(
+                axum::http::Request::builder()
+                    .method("OPTIONS")
+                    .uri("/api/public/profiles/batch")
+                    .header(header::ORIGIN, "https://1ex.ntnl.io")
+                    .header(header::ACCESS_CONTROL_REQUEST_METHOD, "POST")
+                    .header(header::ACCESS_CONTROL_REQUEST_HEADERS, "content-type")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(response.headers()[header::ACCESS_CONTROL_ALLOW_ORIGIN], "*");
 
         let response = app
             .oneshot(
@@ -3123,6 +3211,59 @@ mod tests {
             .await
             .unwrap_err();
         assert_eq!(error.status, StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn public_profile_batch_deduplicates_ids_and_omits_missing_profiles() {
+        let pool = db::connect_memory().await.unwrap();
+        sqlx::query(
+            "UPDATE app_meta SET value='https://linkit.example.test' WHERE key='public_origin'",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query("INSERT INTO users(id,created_at) VALUES('alice',0),('bob',0)")
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query(
+            "INSERT INTO profiles(user_id,username,motto,updated_at) VALUES('alice','alice','first',0),('bob','bob','second',0)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let axum::Json(mut profiles) = public_profiles_batch(
+            State(test_state(pool)),
+            axum::Json(PublicProfileBatchInput {
+                user_ids: vec!["bob".into(), "missing".into(), "alice".into(), "bob".into()],
+            }),
+        )
+        .await
+        .unwrap();
+        profiles.sort_by(|left, right| left.user_id.cmp(&right.user_id));
+        assert_eq!(profiles.len(), 2);
+        assert_eq!(profiles[0].user_id, "alice");
+        assert_eq!(profiles[0].motto, "first");
+        assert_eq!(profiles[1].user_id, "bob");
+        assert_eq!(profiles[1].motto, "second");
+    }
+
+    #[tokio::test]
+    async fn public_profile_batch_rejects_more_than_the_limit() {
+        let result = public_profiles_batch(
+            State(test_state(db::connect_memory().await.unwrap())),
+            axum::Json(PublicProfileBatchInput {
+                user_ids: (0..=PUBLIC_PROFILE_BATCH_SIZE)
+                    .map(|index| format!("user-{index}"))
+                    .collect(),
+            }),
+        )
+        .await;
+        let Err(error) = result else {
+            panic!("batch larger than the limit must be rejected");
+        };
+        assert_eq!(error.status, StatusCode::BAD_REQUEST);
     }
 
     #[tokio::test]

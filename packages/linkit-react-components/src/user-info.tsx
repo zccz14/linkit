@@ -2,104 +2,33 @@ import { Avatar as AvatarPrimitive } from "@base-ui/react/avatar";
 import { Button as ButtonPrimitive } from "@base-ui/react/button";
 import { Popover as PopoverPrimitive } from "@base-ui/react/popover";
 import { Separator as SeparatorPrimitive } from "@base-ui/react/separator";
-import { useAuthMini } from "auth-mini-react-components";
 import { CircleAlertIcon, LoaderCircleIcon, MessageCircleIcon, UserRoundIcon } from "lucide-react";
-import { useEffect, useId, useState, type HTMLAttributes } from "react";
-import type { LinkitConversation, LinkitProfile } from "./types.js";
-import { useLinkit } from "./linkit-provider.js";
+import { useId, useState } from "react";
+import type { LinkitProfile } from "./types.js";
+import { useLinkitUserInfo } from "./linkit-provider.js";
 
-export type LinkitUserInfoLabels = {
-  unknownUser: string;
-  userInformation: string;
-  profileUnavailable: string;
-  directMessage: string;
-  openingDirectMessage: string;
-  cannotMessageYourself: string;
-  signInToMessage: string;
-  popupBlocked: string;
-};
-
-export type LinkitUserInfoProps = HTMLAttributes<HTMLSpanElement> & {
+export type LinkitUserInfoProps = {
   userId: string;
-  profile?: LinkitProfile | null;
-  lang?: string;
-  labels?: Partial<LinkitUserInfoLabels>;
   compact?: boolean;
-  onDirectConversation?: (conversation: LinkitConversation) => void;
 };
 
-const labelsByLanguage: Record<"en" | "zh", LinkitUserInfoLabels> = {
-  en: {
-    unknownUser: "Unknown user",
-    userInformation: "User information",
-    profileUnavailable: "This user's Linkit profile is unavailable.",
-    directMessage: "Message",
-    openingDirectMessage: "Opening direct message…",
-    cannotMessageYourself: "You can't send a direct message to yourself.",
-    signInToMessage: "Sign in to send a direct message.",
-    popupBlocked: "Your browser blocked the Linkit conversation window.",
-  },
-  zh: {
-    unknownUser: "未知用户",
-    userInformation: "用户资料",
-    profileUnavailable: "该用户的 Linkit 资料不可用。",
-    directMessage: "私信",
-    openingDirectMessage: "正在打开私信…",
-    cannotMessageYourself: "不能向自己发送私信。",
-    signInToMessage: "登录后才能发送私信。",
-    popupBlocked: "浏览器阻止了 Linkit 私聊窗口。",
-  },
-};
-
-export function LinkitUserInfo({ userId, profile: suppliedProfile, lang = "en", labels: labelOverrides, compact = false, className, onDirectConversation, ...props }: LinkitUserInfoProps) {
-  const auth = useAuthMini();
-  const linkit = useLinkit();
+export function LinkitUserInfo({ userId, compact = false }: LinkitUserInfoProps) {
   const titleId = useId();
   const descriptionId = useId();
-  const labels = { ...labelsByLanguage[languageKey(lang)], ...labelOverrides };
+  const { copy, loading, openDirectConversation, profile } = useLinkitUserInfo(userId);
   const [open, setOpen] = useState(false);
-  const [loadedProfile, setLoadedProfile] = useState<LinkitProfile | null | undefined>(undefined);
-  const [loading, setLoading] = useState(false);
   const [directing, setDirecting] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const profile = suppliedProfile ?? loadedProfile ?? null;
   const username = profile?.username?.trim() || "";
-  const displayName = username || labels.unknownUser;
-
-  useEffect(() => {
-    if (!open || suppliedProfile || loadedProfile !== undefined || !userId) return;
-    let active = true;
-    setLoading(true);
-    setError(null);
-    void linkit.getProfile(userId)
-      .then((next) => { if (active) setLoadedProfile(next); })
-      .catch(() => { if (active) setLoadedProfile(null); })
-      .finally(() => { if (active) setLoading(false); });
-    return () => { active = false; };
-  }, [linkit, loadedProfile, open, suppliedProfile, userId]);
+  const displayName = username || copy.unknownUser;
 
   async function openDirectMessage() {
     if (!username) return;
-    if (!auth.isAuthenticated) {
-      setError(labels.signInToMessage);
-      return;
-    }
-    const conversationWindow = window.open("", "_blank");
-    if (!conversationWindow) {
-      setError(labels.popupBlocked);
-      return;
-    }
-    conversationWindow.opener = null;
     setDirecting(true);
     setError(null);
     try {
-      const me = await linkit.getMe();
-      if (me.id === userId) throw new Error(labels.cannotMessageYourself);
-      const conversation = await linkit.openDirectConversation(username);
-      conversationWindow.location.replace(conversationUrl(linkit.linkitBaseUrl, conversation.id));
-      onDirectConversation?.(conversation);
+      await openDirectConversation(userId, username);
     } catch (cause) {
-      conversationWindow.close();
       setError(message(cause));
     } finally {
       setDirecting(false);
@@ -108,9 +37,8 @@ export function LinkitUserInfo({ userId, profile: suppliedProfile, lang = "en", 
 
   return <PopoverPrimitive.Root open={open} onOpenChange={setOpen}>
     <PopoverPrimitive.Trigger
-      {...props}
-      aria-label={`${labels.userInformation}: ${displayName}, ${userId}`}
-      className={join("linkit-user-info", compact && "linkit-user-info--compact", className)}
+      aria-label={`${copy.userInformation}: ${displayName}, ${userId}`}
+      className={compact ? "linkit-user-info linkit-user-info--compact" : "linkit-user-info"}
       openOnHover
       delay={180}
       closeDelay={160}
@@ -125,7 +53,7 @@ export function LinkitUserInfo({ userId, profile: suppliedProfile, lang = "en", 
     <PopoverPrimitive.Portal>
       <PopoverPrimitive.Positioner align="start" side="bottom" sideOffset={8}>
         <PopoverPrimitive.Popup aria-describedby={descriptionId} aria-labelledby={titleId} className="linkit-user-info__popup" initialFocus={false}>
-          <PopoverPrimitive.Title id={titleId}>{labels.userInformation}</PopoverPrimitive.Title>
+          <PopoverPrimitive.Title id={titleId}>{copy.userInformation}</PopoverPrimitive.Title>
           <PopoverPrimitive.Description id={descriptionId} className="linkit-user-info__visually-hidden">{displayName}</PopoverPrimitive.Description>
           <div className="linkit-user-info__detail">
             <UserAvatar profile={profile} label={displayName} large />
@@ -135,13 +63,13 @@ export function LinkitUserInfo({ userId, profile: suppliedProfile, lang = "en", 
             </div>
           </div>
           <SeparatorPrimitive className="linkit-user-info__separator" />
-          {loading ? <div aria-label={labels.userInformation} className="linkit-user-info__skeleton" role="status"><span /><span /></div> : null}
-          {!loading && !username ? <InfoAlert>{labels.profileUnavailable}</InfoAlert> : null}
+          {loading ? <div aria-label={copy.userInformation} className="linkit-user-info__skeleton" role="status"><span /><span /></div> : null}
+          {!loading && !username ? <InfoAlert>{copy.profileUnavailable}</InfoAlert> : null}
           {profile?.motto ? <p className="linkit-user-info__motto">{profile.motto}</p> : null}
           {error ? <InfoAlert destructive><CircleAlertIcon aria-hidden="true" />{error}</InfoAlert> : null}
           <ButtonPrimitive className="linkit-user-info__dm" disabled={!username || directing} type="button" onClick={() => void openDirectMessage()}>
             {directing ? <LoaderCircleIcon className="linkit-user-info__spinner" data-icon="inline-start" /> : <MessageCircleIcon data-icon="inline-start" />}
-            {directing ? labels.openingDirectMessage : labels.directMessage}
+            {directing ? copy.openingDirectMessage : copy.directMessage}
           </ButtonPrimitive>
         </PopoverPrimitive.Popup>
       </PopoverPrimitive.Positioner>
@@ -160,12 +88,4 @@ function InfoAlert({ children, destructive = false }: { children: React.ReactNod
   return <div className="linkit-user-info__alert" data-destructive={destructive || undefined} role={destructive ? "alert" : "status"}>{children}</div>;
 }
 
-function conversationUrl(linkitBaseUrl: string, conversationId: string) {
-  const url = new URL(linkitBaseUrl);
-  url.hash = `/conversations/${encodeURIComponent(conversationId)}`;
-  return url.toString();
-}
-
-function languageKey(value: string): "en" | "zh" { return value.toLowerCase() === "zh" || value.toLowerCase().startsWith("zh-") ? "zh" : "en"; }
 function message(cause: unknown) { return cause instanceof Error ? cause.message : String(cause); }
-function join(...values: Array<string | false | null | undefined>) { return values.filter(Boolean).join(" "); }
