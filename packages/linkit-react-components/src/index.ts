@@ -22,7 +22,7 @@ export type {
   LinkitUserPickerProps,
   LinkitUserPickerSingleProps,
 } from "./user-picker.js";
-export type { LinkitUserInfoLabels, LinkitUserInfoProps } from "./user-info.js";
+export type { LinkitUserInfoProps } from "./user-info.js";
 export type {
   LinkitEmbeddedConversationLabels,
   LinkitEmbeddedConversationProps,

@@ -8,22 +8,22 @@
   audiences={["app.example.com", "linkit.ntnl.io"]}
   autoRedirectToLogin={false}
 >
-  <LinkitProvider linkitBaseUrl="https://linkit.ntnl.io">
-    <LinkitAppHeaderUser lang="zh-CN" />
+  <LinkitProvider lang="zh-CN" linkitBaseUrl="https://linkit.ntnl.io">
+    <LinkitAppHeaderUser />
   </LinkitProvider>
 </AuthMiniProvider>
 ```
 
 ## API
 
-- `LinkitProvider` supplies authenticated Linkit requests, identity/profile methods, uploads, message/conversation reads and writes, member-authorized event subscriptions, and attachment downloads. It owns Auth Mini bearer use and the single refresh retry; consuming applications never receive or persist a token.
+- `LinkitProvider` supplies authenticated Linkit requests, identity/profile methods, uploads, message/conversation reads and writes, member-authorized event subscriptions, and attachment downloads. It owns Auth Mini bearer use, the single refresh retry, and the debounced in-memory batch cache used by `LinkitUserInfo`; consuming applications never receive or persist a token.
 - `useLinkit` reads that provider context.
 - `LinkitAvatar` renders a fixed-size profile avatar from its public, versioned `avatar_url` through a native `<img src>`; the browser reuses that URL through its normal HTTP cache, and a same-size initial fallback appears if the image fails.
 - `LinkitUserDisplay` renders a profile `username`; when the profile is unavailable it renders the localized unknown-user label and the complete source `user_id`.
 - `LinkitConversationDisplay` renders a group or direct conversation identity.
 - `LinkitAppHeaderUser` renders an application-header account trigger and Base UI dialog for username, motto, avatar upload, UID copy, passkey registration, sign-in-method settings, and sign out.
 - `LinkitUserPicker` searches username prefixes and UUID-character `user_id` prefixes, then writes the chosen `user_id` in controlled or uncontrolled form usage.
-- `LinkitUserInfo` is an inline avatar, username, and complete `user_id` display. Its Base UI popover opens by click, keyboard, or desktop hover and presents the available profile motto plus a real Linkit direct-message action. Pass a prefetched `profile` for dense tables; otherwise the component fetches the public profile only after its popover opens.
+- `LinkitUserInfo` accepts only `userId` and optional `compact`. Its inline avatar, username, complete `user_id`, localized fixed copy, cached public profile lookup, and Linkit direct-message action are owned by `LinkitProvider`. Multiple uncached IDs are deduplicated and fetched through one debounced public batch request; a direct-message action always opens the corresponding Linkit conversation in a new window.
 - `LinkitEmbeddedConversation` mounts a complete member-authorized direct or group conversation for a specific `conversationId`: it loads history, supports earlier-message paging, receives new message events with a bounded polling fallback, renders attachments, and includes file upload, urgent-message and accessible message-compose controls. The component never accepts a token, user ID, or membership flag from its consumer.
 
 ## Embedded conversation
@@ -47,7 +47,7 @@ A Linkit username is the sole human-readable user identity. Linkit trims it befo
 
 ## Public data and CORS
 
-`getProfile(userId)` reads the minimal public profile without sending a Bearer token. Public profile data contains `user_id`, `username`, the user-authored `motto`, and optional versioned public `avatar_url`; search data remains limited to `user_id`, `username`, and optional avatar URL. Neither response exposes attachment IDs, email, login methods, sessions, or security data. Authenticated API calls require an outer token whose `aud` includes `linkit.ntnl.io`; Bearer CORS never enables credentials. The `LinkitUserInfo` direct-message action opens a protected Linkit conversation through `openDirectConversation(username)` and navigates a new Linkit window using only the returned conversation ID—no token is added to the URL.
+`getProfile(userId)` reads the minimal public profile without sending a Bearer token. `LinkitUserInfo` uses `POST /api/public/profiles/batch` internally for debounced batches of up to 100 IDs; missing profiles are represented by their absence from the returned list and cached as unavailable. Public profile data contains `user_id`, `username`, the user-authored `motto`, and optional versioned public `avatar_url`; search data remains limited to `user_id`, `username`, and optional avatar URL. Neither response exposes attachment IDs, email, login methods, sessions, or security data. Authenticated API calls require an outer token whose `aud` includes `linkit.ntnl.io`; Bearer CORS never enables credentials. The `LinkitUserInfo` direct-message action opens a protected Linkit conversation through `openDirectConversation(username)` and navigates a new Linkit window using only the returned conversation ID—no token is added to the URL.
 
 ## Styles and dependencies
 
