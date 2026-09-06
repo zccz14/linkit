@@ -20,7 +20,7 @@ type LinkitMyInfoLabels = {
   avatar: string;
   uploadAvatar: string;
   username: string;
-  motto: string;
+  intro: string;
   uid: string;
   copyUid: string;
   copied: string;
@@ -51,7 +51,7 @@ const labelsByLanguage: Record<"en" | "zh", LinkitMyInfoLabels> = {
     avatar: "Avatar",
     uploadAvatar: "Upload image",
     username: "Username",
-    motto: "Motto",
+    intro: "Introduction",
     uid: "UID",
     copyUid: "Copy UID",
     copied: "UID copied.",
@@ -80,7 +80,7 @@ const labelsByLanguage: Record<"en" | "zh", LinkitMyInfoLabels> = {
     avatar: "头像",
     uploadAvatar: "上传图片",
     username: "用户名",
-    motto: "格言",
+    intro: "个人介绍",
     uid: "UID",
     copyUid: "复制 UID",
     copied: "UID 已复制。",
@@ -99,7 +99,7 @@ const labelsByLanguage: Record<"en" | "zh", LinkitMyInfoLabels> = {
   },
 };
 
-type Editor = { username: string; motto: string; avatarAttachmentId: string };
+type Editor = { username: string; intro: string; avatarAttachmentId: string };
 
 export function LinkitMyInfo() {
   const auth = useAuthMini();
@@ -157,9 +157,9 @@ export function LinkitMyInfo() {
   }, [avatarPreview]);
 
   const dirty = !profile
-    ? Boolean(editor.username || editor.motto || editor.avatarAttachmentId)
+    ? Boolean(editor.username || editor.intro || editor.avatarAttachmentId)
     : editor.username !== profile.username
-      || editor.motto !== (profile.motto ?? "")
+      || editor.intro !== (profile.intro ?? "")
       || editor.avatarAttachmentId !== (profile.avatar_attachment_id ?? "");
 
   async function chooseAvatar(event: ChangeEvent<HTMLInputElement>) {
@@ -190,7 +190,7 @@ export function LinkitMyInfo() {
     try {
       const saved = await saveMyProfile({
         username: editor.username.trim(),
-        motto: editor.motto.trim(),
+        intro: editor.intro.trim(),
         avatar_attachment_id: editor.avatarAttachmentId || undefined,
       });
       setEditor(toEditor(saved));
@@ -278,7 +278,7 @@ export function LinkitMyInfo() {
                 </div>
               </div>
               <label className="linkit-my-info__field" htmlFor={`${titleId}-username`}><span>{labels.username}</span><input autoComplete="username" id={`${titleId}-username`} maxLength={80} required value={editor.username} onChange={(event) => setEditor((current) => ({ ...current, username: event.target.value }))} /></label>
-              <label className="linkit-my-info__field" htmlFor={`${titleId}-motto`}><span>{labels.motto}</span><textarea id={`${titleId}-motto`} maxLength={280} rows={3} value={editor.motto} onChange={(event) => setEditor((current) => ({ ...current, motto: event.target.value }))} /></label>
+              <label className="linkit-my-info__field" htmlFor={`${titleId}-intro`}><span>{labels.intro}</span><textarea id={`${titleId}-intro`} maxLength={280} rows={3} value={editor.intro} onChange={(event) => setEditor((current) => ({ ...current, intro: event.target.value }))} /></label>
             </div>
           </section>
           <SeparatorPrimitive className="linkit-my-info__separator" />
@@ -317,8 +317,8 @@ function Alert({ children, variant = "default" }: { children: React.ReactNode; v
   return <div className="linkit-my-info__alert" data-variant={variant} role={variant === "destructive" ? "alert" : "status"}>{children}</div>;
 }
 
-function emptyEditor(): Editor { return { username: "", motto: "", avatarAttachmentId: "" }; }
-function toEditor(profile: LinkitProfile | null): Editor { return { username: profile?.username ?? "", motto: profile?.motto ?? "", avatarAttachmentId: profile?.avatar_attachment_id ?? "" }; }
+function emptyEditor(): Editor { return { username: "", intro: "", avatarAttachmentId: "" }; }
+function toEditor(profile: LinkitProfile | null): Editor { return { username: profile?.username ?? "", intro: profile?.intro ?? "", avatarAttachmentId: profile?.avatar_attachment_id ?? "" }; }
 function languageKey(lang: string): "en" | "zh" { const normalized = lang.toLowerCase(); return normalized === "zh" || normalized.startsWith("zh-") ? "zh" : "en"; }
 function authMiniSecurityUrl(authMiniBaseUrl: string) { const url = new URL("/web/", authMiniBaseUrl); url.hash = "/"; return url.toString(); }
 function message(cause: unknown): string { return cause instanceof Error ? cause.message : String(cause); }

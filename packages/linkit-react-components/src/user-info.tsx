@@ -65,7 +65,7 @@ export function LinkitUserInfo({ userId, compact = false }: LinkitUserInfoProps)
           <SeparatorPrimitive className="linkit-user-info__separator" />
           {loading ? <div aria-label={copy.userInformation} className="linkit-user-info__skeleton" role="status"><span /><span /></div> : null}
           {!loading && !username ? <InfoAlert>{copy.profileUnavailable}</InfoAlert> : null}
-          {profile?.motto ? <p className="linkit-user-info__motto">{profile.motto}</p> : null}
+          {profile?.intro ? <p className="linkit-user-info__intro">{profile.intro}</p> : null}
           {error ? <InfoAlert destructive><CircleAlertIcon aria-hidden="true" />{error}</InfoAlert> : null}
           <ButtonPrimitive className="linkit-user-info__dm" disabled={!username || directing} type="button" onClick={() => void openDirectMessage()}>
             {directing ? <LoaderCircleIcon className="linkit-user-info__spinner" data-icon="inline-start" /> : <MessageCircleIcon data-icon="inline-start" />}

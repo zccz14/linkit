@@ -543,20 +543,20 @@ async fn setup(
 struct Profile {
     user_id: String,
     username: String,
-    motto: String,
+    intro: String,
     avatar_attachment_id: Option<String>,
     updated_at: i64,
 }
 
 async fn profile_for_user(db: &SqlitePool, user_id: &str) -> Result<Option<Profile>, AppError> {
-    Ok(sqlx::query_as("SELECT user_id,username,motto,avatar_attachment_id,updated_at FROM profiles WHERE user_id=?").bind(user_id).fetch_optional(db).await?)
+    Ok(sqlx::query_as("SELECT user_id,username,intro,avatar_attachment_id,updated_at FROM profiles WHERE user_id=?").bind(user_id).fetch_optional(db).await?)
 }
 
 #[derive(Debug, Serialize)]
 struct PublicProfile {
     user_id: String,
     username: String,
-    motto: String,
+    intro: String,
     avatar_url: Option<String>,
 }
 
@@ -569,7 +569,7 @@ struct PublicProfileBatchInput {
 struct PublicProfileRow {
     user_id: String,
     username: String,
-    motto: String,
+    intro: String,
     avatar_attachment_id: Option<String>,
     updated_at: i64,
 }
@@ -580,7 +580,7 @@ async fn public_profile(
 ) -> Result<axum::Json<PublicProfile>, AppError> {
     let public_origin = meta(&state.db, "public_origin").await?;
     let profile = sqlx::query_as::<_, PublicProfileRow>(
-        "SELECT p.user_id,p.username,p.motto,
+        "SELECT p.user_id,p.username,p.intro,
                 CASE WHEN EXISTS(
                     SELECT 1 FROM attachments a
                     WHERE a.id=p.avatar_attachment_id
@@ -618,7 +618,7 @@ async fn public_profiles_batch(
     }
     let public_origin = meta(&state.db, "public_origin").await?;
     let mut query = QueryBuilder::<Sqlite>::new(
-        "SELECT p.user_id,p.username,p.motto,
+        "SELECT p.user_id,p.username,p.intro,
                 CASE WHEN EXISTS(
                     SELECT 1 FROM attachments a
                     WHERE a.id=p.avatar_attachment_id
@@ -652,7 +652,7 @@ fn public_profile_response(public_origin: &str, profile: PublicProfileRow) -> Pu
         }),
         user_id: profile.user_id,
         username: profile.username,
-        motto: profile.motto,
+        intro: profile.intro,
     }
 }
 
@@ -999,9 +999,10 @@ async fn list_bark_notification_users(
 }
 
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 struct ProfileInput {
     username: String,
-    motto: String,
+    intro: String,
     avatar_attachment_id: Option<String>,
 }
 
@@ -1011,7 +1012,7 @@ async fn update_profile(
     axum::Json(input): axum::Json<ProfileInput>,
 ) -> Result<axum::Json<Profile>, AppError> {
     let username = valid_username(&input.username)?;
-    let motto = bounded(&input.motto, "motto", 280)?;
+    let intro = bounded(&input.intro, "intro", 280)?;
     if let Some(attachment_id) = &input.avatar_attachment_id {
         normalize_avatar_attachment(&state, attachment_id, &user.id).await?;
         let allowed: Option<String> = sqlx::query_scalar("SELECT id FROM attachments WHERE id=? AND owner_user_id=? AND media_type LIKE 'image/%'").bind(attachment_id).bind(&user.id).fetch_optional(&state.db).await?;
@@ -1022,8 +1023,8 @@ async fn update_profile(
         }
     }
     let now = chrono::Utc::now().timestamp();
-    let result = sqlx::query("INSERT INTO profiles(user_id,username,motto,avatar_attachment_id,updated_at) VALUES(?,?,?,?,?) ON CONFLICT(user_id) DO UPDATE SET username=excluded.username,motto=excluded.motto,avatar_attachment_id=excluded.avatar_attachment_id,updated_at=excluded.updated_at")
-        .bind(&user.id).bind(username).bind(motto).bind(input.avatar_attachment_id).bind(now).execute(&state.db).await;
+    let result = sqlx::query("INSERT INTO profiles(user_id,username,intro,avatar_attachment_id,updated_at) VALUES(?,?,?,?,?) ON CONFLICT(user_id) DO UPDATE SET username=excluded.username,intro=excluded.intro,avatar_attachment_id=excluded.avatar_attachment_id,updated_at=excluded.updated_at")
+        .bind(&user.id).bind(username).bind(intro).bind(input.avatar_attachment_id).bind(now).execute(&state.db).await;
     if let Err(error) = result {
         if matches!(error, sqlx::Error::Database(ref database) if database.is_unique_violation()) {
             return Err(AppError::conflict("username is already taken"));
@@ -1048,7 +1049,7 @@ async fn list_users(
 ) -> Result<axum::Json<Vec<Profile>>, AppError> {
     let query = query.query.unwrap_or_default().trim().to_owned();
     let pattern = format!("%{}%", escape_like(&query));
-    let rows = sqlx::query_as("SELECT user_id,username,motto,avatar_attachment_id,updated_at FROM profiles WHERE username LIKE ? ESCAPE '\\\' COLLATE NOCASE ORDER BY username COLLATE NOCASE LIMIT 50")
+    let rows = sqlx::query_as("SELECT user_id,username,intro,avatar_attachment_id,updated_at FROM profiles WHERE username LIKE ? ESCAPE '\\\' COLLATE NOCASE ORDER BY username COLLATE NOCASE LIMIT 50")
         .bind(pattern)
         .fetch_all(&state.db)
         .await?;
@@ -1156,7 +1157,7 @@ async fn read_user(
     State(state): State<AppState>,
     Path(username): Path<String>,
 ) -> Result<axum::Json<Profile>, AppError> {
-    sqlx::query_as("SELECT user_id,username,motto,avatar_attachment_id,updated_at FROM profiles WHERE username=? COLLATE NOCASE").bind(username).fetch_optional(&state.db).await?.map(axum::Json).ok_or_else(|| AppError::not_found("user not found"))
+    sqlx::query_as("SELECT user_id,username,intro,avatar_attachment_id,updated_at FROM profiles WHERE username=? COLLATE NOCASE").bind(username).fetch_optional(&state.db).await?.map(axum::Json).ok_or_else(|| AppError::not_found("user not found"))
 }
 
 #[derive(Clone, Serialize, FromRow)]
@@ -2829,7 +2830,7 @@ mod tests {
             .await
             .unwrap();
         sqlx::query(
-            "INSERT INTO profiles(user_id,username,motto,updated_at) VALUES('alice','alice','',0)",
+            "INSERT INTO profiles(user_id,username,intro,updated_at) VALUES('alice','alice','',0)",
         )
         .execute(&pool)
         .await
@@ -2963,7 +2964,7 @@ mod tests {
                 .execute(&pool)
                 .await
                 .unwrap();
-            sqlx::query("INSERT INTO profiles(user_id,username,motto,updated_at) VALUES(?,?,'private motto',0)")
+            sqlx::query("INSERT INTO profiles(user_id,username,intro,updated_at) VALUES(?,?,'private intro',0)")
                 .bind(id)
                 .bind(username)
                 .execute(&pool)
@@ -2986,7 +2987,7 @@ mod tests {
         assert_eq!(matches.len(), 5);
         assert_eq!(matches[0].username, "albert");
         let payload = serde_json::to_value(&matches).unwrap();
-        assert!(payload[0].get("motto").is_none());
+        assert!(payload[0].get("intro").is_none());
         assert!(payload[0].get("avatar_attachment_id").is_none());
         assert_eq!(
             matches
@@ -3033,7 +3034,7 @@ mod tests {
                 .execute(&pool)
                 .await
                 .unwrap();
-            sqlx::query("INSERT INTO profiles(user_id,username,motto,updated_at) VALUES(?,?,'',0)")
+            sqlx::query("INSERT INTO profiles(user_id,username,intro,updated_at) VALUES(?,?,'',0)")
                 .bind(user_id)
                 .bind(username)
                 .execute(&pool)
@@ -3146,7 +3147,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn public_profile_lookup_exposes_username_motto_and_a_safe_avatar_url() {
+    async fn public_profile_lookup_exposes_username_intro_and_a_safe_avatar_url() {
         let pool = db::connect_memory().await.unwrap();
         sqlx::query(
             "UPDATE app_meta SET value='https://linkit.example.test' WHERE key='public_origin'",
@@ -3158,7 +3159,7 @@ mod tests {
             .execute(&pool)
             .await
             .unwrap();
-        sqlx::query("INSERT INTO profiles(user_id,username,motto,avatar_attachment_id,updated_at) VALUES('user /?#','alice','private motto','avatar',0)")
+        sqlx::query("INSERT INTO profiles(user_id,username,intro,avatar_attachment_id,updated_at) VALUES('user /?#','alice','private intro','avatar',0)")
             .execute(&pool)
             .await
             .unwrap();
@@ -3178,7 +3179,7 @@ mod tests {
             payload["avatar_url"],
             "https://linkit.example.test/api/public/profiles/user%20%2F%3F%23/avatar?v=0"
         );
-        assert_eq!(payload["motto"], "private motto");
+        assert_eq!(payload["intro"], "private intro");
         assert!(payload.get("avatar_attachment_id").is_none());
     }
 
@@ -3196,7 +3197,7 @@ mod tests {
             .await
             .unwrap();
         sqlx::query(
-            "INSERT INTO profiles(user_id,username,motto,updated_at) VALUES('alice','alice','',0)",
+            "INSERT INTO profiles(user_id,username,intro,updated_at) VALUES('alice','alice','',0)",
         )
         .execute(&pool)
         .await
@@ -3227,7 +3228,7 @@ mod tests {
             .await
             .unwrap();
         sqlx::query(
-            "INSERT INTO profiles(user_id,username,motto,updated_at) VALUES('alice','alice','first',0),('bob','bob','second',0)",
+            "INSERT INTO profiles(user_id,username,intro,updated_at) VALUES('alice','alice','first',0),('bob','bob','second',0)",
         )
         .execute(&pool)
         .await
@@ -3244,9 +3245,9 @@ mod tests {
         profiles.sort_by(|left, right| left.user_id.cmp(&right.user_id));
         assert_eq!(profiles.len(), 2);
         assert_eq!(profiles[0].user_id, "alice");
-        assert_eq!(profiles[0].motto, "first");
+        assert_eq!(profiles[0].intro, "first");
         assert_eq!(profiles[1].user_id, "bob");
-        assert_eq!(profiles[1].motto, "second");
+        assert_eq!(profiles[1].intro, "second");
     }
 
     #[tokio::test]
@@ -3273,7 +3274,7 @@ mod tests {
             .execute(&pool)
             .await
             .unwrap();
-        sqlx::query("INSERT INTO profiles(user_id,username,motto,avatar_attachment_id,updated_at) VALUES('alice','alice','', 'avatar',0)")
+        sqlx::query("INSERT INTO profiles(user_id,username,intro,avatar_attachment_id,updated_at) VALUES('alice','alice','', 'avatar',0)")
             .execute(&pool)
             .await
             .unwrap();
@@ -3793,7 +3794,7 @@ mod tests {
                 .execute(&pool)
                 .await
                 .unwrap();
-            sqlx::query("INSERT INTO profiles(user_id,username,motto,updated_at) VALUES(?,?,'',0)")
+            sqlx::query("INSERT INTO profiles(user_id,username,intro,updated_at) VALUES(?,?,'',0)")
                 .bind(id)
                 .bind(username)
                 .execute(&pool)
@@ -3857,7 +3858,7 @@ mod tests {
                 .execute(&pool)
                 .await
                 .unwrap();
-            sqlx::query("INSERT INTO profiles(user_id,username,motto,avatar_attachment_id,updated_at) VALUES(?,?,'',?,0)")
+            sqlx::query("INSERT INTO profiles(user_id,username,intro,avatar_attachment_id,updated_at) VALUES(?,?,'',?,0)")
                 .bind(id)
                 .bind(username)
                 .bind((id == "bob").then_some("bob-avatar"))
@@ -3966,7 +3967,7 @@ mod tests {
                 .execute(&pool)
                 .await
                 .unwrap();
-            sqlx::query("INSERT INTO profiles(user_id,username,motto,updated_at) VALUES(?,?,'',0)")
+            sqlx::query("INSERT INTO profiles(user_id,username,intro,updated_at) VALUES(?,?,'',0)")
                 .bind(user_id)
                 .bind(user_id)
                 .execute(&pool)
@@ -4033,7 +4034,7 @@ mod tests {
                 .execute(&pool)
                 .await
                 .unwrap();
-            sqlx::query("INSERT INTO profiles(user_id,username,motto,updated_at) VALUES(?,?,'',0)")
+            sqlx::query("INSERT INTO profiles(user_id,username,intro,updated_at) VALUES(?,?,'',0)")
                 .bind(user_id)
                 .bind(user_id)
                 .bind(user_id)
@@ -4157,7 +4158,7 @@ mod tests {
                 .execute(&pool)
                 .await
                 .unwrap();
-            sqlx::query("INSERT INTO profiles(user_id,username,motto,avatar_attachment_id,updated_at) VALUES(?,?,'',?,0)")
+            sqlx::query("INSERT INTO profiles(user_id,username,intro,avatar_attachment_id,updated_at) VALUES(?,?,'',?,0)")
                 .bind(id)
                 .bind(username)
                 .bind(avatar)
@@ -4206,7 +4207,7 @@ mod tests {
             .execute(&pool)
             .await
             .unwrap();
-        sqlx::query("INSERT INTO profiles(user_id,username,motto,avatar_attachment_id,updated_at) VALUES('alice','alice','', 'alice-avatar',0)")
+        sqlx::query("INSERT INTO profiles(user_id,username,intro,avatar_attachment_id,updated_at) VALUES('alice','alice','', 'alice-avatar',0)")
             .execute(&pool)
             .await
             .unwrap();
@@ -4272,12 +4273,30 @@ mod tests {
                 .unwrap();
         assert!(!columns.iter().any(|column| column == "display_name"));
         assert!(columns.iter().any(|column| column == "username"));
-        assert!(columns.iter().any(|column| column == "motto"));
+        assert!(columns.iter().any(|column| column == "intro"));
+        assert!(!columns.iter().any(|column| column == "motto"));
         assert!(
             columns
                 .iter()
                 .any(|column| column == "avatar_attachment_id")
         );
+    }
+
+    #[test]
+    fn profile_input_requires_intro_and_rejects_the_legacy_field() {
+        let accepted = serde_json::from_value::<ProfileInput>(serde_json::json!({
+            "username": "alice",
+            "intro": "Current introduction",
+            "avatar_attachment_id": null,
+        }));
+        assert!(accepted.is_ok());
+
+        let rejected = serde_json::from_value::<ProfileInput>(serde_json::json!({
+            "username": "alice",
+            "motto": "Legacy introduction",
+            "avatar_attachment_id": null,
+        }));
+        assert!(rejected.is_err());
     }
 
     #[test]
@@ -4300,7 +4319,7 @@ mod tests {
             .await
             .unwrap();
         sqlx::query(
-            "INSERT INTO profiles(user_id,username,motto,updated_at) VALUES('special',?,'',0)",
+            "INSERT INTO profiles(user_id,username,intro,updated_at) VALUES('special',?,'',0)",
         )
         .bind("# ? / % 😀")
         .execute(&pool)
@@ -4318,7 +4337,7 @@ mod tests {
             .unwrap();
         assert_eq!(error.rows_affected(), 1);
         let duplicate = sqlx::query(
-            "INSERT INTO profiles(user_id,username,motto,updated_at) VALUES('duplicate',?,'',0)",
+            "INSERT INTO profiles(user_id,username,intro,updated_at) VALUES('duplicate',?,'',0)",
         )
         .bind("# ? / % 😀")
         .execute(&pool)

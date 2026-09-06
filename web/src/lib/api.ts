@@ -3,7 +3,7 @@ import type { AuthMiniApi } from "auth-mini/sdk/browser";
 export type Profile = {
   user_id: string;
   username: string;
-  motto: string;
+  intro: string;
   avatar_attachment_id?: string;
   updated_at: number;
 };

@@ -77,10 +77,10 @@
 .linkit-user-info__popup > [data-base-ui-popup-title] { font-size: .8rem; font-weight: 600; }
 .linkit-user-info__detail { display: flex; min-width: 0; align-items: center; gap: .75rem; }
 .linkit-user-info__detail-copy { display: grid; min-width: 0; gap: .2rem; }
-.linkit-user-info__detail-username, .linkit-user-info__motto { margin: 0; overflow-wrap: anywhere; }
+.linkit-user-info__detail-username, .linkit-user-info__intro { margin: 0; overflow-wrap: anywhere; }
 .linkit-user-info__detail-username { font-size: 1rem; font-weight: 650; }
 .linkit-user-info__detail-id { overflow-wrap: anywhere; color: var(--muted-foreground, #64748b); font-size: .75rem; }
-.linkit-user-info__motto { color: var(--muted-foreground, #64748b); font-size: .875rem; line-height: 1.5; white-space: pre-wrap; }
+.linkit-user-info__intro { color: var(--muted-foreground, #64748b); font-size: .875rem; line-height: 1.5; white-space: pre-wrap; }
 .linkit-user-info__separator { width: 100%; height: 1px; background: var(--border, #e2e8f0); }
 .linkit-user-info__dm { display: inline-flex; min-height: 2.5rem; align-items: center; justify-content: center; gap: .4rem; padding: .5rem .75rem; color: var(--primary-foreground, #fff); font: inherit; font-size: .875rem; font-weight: 600; cursor: pointer; background: var(--primary, #0f172a); border: 0; border-radius: .5rem; }
 .linkit-user-info__dm:hover:not(:disabled) { background: color-mix(in srgb, var(--primary, #0f172a) 84%, black); }

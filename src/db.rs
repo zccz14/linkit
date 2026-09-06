@@ -172,4 +172,45 @@ mod tests {
             .to_string();
         assert!(error.contains("username trim collision"));
     }
+
+    #[tokio::test]
+    async fn profile_intro_migration_renames_the_column_and_preserves_existing_content() {
+        let mut connection = SqliteConnection::connect_with(
+            &"sqlite::memory:".parse::<SqliteConnectOptions>().unwrap(),
+        )
+        .await
+        .unwrap();
+        sqlx::query(
+            "CREATE TABLE profiles(user_id TEXT PRIMARY KEY, username TEXT NOT NULL, motto TEXT NOT NULL)",
+        )
+        .execute(&mut connection)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO profiles(user_id,username,motto) VALUES('one','alice','Existing introduction')",
+        )
+        .execute(&mut connection)
+        .await
+        .unwrap();
+
+        sqlx::query(include_str!(
+            "../migrations/20260907000000_profile_intro.sql"
+        ))
+        .execute(&mut connection)
+        .await
+        .unwrap();
+
+        let columns =
+            sqlx::query_scalar::<_, String>("SELECT name FROM pragma_table_info('profiles')")
+                .fetch_all(&mut connection)
+                .await
+                .unwrap();
+        assert!(columns.iter().any(|column| column == "intro"));
+        assert!(!columns.iter().any(|column| column == "motto"));
+        let intro: String = sqlx::query_scalar("SELECT intro FROM profiles WHERE user_id='one'")
+            .fetch_one(&mut connection)
+            .await
+            .unwrap();
+        assert_eq!(intro, "Existing introduction");
+    }
 }
