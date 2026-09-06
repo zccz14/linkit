@@ -33,6 +33,7 @@ beforeEach(() => {
     if (path === "/api/public/profiles/uid-1") return publicProfileStatus === 200
       ? json({ user_id: "uid-1", username: "alice", motto: "Hello", avatar_url: `https://cdn.example.test/alice.webp?v=${publicAvatarVersion}` })
       : new Response(JSON.stringify({ error: { message: "Public profile unavailable" } }), { status: publicProfileStatus, headers: { "content-type": "application/json" } });
+    if (path === "/api/conversations") return json([{ id: "conversation-1", kind: "direct", unread_count: 3 }]);
     if (path === "/api/profile" && init?.method === "PUT") { publicAvatarVersion = 2; return json({ user_id: "uid-1", username: "alice-next", motto: "Updated", avatar_attachment_id: "avatar-1" }); }
     return new Response("not found", { status: 404 });
   }));
@@ -88,6 +89,16 @@ describe("LinkitMyInfo", () => {
     auth.isAuthenticated = false;
     render(subject("zh-CN"));
     expect(screen.getByRole("button", { name: "登录" })).toBeInTheDocument();
+  });
+
+  it("shows the unread count and opens the Linkit inbox", async () => {
+    const open = vi.spyOn(window, "open").mockReturnValue(null);
+    render(subject());
+    const inbox = await screen.findByRole("button", { name: "Open Linkit messages (3 unread messages)" });
+    expect(screen.getByText("3")).toBeInTheDocument();
+    fireEvent.click(inbox);
+    expect(open).toHaveBeenCalledWith("https://linkit.example.test/#/", "_blank", "noopener,noreferrer");
+    open.mockRestore();
   });
 
   it("organizes Auth Mini security actions inside its own dialog and signs out", async () => {

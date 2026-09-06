@@ -29,6 +29,7 @@ export type LinkitConversation = {
   counterpart?: LinkitProfile | null;
   counterpart_name?: string | null;
   counterpart_avatar_attachment_id?: string | null;
+  unread_count?: number;
 };
 
 export type LinkitMessage = {
