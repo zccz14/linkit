@@ -15,7 +15,7 @@ import { LinkitProvider, LinkitUserInfo } from "../src/index.js";
 const alice = {
   user_id: "550e8400-e29b-41d4-a716-446655440000",
   username: "alice",
-  motto: "Research first",
+  intro: "Research first",
   avatar_url: "https://images.example.test/alice.webp",
 };
 

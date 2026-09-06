@@ -29,12 +29,12 @@ beforeEach(() => {
   publicProfileStatus = 200;
   vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const path = new URL(String(input)).pathname;
-    if (path === "/api/me") return json({ id: "uid-1", root: false, profile: { user_id: "uid-1", username: "alice", motto: "Hello", avatar_attachment_id: "avatar-1" } });
+    if (path === "/api/me") return json({ id: "uid-1", root: false, profile: { user_id: "uid-1", username: "alice", intro: "Hello", avatar_attachment_id: "avatar-1" } });
     if (path === "/api/public/profiles/uid-1") return publicProfileStatus === 200
-      ? json({ user_id: "uid-1", username: "alice", motto: "Hello", avatar_url: `https://cdn.example.test/alice.webp?v=${publicAvatarVersion}` })
+      ? json({ user_id: "uid-1", username: "alice", intro: "Hello", avatar_url: `https://cdn.example.test/alice.webp?v=${publicAvatarVersion}` })
       : new Response(JSON.stringify({ error: { message: "Public profile unavailable" } }), { status: publicProfileStatus, headers: { "content-type": "application/json" } });
     if (path === "/api/conversations") return json([{ id: "conversation-1", kind: "direct", unread_count: 3 }]);
-    if (path === "/api/profile" && init?.method === "PUT") { publicAvatarVersion = 2; return json({ user_id: "uid-1", username: "alice-next", motto: "Updated", avatar_attachment_id: "avatar-1" }); }
+    if (path === "/api/profile" && init?.method === "PUT") { publicAvatarVersion = 2; return json({ user_id: "uid-1", username: "alice-next", intro: "Updated", avatar_attachment_id: "avatar-1" }); }
     return new Response("not found", { status: 404 });
   }));
 });
@@ -52,7 +52,7 @@ describe("LinkitMyInfo", () => {
     expect(screen.getByDisplayValue("alice")).toBeInTheDocument();
     expect(screen.getByText("uid-1")).toBeInTheDocument();
     fireEvent.change(screen.getByLabelText("Username"), { target: { value: "alice-next" } });
-    fireEvent.change(screen.getByLabelText("Motto"), { target: { value: "Updated" } });
+    fireEvent.change(screen.getByLabelText("Introduction"), { target: { value: "Updated" } });
     fireEvent.click(screen.getByRole("button", { name: "Save profile" }));
     await waitFor(() => expect(screen.getByText("Profile saved.")).toBeInTheDocument());
     expect(screen.getByDisplayValue("alice-next")).toBeInTheDocument();

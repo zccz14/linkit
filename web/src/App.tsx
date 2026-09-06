@@ -2042,7 +2042,7 @@ function ProfileEditor({ me, sdk }: { me: Me; sdk: AuthMiniApi }) {
   const { t } = useI18n();
   const queryClient = useQueryClient();
   const [username, setUsername] = useState(me.profile?.username ?? "");
-  const [motto, setMotto] = useState(me.profile?.motto ?? "");
+  const [intro, setIntro] = useState(me.profile?.intro ?? "");
   const [avatar, setAvatar] = useState(me.profile?.avatar_attachment_id ?? "");
   const fileRef = useRef<HTMLInputElement>(null);
   const save = useMutation({
@@ -2051,7 +2051,7 @@ function ProfileEditor({ me, sdk }: { me: Me; sdk: AuthMiniApi }) {
         method: "PUT",
         body: JSON.stringify({
           username,
-          motto,
+          intro,
           avatar_attachment_id: avatar || undefined,
         }),
       }),
@@ -2133,11 +2133,11 @@ function ProfileEditor({ me, sdk }: { me: Me; sdk: AuthMiniApi }) {
             />
           </Field>
           <Field>
-            <FieldLabel htmlFor="motto">{t("profileEditor.motto")}</FieldLabel>
+            <FieldLabel htmlFor="intro">{t("profileEditor.intro")}</FieldLabel>
             <Textarea
-              id="motto"
-              value={motto}
-              onChange={(event) => setMotto(event.target.value)}
+              id="intro"
+              value={intro}
+              onChange={(event) => setIntro(event.target.value)}
             />
           </Field>
         </FieldGroup>
@@ -2412,7 +2412,7 @@ function ProfileCard({ profile, sdk }: { profile: Profile; sdk: AuthMiniApi }) {
           <div className="min-w-0">
             <p className="truncate font-medium">{profile.username}</p>
             <p className="mt-1 line-clamp-2 text-sm text-muted-foreground">
-              {profile.motto}
+              {profile.intro}
             </p>
           </div>
         </CardContent>

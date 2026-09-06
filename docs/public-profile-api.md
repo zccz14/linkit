@@ -6,7 +6,7 @@
 {
   "user_id": "...",
   "username": "alice",
-  "motto": "...",
+  "intro": "...",
   "avatar_url": "https://linkit.ntnl.io/api/public/profiles/.../avatar?v=..."
 }
 ```
