@@ -54,11 +54,19 @@ type LinkitMessageEvent = {
 };
 
 export type LinkitContextValue = {
+  lang: string;
   linkitBaseUrl: string;
+  myProfile: LinkitProfile | null;
+  myProfileError: string | null;
+  myProfileLoading: boolean;
+  myUserId: string | null;
   request: <T>(path: string, init?: RequestInit) => Promise<T>;
   getMe: () => Promise<LinkitMe>;
   getProfile: (userId: string) => Promise<LinkitProfile>;
   updateProfile: (profile: LinkitProfileUpdate) => Promise<LinkitProfile>;
+  refreshMyProfile: () => Promise<void>;
+  saveMyProfile: (profile: LinkitProfileUpdate) => Promise<LinkitProfile>;
+  signOut: () => Promise<void>;
   upload: (file: File) => Promise<LinkitAttachment>;
   downloadAttachment: (attachmentId: string) => Promise<Blob>;
   searchUsers: (
@@ -97,6 +105,10 @@ export function LinkitProvider({
     throw new Error("LinkitProvider must be rendered inside AuthMiniProvider.");
   }
   const baseUrl = normalizeBaseUrl(linkitBaseUrl);
+  const [myProfile, setMyProfile] = useState<LinkitProfile | null>(null);
+  const [myProfileError, setMyProfileError] = useState<string | null>(null);
+  const [myProfileLoading, setMyProfileLoading] = useState(false);
+  const [myUserId, setMyUserId] = useState<string | null>(null);
   const [profiles, setProfiles] = useState<Map<string, LinkitProfile | null>>(
     () => new Map(),
   );
@@ -163,6 +175,17 @@ export function LinkitProvider({
     },
     [baseUrl, storeProfiles],
   );
+  const clearProfiles = useCallback(() => {
+    if (profileBatchTimer.current) {
+      clearTimeout(profileBatchTimer.current);
+      profileBatchTimer.current = undefined;
+    }
+    pendingProfileIds.current.clear();
+    requestedProfileIds.current.clear();
+    const next = new Map<string, LinkitProfile | null>();
+    profilesRef.current = next;
+    setProfiles(next);
+  }, []);
   const flushProfileBatch = useCallback(async () => {
     profileBatchTimer.current = undefined;
     const userIds = [...pendingProfileIds.current];
@@ -221,6 +244,77 @@ export function LinkitProvider({
     },
     [],
   );
+  const refreshMyProfile = useCallback(async () => {
+    if (!auth.isAuthenticated) {
+      setMyProfile(null);
+      setMyProfileError(null);
+      setMyProfileLoading(false);
+      setMyUserId(null);
+      return;
+    }
+    setMyProfileLoading(true);
+    setMyProfileError(null);
+    try {
+      const me = await request<LinkitMe>("/api/me");
+      setMyUserId(me.id);
+      let publicProfile: LinkitProfile | null = null;
+      try {
+        publicProfile = await getProfile(me.id);
+      } catch (cause) {
+        if (status(cause) !== 404) setMyProfileError(message(cause));
+      }
+      const next = me.profile
+        ? { ...me.profile, avatar_url: publicProfile?.avatar_url ?? null }
+        : null;
+      setMyProfile(next);
+      storeProfiles(new Map([[me.id, next]]));
+    } catch (cause) {
+      setMyProfile(null);
+      setMyProfileError(message(cause));
+    } finally {
+      setMyProfileLoading(false);
+    }
+  }, [auth.isAuthenticated, getProfile, request, storeProfiles]);
+  const saveMyProfile = useCallback(
+    async (profile: LinkitProfileUpdate) => {
+      setMyProfileError(null);
+      const saved = await request<LinkitProfile>("/api/profile", {
+        method: "PUT",
+        body: JSON.stringify(profile),
+      });
+      let publicProfile: LinkitProfile | null = null;
+      try {
+        publicProfile = await getProfile(saved.user_id);
+      } catch (cause) {
+        if (status(cause) !== 404) setMyProfileError(message(cause));
+      }
+      const next = {
+        ...saved,
+        avatar_url: publicProfile?.avatar_url ?? null,
+      };
+      setMyProfile(next);
+      setMyUserId(saved.user_id);
+      storeProfiles(new Map([[saved.user_id, next]]));
+      return next;
+    },
+    [getProfile, request, storeProfiles],
+  );
+  const signOut = useCallback(async () => {
+    await auth.signOut();
+    clearProfiles();
+    setMyProfile(null);
+    setMyProfileError(null);
+    setMyProfileLoading(false);
+    setMyUserId(null);
+  }, [auth, clearProfiles]);
+  useEffect(() => {
+    if (auth.isAuthenticated) return;
+    clearProfiles();
+    setMyProfile(null);
+    setMyProfileError(null);
+    setMyProfileLoading(false);
+    setMyUserId(null);
+  }, [auth.isAuthenticated, clearProfiles]);
   const userInfoCopy = useMemo(() => userInfoLabels(lang), [lang]);
   const openUserDirectConversation = useCallback(
     async (userId: string, username: string) => {
@@ -245,15 +339,19 @@ export function LinkitProvider({
   );
   const value = useMemo<LinkitContextValue>(
     () => ({
+      lang,
       linkitBaseUrl: baseUrl,
+      myProfile,
+      myProfileError,
+      myProfileLoading,
+      myUserId,
       request,
       getMe: () => request<LinkitMe>("/api/me"),
       getProfile,
-      updateProfile: (profile) =>
-        request<LinkitProfile>("/api/profile", {
-          method: "PUT",
-          body: JSON.stringify(profile),
-        }),
+      updateProfile: saveMyProfile,
+      refreshMyProfile,
+      saveMyProfile,
+      signOut,
       searchUsers: (query, signal) =>
         request<LinkitUserSearchResult[]>(
           `/api/users/search?query=${encodeURIComponent(query)}`,
@@ -312,7 +410,20 @@ export function LinkitProvider({
       subscribeToConversationMessages: (conversationId, onMessage) =>
         subscribeToEvents(requestRaw, conversationId, onMessage),
     }),
-    [baseUrl, getProfile, request, requestRaw],
+    [
+      baseUrl,
+      getProfile,
+      lang,
+      myProfile,
+      myProfileError,
+      myProfileLoading,
+      myUserId,
+      refreshMyProfile,
+      request,
+      requestRaw,
+      saveMyProfile,
+      signOut,
+    ],
   );
   const userInfoValue = useMemo<LinkitUserInfoContextValue>(
     () => ({
@@ -418,6 +529,17 @@ async function requestError(
   const body = (await response.json().catch(() => undefined)) as
     { error?: { message?: string } } | undefined;
   return new Error(body?.error?.message ?? `${fallback} (${response.status}).`);
+}
+
+function status(cause: unknown): number | undefined {
+  return typeof cause === "object" && cause !== null && "status" in cause
+    && typeof cause.status === "number"
+    ? cause.status
+    : undefined;
+}
+
+function message(cause: unknown): string {
+  return cause instanceof Error ? cause.message : String(cause);
 }
 
 function subscribeToEvents(

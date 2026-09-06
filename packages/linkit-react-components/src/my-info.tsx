@@ -4,11 +4,11 @@ import { Button as ButtonPrimitive } from "@base-ui/react/button";
 import { Dialog as DialogPrimitive } from "@base-ui/react/dialog";
 import { Separator as SeparatorPrimitive } from "@base-ui/react/separator";
 import { CheckIcon, CopyIcon, KeyRoundIcon, LoaderCircleIcon, LogOutIcon, SettingsIcon, UploadIcon, XIcon } from "lucide-react";
-import { useEffect, useId, useMemo, useRef, useState, type ChangeEvent, type FormEvent } from "react";
+import { useEffect, useId, useRef, useState, type ChangeEvent, type FormEvent } from "react";
 import { useLinkit } from "./linkit-provider.js";
 import type { LinkitProfile } from "./types.js";
 
-export type LinkitAppHeaderUserLabels = {
+type LinkitMyInfoLabels = {
   account: string;
   checking: string;
   signIn: string;
@@ -36,18 +36,7 @@ export type LinkitAppHeaderUserLabels = {
   signingOut: string;
 };
 
-export type LinkitAppHeaderUserProps = {
-  lang?: string;
-  className?: string;
-  loginLabel?: string;
-  labels?: Partial<LinkitAppHeaderUserLabels>;
-  securitySettingsUrl?: string;
-  securitySettingsTarget?: "_blank" | "_self";
-  onProfileSaved?: (profile: LinkitProfile) => void;
-  onSignedOut?: () => void;
-};
-
-const labelsByLanguage: Record<"en" | "zh", LinkitAppHeaderUserLabels> = {
+const labelsByLanguage: Record<"en" | "zh", LinkitMyInfoLabels> = {
   en: {
     account: "Account",
     checking: "Checking session…",
@@ -106,25 +95,23 @@ const labelsByLanguage: Record<"en" | "zh", LinkitAppHeaderUserLabels> = {
 
 type Editor = { username: string; motto: string; avatarAttachmentId: string };
 
-export function LinkitAppHeaderUser({
-  lang = "en",
-  className,
-  loginLabel,
-  labels: labelOverrides,
-  securitySettingsUrl,
-  securitySettingsTarget = "_blank",
-  onProfileSaved,
-  onSignedOut,
-}: LinkitAppHeaderUserProps) {
+export function LinkitMyInfo() {
   const auth = useAuthMini();
-  const linkit = useLinkit();
-  const labels = useMemo(() => ({ ...labelsByLanguage[languageKey(lang)], ...labelOverrides }), [lang, labelOverrides]);
+  const {
+    lang,
+    myProfile: profile,
+    myProfileError,
+    myProfileLoading: loading,
+    myUserId: userId,
+    refreshMyProfile,
+    saveMyProfile,
+    signOut: signOutFromLinkit,
+    upload,
+  } = useLinkit();
+  const labels = labelsByLanguage[languageKey(lang)];
   const fileRef = useRef<HTMLInputElement>(null);
   const [open, setOpen] = useState(false);
-  const [profile, setProfile] = useState<LinkitProfile | null>(null);
-  const [userId, setUserId] = useState<string | null>(null);
   const [editor, setEditor] = useState<Editor>(emptyEditor);
-  const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [signingOut, setSigningOut] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -132,22 +119,23 @@ export function LinkitAppHeaderUser({
   const [avatarPreview, setAvatarPreview] = useState<string | null>(null);
   const titleId = useId();
   const descriptionId = useId();
-  const authenticated = auth.isAuthenticated;
   const uid = profile?.user_id ?? userId;
 
   useEffect(() => {
-    if (!authenticated) {
+    if (!auth.isAuthenticated) {
       setOpen(false);
-      setProfile(null);
-      setUserId(null);
       setEditor(emptyEditor());
       setAvatarPreview(null);
-      return;
     }
-    void refreshProfile();
-  // Refresh only as the authentication boundary changes. The Linkit context functions are stable.
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [authenticated]);
+  }, [auth.isAuthenticated]);
+
+  useEffect(() => {
+    void refreshMyProfile();
+  }, [refreshMyProfile]);
+
+  useEffect(() => {
+    setEditor(toEditor(profile));
+  }, [profile]);
 
   useEffect(() => () => {
     if (avatarPreview?.startsWith("blob:")) URL.revokeObjectURL(avatarPreview);
@@ -159,32 +147,6 @@ export function LinkitAppHeaderUser({
       || editor.motto !== (profile.motto ?? "")
       || editor.avatarAttachmentId !== (profile.avatar_attachment_id ?? "");
 
-  async function refreshProfile() {
-    setLoading(true);
-    setError(null);
-    try {
-      const me = await linkit.getMe();
-      setUserId(me.id);
-      const publicProfile = await optionalPublicProfile(me.id);
-      const next = me.profile ? { ...me.profile, avatar_url: publicProfile?.avatar_url ?? null } : null;
-      setProfile(next);
-      setEditor(toEditor(next));
-    } catch (cause) {
-      setError(message(cause));
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  async function optionalPublicProfile(id: string) {
-    try {
-      return await linkit.getProfile(id);
-    } catch (cause) {
-      if (status(cause) !== 404) setError(message(cause));
-      return null;
-    }
-  }
-
   async function chooseAvatar(event: ChangeEvent<HTMLInputElement>) {
     const file = event.currentTarget.files?.[0];
     event.currentTarget.value = "";
@@ -195,7 +157,7 @@ export function LinkitAppHeaderUser({
     }
     setError(null);
     try {
-      const attachment = await linkit.upload(file);
+      const attachment = await upload(file);
       if (!attachment.media_type.startsWith("image/")) throw new Error(labels.uploadImageError);
       if (avatarPreview?.startsWith("blob:")) URL.revokeObjectURL(avatarPreview);
       setAvatarPreview(URL.createObjectURL(file));
@@ -211,19 +173,14 @@ export function LinkitAppHeaderUser({
     setNotice(null);
     setSaving(true);
     try {
-      const saved = await linkit.updateProfile({
+      const saved = await saveMyProfile({
         username: editor.username.trim(),
         motto: editor.motto.trim(),
         avatar_attachment_id: editor.avatarAttachmentId || undefined,
       });
-      const publicProfile = await optionalPublicProfile(saved.user_id);
-      const next = { ...saved, avatar_url: publicProfile?.avatar_url ?? null };
-      setProfile(next);
-      setUserId(saved.user_id);
-      setEditor(toEditor(next));
+      setEditor(toEditor(saved));
       setAvatarPreview(null);
       setNotice(labels.saved);
-      onProfileSaved?.(next);
     } catch (cause) {
       setError(message(cause));
     } finally {
@@ -246,9 +203,8 @@ export function LinkitAppHeaderUser({
     setSigningOut(true);
     setError(null);
     try {
-      await auth.signOut();
+      await signOutFromLinkit();
       setOpen(false);
-      onSignedOut?.();
     } catch (cause) {
       setError(message(cause));
     } finally {
@@ -256,66 +212,66 @@ export function LinkitAppHeaderUser({
     }
   }
 
-  if (!auth.isReady) return <span aria-live="polite" className={className}>{labels.checking}</span>;
-  if (!authenticated) {
-    return <ButtonPrimitive className={className} type="button" onClick={auth.signIn}>{loginLabel ?? labels.signIn}</ButtonPrimitive>;
+  if (!auth.isReady) return <span aria-live="polite" className="linkit-my-info">{labels.checking}</span>;
+  if (!auth.isAuthenticated) {
+    return <ButtonPrimitive className="linkit-my-info" type="button" onClick={auth.signIn}>{labels.signIn}</ButtonPrimitive>;
   }
 
   const username = profile?.username?.trim() || labels.account;
   const avatarProfile = avatarPreview ? { username, avatar_url: avatarPreview } : profile;
-  const securityUrl = securitySettingsUrl ?? authMiniSecurityUrl(auth.authMiniBaseUrl);
+  const securityUrl = authMiniSecurityUrl(auth.authMiniBaseUrl);
   return <DialogPrimitive.Root open={open} onOpenChange={setOpen}>
-    <DialogPrimitive.Trigger render={<ButtonPrimitive aria-haspopup="dialog" className={className} type="button" />}>
+    <DialogPrimitive.Trigger render={<ButtonPrimitive aria-haspopup="dialog" className="linkit-my-info" type="button" />}>
       <HeaderAvatar profile={avatarProfile} label={username} />
-      <span className="linkit-app-header-user__name">{username}</span>
+      <span className="linkit-my-info__name">{username}</span>
     </DialogPrimitive.Trigger>
     <DialogPrimitive.Portal>
-      <DialogPrimitive.Backdrop className="linkit-app-header-user__backdrop" />
-      <DialogPrimitive.Popup aria-describedby={descriptionId} aria-labelledby={titleId} className="linkit-app-header-user__dialog">
-        <header className="linkit-app-header-user__dialog-header">
+      <DialogPrimitive.Backdrop className="linkit-my-info__backdrop" />
+      <DialogPrimitive.Popup aria-describedby={descriptionId} aria-labelledby={titleId} className="linkit-my-info__dialog">
+        <header className="linkit-my-info__dialog-header">
           <div>
             <DialogPrimitive.Title id={titleId}>{labels.account}</DialogPrimitive.Title>
             <DialogPrimitive.Description id={descriptionId}>{labels.profileDescription}</DialogPrimitive.Description>
           </div>
-          <DialogPrimitive.Close render={<ButtonPrimitive aria-label={labels.close} className="linkit-app-header-user__icon-button" type="button" />}>
+          <DialogPrimitive.Close render={<ButtonPrimitive aria-label={labels.close} className="linkit-my-info__icon-button" type="button" />}>
             <XIcon />
           </DialogPrimitive.Close>
         </header>
         {loading ? <LoadingSkeleton labels={labels} /> : null}
         {!loading && !profile ? <Alert>{labels.profileUnavailable}</Alert> : null}
-        {error || auth.error ? <Alert variant="destructive">{error ?? auth.error?.message}</Alert> : null}
+        {error || myProfileError || auth.error ? <Alert variant="destructive">{error ?? myProfileError ?? auth.error?.message}</Alert> : null}
         {notice ? <Alert variant="success"><CheckIcon />{notice}</Alert> : null}
-        <form aria-busy={saving} className="linkit-app-header-user__form" onSubmit={(event) => void saveProfile(event)}>
-          <section aria-labelledby={`${titleId}-profile`} className="linkit-app-header-user__section">
+        <form aria-busy={saving} className="linkit-my-info__form" onSubmit={(event) => void saveProfile(event)}>
+          <section aria-labelledby={`${titleId}-profile`} className="linkit-my-info__section">
             <h3 id={`${titleId}-profile`}>{labels.profile}</h3>
-            <div className="linkit-app-header-user__field-group">
-              <div className="linkit-app-header-user__field">
-                <span className="linkit-app-header-user__field-label">{labels.avatar}</span>
-                <div className="linkit-app-header-user__avatar-row">
+            <div className="linkit-my-info__field-group">
+              <div className="linkit-my-info__field">
+                <span className="linkit-my-info__field-label">{labels.avatar}</span>
+                <div className="linkit-my-info__avatar-row">
                   <HeaderAvatar profile={avatarProfile} label={username} size="lg" />
-                  <input accept="image/*" className="linkit-app-header-user__visually-hidden" ref={fileRef} type="file" onChange={(event) => void chooseAvatar(event)} />
-                  <ButtonPrimitive className="linkit-app-header-user__button linkit-app-header-user__button--outline" type="button" onClick={() => fileRef.current?.click()}>
+                  <input accept="image/*" className="linkit-my-info__visually-hidden" ref={fileRef} type="file" onChange={(event) => void chooseAvatar(event)} />
+                  <ButtonPrimitive className="linkit-my-info__button linkit-my-info__button--outline" type="button" onClick={() => fileRef.current?.click()}>
                     <UploadIcon data-icon="inline-start" />{labels.uploadAvatar}
                   </ButtonPrimitive>
                 </div>
               </div>
-              <label className="linkit-app-header-user__field" htmlFor={`${titleId}-username`}><span>{labels.username}</span><input autoComplete="username" id={`${titleId}-username`} maxLength={80} required value={editor.username} onChange={(event) => setEditor((current) => ({ ...current, username: event.target.value }))} /></label>
-              <label className="linkit-app-header-user__field" htmlFor={`${titleId}-motto`}><span>{labels.motto}</span><textarea id={`${titleId}-motto`} maxLength={280} rows={3} value={editor.motto} onChange={(event) => setEditor((current) => ({ ...current, motto: event.target.value }))} /></label>
+              <label className="linkit-my-info__field" htmlFor={`${titleId}-username`}><span>{labels.username}</span><input autoComplete="username" id={`${titleId}-username`} maxLength={80} required value={editor.username} onChange={(event) => setEditor((current) => ({ ...current, username: event.target.value }))} /></label>
+              <label className="linkit-my-info__field" htmlFor={`${titleId}-motto`}><span>{labels.motto}</span><textarea id={`${titleId}-motto`} maxLength={280} rows={3} value={editor.motto} onChange={(event) => setEditor((current) => ({ ...current, motto: event.target.value }))} /></label>
             </div>
           </section>
-          <SeparatorPrimitive className="linkit-app-header-user__separator" />
-          <section aria-labelledby={`${titleId}-security`} className="linkit-app-header-user__section">
+          <SeparatorPrimitive className="linkit-my-info__separator" />
+          <section aria-labelledby={`${titleId}-security`} className="linkit-my-info__section">
             <h3 id={`${titleId}-security`}>{labels.security}</h3>
             <p>{labels.securityDescription}</p>
-            <div className="linkit-app-header-user__uid"><span>{labels.uid}</span><code>{uid ?? "—"}</code><ButtonPrimitive aria-label={labels.copyUid} className="linkit-app-header-user__icon-button" disabled={!uid} title={labels.copyUid} type="button" onClick={() => void copyUid()}><CopyIcon /></ButtonPrimitive></div>
-            <div className="linkit-app-header-user__security-actions">
-              <ButtonPrimitive className="linkit-app-header-user__button linkit-app-header-user__button--outline" type="button" onClick={() => auth.openPasskeyRegistrationPage()}><KeyRoundIcon data-icon="inline-start" />{labels.addPasskey}</ButtonPrimitive>
-              <a className="linkit-app-header-user__button linkit-app-header-user__button--outline" href={securityUrl} rel={securitySettingsTarget === "_blank" ? "noreferrer" : undefined} target={securitySettingsTarget}><SettingsIcon data-icon="inline-start" />{labels.manageSignInMethods}</a>
+            <div className="linkit-my-info__uid"><span>{labels.uid}</span><code>{uid ?? "—"}</code><ButtonPrimitive aria-label={labels.copyUid} className="linkit-my-info__icon-button" disabled={!uid} title={labels.copyUid} type="button" onClick={() => void copyUid()}><CopyIcon /></ButtonPrimitive></div>
+            <div className="linkit-my-info__security-actions">
+              <ButtonPrimitive className="linkit-my-info__button linkit-my-info__button--outline" type="button" onClick={() => auth.openPasskeyRegistrationPage()}><KeyRoundIcon data-icon="inline-start" />{labels.addPasskey}</ButtonPrimitive>
+              <a className="linkit-my-info__button linkit-my-info__button--outline" href={securityUrl} rel="noreferrer" target="_blank"><SettingsIcon data-icon="inline-start" />{labels.manageSignInMethods}</a>
             </div>
           </section>
-          <footer className="linkit-app-header-user__footer">
-            <ButtonPrimitive className="linkit-app-header-user__button" disabled={saving || !dirty} type="submit">{saving ? <><LoaderCircleIcon className="linkit-app-header-user__spinner" data-icon="inline-start" />{labels.saving}</> : labels.save}</ButtonPrimitive>
-            <ButtonPrimitive className="linkit-app-header-user__button linkit-app-header-user__button--destructive" disabled={signingOut} type="button" onClick={() => void signOut()}>{signingOut ? <><LoaderCircleIcon className="linkit-app-header-user__spinner" data-icon="inline-start" />{labels.signingOut}</> : <><LogOutIcon data-icon="inline-start" />{labels.signOut}</>}</ButtonPrimitive>
+          <footer className="linkit-my-info__footer">
+            <ButtonPrimitive className="linkit-my-info__button" disabled={saving || !dirty} type="submit">{saving ? <><LoaderCircleIcon className="linkit-my-info__spinner" data-icon="inline-start" />{labels.saving}</> : labels.save}</ButtonPrimitive>
+            <ButtonPrimitive className="linkit-my-info__button linkit-my-info__button--destructive" disabled={signingOut} type="button" onClick={() => void signOut()}>{signingOut ? <><LoaderCircleIcon className="linkit-my-info__spinner" data-icon="inline-start" />{labels.signingOut}</> : <><LogOutIcon data-icon="inline-start" />{labels.signOut}</>}</ButtonPrimitive>
           </footer>
         </form>
       </DialogPrimitive.Popup>
@@ -324,23 +280,22 @@ export function LinkitAppHeaderUser({
 }
 
 function HeaderAvatar({ profile, label, size = "sm" }: { profile: Pick<LinkitProfile, "username" | "avatar_url"> | null | undefined; label: string; size?: "sm" | "lg" }) {
-  return <AvatarPrimitive.Root className="linkit-app-header-user__avatar" data-size={size}>
-    {profile?.avatar_url ? <AvatarPrimitive.Image alt="" className="linkit-app-header-user__avatar-image" src={profile.avatar_url} /> : null}
-    <AvatarPrimitive.Fallback className="linkit-app-header-user__avatar-fallback">{Array.from(label)[0]?.toLocaleUpperCase() ?? "?"}</AvatarPrimitive.Fallback>
+  return <AvatarPrimitive.Root className="linkit-my-info__avatar" data-size={size}>
+    {profile?.avatar_url ? <AvatarPrimitive.Image alt="" className="linkit-my-info__avatar-image" src={profile.avatar_url} /> : null}
+    <AvatarPrimitive.Fallback className="linkit-my-info__avatar-fallback">{Array.from(label)[0]?.toLocaleUpperCase() ?? "?"}</AvatarPrimitive.Fallback>
   </AvatarPrimitive.Root>;
 }
 
-function LoadingSkeleton({ labels }: { labels: LinkitAppHeaderUserLabels }) {
-  return <div aria-label={labels.checking} aria-live="polite" className="linkit-app-header-user__skeletons" role="status"><span /><span /><span /></div>;
+function LoadingSkeleton({ labels }: { labels: LinkitMyInfoLabels }) {
+  return <div aria-label={labels.checking} aria-live="polite" className="linkit-my-info__skeletons" role="status"><span /><span /><span /></div>;
 }
 
 function Alert({ children, variant = "default" }: { children: React.ReactNode; variant?: "default" | "destructive" | "success" }) {
-  return <div className="linkit-app-header-user__alert" data-variant={variant} role={variant === "destructive" ? "alert" : "status"}>{children}</div>;
+  return <div className="linkit-my-info__alert" data-variant={variant} role={variant === "destructive" ? "alert" : "status"}>{children}</div>;
 }
 
 function emptyEditor(): Editor { return { username: "", motto: "", avatarAttachmentId: "" }; }
 function toEditor(profile: LinkitProfile | null): Editor { return { username: profile?.username ?? "", motto: profile?.motto ?? "", avatarAttachmentId: profile?.avatar_attachment_id ?? "" }; }
 function languageKey(lang: string): "en" | "zh" { const normalized = lang.toLowerCase(); return normalized === "zh" || normalized.startsWith("zh-") ? "zh" : "en"; }
 function authMiniSecurityUrl(authMiniBaseUrl: string) { const url = new URL("/web/", authMiniBaseUrl); url.hash = "/"; return url.toString(); }
-function status(cause: unknown): number | undefined { return typeof cause === "object" && cause !== null && "status" in cause && typeof cause.status === "number" ? cause.status : undefined; }
 function message(cause: unknown): string { return cause instanceof Error ? cause.message : String(cause); }

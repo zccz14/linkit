@@ -8,14 +8,10 @@ export {
   LinkitConversationDisplay,
   LinkitUserDisplay,
 } from "./displays.js";
-export { LinkitAppHeaderUser } from "./app-header-user.js";
+export { LinkitMyInfo } from "./my-info.js";
 export { LinkitUserPicker } from "./user-picker.js";
 export { LinkitUserInfo } from "./user-info.js";
 export { LinkitEmbeddedConversation } from "./embedded-conversation.js";
-export type {
-  LinkitAppHeaderUserLabels,
-  LinkitAppHeaderUserProps,
-} from "./app-header-user.js";
 export type {
   LinkitUserPickerLabels,
   LinkitUserPickerMultipleProps,
