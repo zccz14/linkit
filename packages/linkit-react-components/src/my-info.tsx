@@ -3,7 +3,7 @@ import { Avatar as AvatarPrimitive } from "@base-ui/react/avatar";
 import { Button as ButtonPrimitive } from "@base-ui/react/button";
 import { Dialog as DialogPrimitive } from "@base-ui/react/dialog";
 import { Separator as SeparatorPrimitive } from "@base-ui/react/separator";
-import { CheckIcon, CopyIcon, KeyRoundIcon, LoaderCircleIcon, LogOutIcon, SettingsIcon, UploadIcon, XIcon } from "lucide-react";
+import { CheckIcon, CopyIcon, KeyRoundIcon, LoaderCircleIcon, LogOutIcon, MessageCircleIcon, SettingsIcon, UploadIcon, XIcon } from "lucide-react";
 import { useEffect, useId, useRef, useState, type ChangeEvent, type FormEvent } from "react";
 import { useLinkit } from "./linkit-provider.js";
 import type { LinkitProfile } from "./types.js";
@@ -12,6 +12,8 @@ type LinkitMyInfoLabels = {
   account: string;
   checking: string;
   signIn: string;
+  inbox: string;
+  unreadMessages: string;
   close: string;
   profile: string;
   profileDescription: string;
@@ -41,6 +43,8 @@ const labelsByLanguage: Record<"en" | "zh", LinkitMyInfoLabels> = {
     account: "Account",
     checking: "Checking session…",
     signIn: "Sign in",
+    inbox: "Open Linkit messages",
+    unreadMessages: "unread messages",
     close: "Close",
     profile: "Profile",
     profileDescription: "This profile is shown to people who find you through Linkit.",
@@ -68,6 +72,8 @@ const labelsByLanguage: Record<"en" | "zh", LinkitMyInfoLabels> = {
     account: "账户",
     checking: "正在检查登录状态…",
     signIn: "登录",
+    inbox: "打开 Linkit 消息",
+    unreadMessages: "条未读消息",
     close: "关闭",
     profile: "个人资料",
     profileDescription: "这份资料会展示给通过 Linkit 找到你的人。",
@@ -103,9 +109,12 @@ export function LinkitMyInfo() {
     myProfileError,
     myProfileLoading: loading,
     myUserId: userId,
+    unreadMessageCount,
     refreshMyProfile,
+    refreshUnreadMessageCount,
     saveMyProfile,
     signOut: signOutFromLinkit,
+    openLinkitInbox,
     upload,
   } = useLinkit();
   const labels = labelsByLanguage[languageKey(lang)];
@@ -132,6 +141,12 @@ export function LinkitMyInfo() {
   useEffect(() => {
     void refreshMyProfile();
   }, [refreshMyProfile]);
+
+  useEffect(() => {
+    void refreshUnreadMessageCount();
+    const timer = window.setInterval(() => void refreshUnreadMessageCount(), 4_000);
+    return () => window.clearInterval(timer);
+  }, [refreshUnreadMessageCount]);
 
   useEffect(() => {
     setEditor(toEditor(profile));
@@ -220,12 +235,19 @@ export function LinkitMyInfo() {
   const username = profile?.username?.trim() || labels.account;
   const avatarProfile = avatarPreview ? { username, avatar_url: avatarPreview } : profile;
   const securityUrl = authMiniSecurityUrl(auth.authMiniBaseUrl);
-  return <DialogPrimitive.Root open={open} onOpenChange={setOpen}>
-    <DialogPrimitive.Trigger render={<ButtonPrimitive aria-haspopup="dialog" className="linkit-my-info" type="button" />}>
-      <HeaderAvatar profile={avatarProfile} label={username} />
-      <span className="linkit-my-info__name">{username}</span>
-    </DialogPrimitive.Trigger>
-    <DialogPrimitive.Portal>
+  const unreadLabel = unreadMessageCount > 99 ? "99+" : String(unreadMessageCount);
+  const inboxLabel = unreadMessageCount > 0 ? `${labels.inbox} (${unreadLabel} ${labels.unreadMessages})` : labels.inbox;
+  return <div className="linkit-my-info">
+    <ButtonPrimitive aria-label={inboxLabel} className="linkit-my-info__inbox" type="button" onClick={openLinkitInbox}>
+      <MessageCircleIcon aria-hidden="true" />
+      {unreadMessageCount > 0 ? <span aria-hidden="true" className="linkit-my-info__unread-badge">{unreadLabel}</span> : null}
+    </ButtonPrimitive>
+    <DialogPrimitive.Root open={open} onOpenChange={setOpen}>
+      <DialogPrimitive.Trigger render={<ButtonPrimitive aria-haspopup="dialog" className="linkit-my-info__account" type="button" />}>
+        <HeaderAvatar profile={avatarProfile} label={username} />
+        <span className="linkit-my-info__name">{username}</span>
+      </DialogPrimitive.Trigger>
+      <DialogPrimitive.Portal>
       <DialogPrimitive.Backdrop className="linkit-my-info__backdrop" />
       <DialogPrimitive.Popup aria-describedby={descriptionId} aria-labelledby={titleId} className="linkit-my-info__dialog">
         <header className="linkit-my-info__dialog-header">
@@ -275,8 +297,9 @@ export function LinkitMyInfo() {
           </footer>
         </form>
       </DialogPrimitive.Popup>
-    </DialogPrimitive.Portal>
-  </DialogPrimitive.Root>;
+      </DialogPrimitive.Portal>
+    </DialogPrimitive.Root>
+  </div>;
 }
 
 function HeaderAvatar({ profile, label, size = "sm" }: { profile: Pick<LinkitProfile, "username" | "avatar_url"> | null | undefined; label: string; size?: "sm" | "lg" }) {

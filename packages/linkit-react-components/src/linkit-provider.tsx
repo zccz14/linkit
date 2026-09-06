@@ -60,13 +60,16 @@ export type LinkitContextValue = {
   myProfileError: string | null;
   myProfileLoading: boolean;
   myUserId: string | null;
+  unreadMessageCount: number;
   request: <T>(path: string, init?: RequestInit) => Promise<T>;
   getMe: () => Promise<LinkitMe>;
   getProfile: (userId: string) => Promise<LinkitProfile>;
   updateProfile: (profile: LinkitProfileUpdate) => Promise<LinkitProfile>;
   refreshMyProfile: () => Promise<void>;
+  refreshUnreadMessageCount: () => Promise<void>;
   saveMyProfile: (profile: LinkitProfileUpdate) => Promise<LinkitProfile>;
   signOut: () => Promise<void>;
+  openLinkitInbox: () => void;
   upload: (file: File) => Promise<LinkitAttachment>;
   downloadAttachment: (attachmentId: string) => Promise<Blob>;
   searchUsers: (
@@ -109,6 +112,7 @@ export function LinkitProvider({
   const [myProfileError, setMyProfileError] = useState<string | null>(null);
   const [myProfileLoading, setMyProfileLoading] = useState(false);
   const [myUserId, setMyUserId] = useState<string | null>(null);
+  const [unreadMessageCount, setUnreadMessageCount] = useState(0);
   const [profiles, setProfiles] = useState<Map<string, LinkitProfile | null>>(
     () => new Map(),
   );
@@ -275,6 +279,21 @@ export function LinkitProvider({
       setMyProfileLoading(false);
     }
   }, [auth.isAuthenticated, getProfile, request, storeProfiles]);
+  const refreshUnreadMessageCount = useCallback(async () => {
+    if (!auth.isAuthenticated) {
+      setUnreadMessageCount(0);
+      return;
+    }
+    try {
+      const conversations = await request<LinkitConversation[]>("/api/conversations");
+      setUnreadMessageCount(conversations.reduce(
+        (total, conversation) => total + Math.max(0, conversation.unread_count ?? 0),
+        0,
+      ));
+    } catch {
+      // RECOVERY: Retain the most recently confirmed count; the component's bounded refresh retries.
+    }
+  }, [auth.isAuthenticated, request]);
   const saveMyProfile = useCallback(
     async (profile: LinkitProfileUpdate) => {
       setMyProfileError(null);
@@ -306,6 +325,7 @@ export function LinkitProvider({
     setMyProfileError(null);
     setMyProfileLoading(false);
     setMyUserId(null);
+    setUnreadMessageCount(0);
   }, [auth, clearProfiles]);
   useEffect(() => {
     if (auth.isAuthenticated) return;
@@ -314,7 +334,11 @@ export function LinkitProvider({
     setMyProfileError(null);
     setMyProfileLoading(false);
     setMyUserId(null);
+    setUnreadMessageCount(0);
   }, [auth.isAuthenticated, clearProfiles]);
+  const openLinkitInbox = useCallback(() => {
+    window.open(linkitInboxUrl(baseUrl), "_blank", "noopener,noreferrer");
+  }, [baseUrl]);
   const userInfoCopy = useMemo(() => userInfoLabels(lang), [lang]);
   const openUserDirectConversation = useCallback(
     async (userId: string, username: string) => {
@@ -345,13 +369,16 @@ export function LinkitProvider({
       myProfileError,
       myProfileLoading,
       myUserId,
+      unreadMessageCount,
       request,
       getMe: () => request<LinkitMe>("/api/me"),
       getProfile,
       updateProfile: saveMyProfile,
       refreshMyProfile,
+      refreshUnreadMessageCount,
       saveMyProfile,
       signOut,
+      openLinkitInbox,
       searchUsers: (query, signal) =>
         request<LinkitUserSearchResult[]>(
           `/api/users/search?query=${encodeURIComponent(query)}`,
@@ -418,11 +445,14 @@ export function LinkitProvider({
       myProfileError,
       myProfileLoading,
       myUserId,
+      openLinkitInbox,
       refreshMyProfile,
+      refreshUnreadMessageCount,
       request,
       requestRaw,
       saveMyProfile,
       signOut,
+      unreadMessageCount,
     ],
   );
   const userInfoValue = useMemo<LinkitUserInfoContextValue>(
@@ -519,6 +549,12 @@ function userInfoLabels(value: string): LinkitUserInfoCopy {
 function conversationUrl(linkitBaseUrl: string, conversationId: string) {
   const url = new URL(linkitBaseUrl);
   url.hash = `/conversations/${encodeURIComponent(conversationId)}`;
+  return url.toString();
+}
+
+function linkitInboxUrl(linkitBaseUrl: string) {
+  const url = new URL(linkitBaseUrl);
+  url.hash = "/";
   return url.toString();
 }
 
