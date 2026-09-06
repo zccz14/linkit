@@ -17,7 +17,7 @@ const auth = {
 
 vi.mock("auth-mini-react-components", () => ({ useAuthMini: () => auth }));
 
-import { LinkitAppHeaderUser, LinkitProvider } from "../src/index.js";
+import { LinkitMyInfo, LinkitProvider } from "../src/index.js";
 
 beforeEach(() => {
   auth.isReady = true;
@@ -40,9 +40,9 @@ beforeEach(() => {
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
 
 function json(body: unknown) { return new Response(JSON.stringify(body), { headers: { "content-type": "application/json" } }); }
-function subject() { return <LinkitProvider linkitBaseUrl="https://linkit.example.test"><LinkitAppHeaderUser lang="en" /></LinkitProvider>; }
+function subject(lang = "en") { return <LinkitProvider lang={lang} linkitBaseUrl="https://linkit.example.test"><LinkitMyInfo /></LinkitProvider>; }
 
-describe("LinkitAppHeaderUser", () => {
+describe("LinkitMyInfo", () => {
   it("shows the signed-in avatar/name and saves the profile in its dialog", async () => {
     render(subject());
     await screen.findByRole("button", { name: /alice/ });
@@ -54,6 +54,7 @@ describe("LinkitAppHeaderUser", () => {
     fireEvent.change(screen.getByLabelText("Motto"), { target: { value: "Updated" } });
     fireEvent.click(screen.getByRole("button", { name: "Save profile" }));
     await waitFor(() => expect(screen.getByText("Profile saved.")).toBeInTheDocument());
+    expect(screen.getByDisplayValue("alice-next")).toBeInTheDocument();
     expect(Array.from((fetch as ReturnType<typeof vi.fn>).mock.calls).filter(([input]) => String(input).includes("/api/public/profiles/uid-1")).length).toBe(2);
     expect(fetch).toHaveBeenCalledWith(expect.stringContaining("/api/profile"), expect.objectContaining({ method: "PUT" }));
   });
@@ -73,7 +74,7 @@ describe("LinkitAppHeaderUser", () => {
     fireEvent.click(trigger);
     await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent("Public profile unavailable"));
     expect(trigger.querySelector("img")).toBeNull();
-    expect(trigger.querySelector(".linkit-app-header-user__avatar-fallback")).toHaveTextContent("A");
+    expect(trigger.querySelector(".linkit-my-info__avatar-fallback")).toHaveTextContent("A");
   });
 
   it("uses the existing Auth Mini login flow while signed out", () => {
@@ -81,6 +82,12 @@ describe("LinkitAppHeaderUser", () => {
     render(subject());
     fireEvent.click(screen.getByRole("button", { name: "Sign in" }));
     expect(auth.signIn).toHaveBeenCalledOnce();
+  });
+
+  it("reads its language from LinkitProvider", () => {
+    auth.isAuthenticated = false;
+    render(subject("zh-CN"));
+    expect(screen.getByRole("button", { name: "登录" })).toBeInTheDocument();
   });
 
   it("organizes Auth Mini security actions inside its own dialog and signs out", async () => {
