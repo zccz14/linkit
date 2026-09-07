@@ -39,8 +39,8 @@ import {
   SendIcon,
   SmartphoneIcon,
   Trash2Icon,
-  SettingsIcon,
   ShieldCheckIcon,
+  type LucideIcon,
   UserRoundIcon,
   UsersRoundIcon,
   XIcon,
@@ -100,8 +100,25 @@ import {
 } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { Separator } from "@/components/ui/separator";
+import {
+  Sidebar,
+  SidebarContent,
+  SidebarFooter,
+  SidebarGroup,
+  SidebarGroupContent,
+  SidebarGroupLabel,
+  SidebarHeader,
+  SidebarInset,
+  SidebarMenu,
+  SidebarMenuButton,
+  SidebarMenuItem,
+  SidebarProvider,
+  SidebarTrigger,
+  useSidebar,
+} from "@/components/ui/sidebar";
 import { Toaster } from "@/components/ui/sonner";
 import { Textarea } from "@/components/ui/textarea";
+import { TooltipProvider } from "@/components/ui/tooltip";
 import { useIsMobile } from "@/hooks/use-mobile";
 import { updatedConversationDetail } from "@/lib/conversation";
 import { MessageMarkdown } from "@/lib/message-markdown";
@@ -127,6 +144,7 @@ import {
   type Profile,
   type SystemOverview,
 } from "@/lib/api";
+import type { TranslationKey } from "@/lib/locale";
 
 const profileRoute = (username: string) =>
   `/people/${encodeURIComponent(username)}`;
@@ -377,11 +395,6 @@ function AuthedApp() {
 }
 
 function Shell({ me, sdk }: { me: Me; sdk: AuthMiniApi }) {
-  const { t } = useI18n();
-  const { signOut } = useAuthMini();
-  const navigate = useNavigate();
-  const location = useLocation();
-  const isMobile = useIsMobile();
   const queryClient = useQueryClient();
   const conversations = useQuery({
     queryKey: ["conversations"],
@@ -399,135 +412,262 @@ function Shell({ me, sdk }: { me: Me; sdk: AuthMiniApi }) {
       }),
     [queryClient, sdk],
   );
-  const links = [
-    ["/directory", t("navigation.directory"), UsersRoundIcon],
-    ["/bots", t("navigation.bots"), BotIcon],
-    ["/settings/notifications", t("navigation.notifications"), BellIcon],
-    ["/settings/profile", t("navigation.profile"), SettingsIcon],
-    ...(me.root
-      ? [
-          ["/admin/system", t("navigation.admin"), ShieldCheckIcon] as const,
-          ["/admin/bark-users", t("admin.barkUsers"), BellIcon] as const,
-        ]
-      : []),
-  ] as const;
-
-  const conversationRoute = (id: string) => `/conversations/${id}`;
-  const mobileNavigationVisible =
-    isMobile &&
-    !/^\/conversations\/[^/]+(?:\/manage)?$/.test(location.pathname);
-  const conversationList = (
-    <ConversationList
-      conversations={conversations.data ?? []}
-      currentPath={location.pathname}
-      sdk={sdk}
-      onOpen={(conversation) => navigate(conversationRoute(conversation.id))}
-    />
-  );
 
   return (
-    <div className="grid h-dvh min-h-0 grid-cols-[17rem_1fr] overflow-hidden bg-muted/30 max-md:grid-cols-1">
-      <aside className="flex min-h-0 flex-col gap-4 overflow-y-auto border-r bg-background p-4 max-md:hidden">
-        <Link
-          className="flex items-center gap-2 px-2 text-lg font-semibold"
-          to="/conversations"
-        >
-          <img
-            alt=""
-            aria-hidden="true"
-            className="size-7 shrink-0"
-            src="/linkit-logo.png"
-          />
-          Linkit
-        </Link>
-        <nav className="flex flex-col gap-1">
-          {links.map(([to, label, Icon]) => (
-            <Button
-              key={to}
-              variant={location.pathname === to ? "secondary" : "ghost"}
-              className="justify-start"
-              onClick={() => navigate(to)}
-            >
-              <Icon data-icon="inline-start" />
-              {label}
-            </Button>
-          ))}
-        </nav>
-        <Separator />
-        <div className="flex items-center justify-between px-2 text-sm text-muted-foreground">
-          <span>{t("navigation.conversations")}</span>
-          <Button
-            variant="ghost"
-            size="icon-sm"
-            aria-label={t("navigation.newGroup")}
-            onClick={() => navigate("/groups/new")}
-          >
-            <PlusIcon />
-          </Button>
-        </div>
-        <div>{conversationList}</div>
-        <div className="mt-auto flex items-center gap-2 border-t pt-4">
-          <ProfileAvatar profile={me.profile} sdk={sdk} />
-          <div className="min-w-0 flex-1">
-            <p className="truncate text-sm font-medium">
-              {me.profile!.username}
-            </p>
-          </div>
-          <LanguageMenu />
-          <Button
-            variant="ghost"
-            size="icon-sm"
-            aria-label={t("auth.signOut")}
-            onClick={() => void signOut()}
-          >
-            <LogOutIcon />
-          </Button>
-        </div>
-      </aside>
-      <main className="min-h-0 min-w-0 overflow-y-auto">
-        <Routes>
-          <Route
-            path="/conversations"
-            element={
-              <ConversationIndex
-                conversations={conversations.data ?? []}
-                sdk={sdk}
-              />
-            }
-          />
-          <Route
-            path="/conversations/:id"
-            element={<ConversationPage me={me} sdk={sdk} />}
-          />
-          <Route
-            path="/conversations/:id/manage"
-            element={<MobileGroupManager me={me} sdk={sdk} />}
-          />
-          <Route path="/directory" element={<Directory sdk={sdk} />} />
-          <Route path="/people/:username" element={<Person sdk={sdk} />} />
-          <Route path="/compose/:username" element={<Compose sdk={sdk} />} />
-          <Route path="/groups/new" element={<GroupCreator sdk={sdk} />} />
-          <Route path="/bots" element={<Bots sdk={sdk} />} />
-          <Route
-            path="/settings/notifications"
-            element={<BarkNotifications sdk={sdk} />}
-          />
-          <Route
-            path="/settings/profile"
-            element={<ProfileEditor me={me} sdk={sdk} />}
-          />
-          <Route path="/admin/system" element={<SystemDashboard sdk={sdk} />} />
-          <Route
-            path="/admin/bark-users"
-            element={<AdminBarkUsers sdk={sdk} />}
-          />
-          <Route path="*" element={<Navigate to="/conversations" replace />} />
-        </Routes>
-      </main>
-      {mobileNavigationVisible ? <MobileNavigator /> : null}
+    <TooltipProvider>
+      <SidebarProvider className="h-dvh">
+        <LinkitShell
+          conversations={conversations.data ?? []}
+          me={me}
+          sdk={sdk}
+        />
+      </SidebarProvider>
       <Toaster richColors />
-    </div>
+    </TooltipProvider>
   );
+}
+
+type NavigationItem = {
+  icon: LucideIcon;
+  label: string;
+  to: string;
+};
+
+function LinkitShell({
+  conversations,
+  me,
+  sdk,
+}: {
+  conversations: Conversation[];
+  me: Me;
+  sdk: AuthMiniApi;
+}) {
+  const { t } = useI18n();
+  const { signOut } = useAuthMini();
+  const location = useLocation();
+  const navigate = useNavigate();
+  const { isMobile, setOpenMobile } = useSidebar();
+  const workspaceItems: NavigationItem[] = [
+    {
+      icon: MessageCircleIcon,
+      label: t("navigation.inbox"),
+      to: "/conversations",
+    },
+    {
+      icon: UsersRoundIcon,
+      label: t("navigation.directory"),
+      to: "/directory",
+    },
+  ];
+  const toolItems: NavigationItem[] = [
+    { icon: BotIcon, label: t("navigation.bots"), to: "/bots" },
+    {
+      icon: BellIcon,
+      label: t("navigation.notifications"),
+      to: "/settings/notifications",
+    },
+  ];
+  const systemItems: NavigationItem[] = [
+    {
+      icon: ShieldCheckIcon,
+      label: t("navigation.admin"),
+      to: "/admin/system",
+    },
+    {
+      icon: BellIcon,
+      label: t("admin.barkUsers"),
+      to: "/admin/bark-users",
+    },
+  ];
+  const goTo = (to: string) => {
+    navigate(to);
+    if (isMobile) setOpenMobile(false);
+  };
+  const title = appPageTitle(location.pathname, t);
+  const isConversationList = location.pathname === "/conversations";
+
+  return (
+    <>
+      <Sidebar collapsible="icon">
+        <SidebarHeader className="px-3 py-4">
+          <Link
+            className="flex items-center gap-2 text-lg font-semibold"
+            to="/conversations"
+            onClick={() => isMobile && setOpenMobile(false)}
+          >
+            <img
+              alt=""
+              aria-hidden="true"
+              className="size-7 shrink-0"
+              src="/linkit-logo.png"
+            />
+            <span className="group-data-[collapsible=icon]:hidden">Linkit</span>
+          </Link>
+        </SidebarHeader>
+        <SidebarContent>
+          <SidebarNavigationGroup
+            items={workspaceItems}
+            label={t("navigation.workspace")}
+            onNavigate={goTo}
+            pathname={location.pathname}
+          />
+          <SidebarNavigationGroup
+            items={toolItems}
+            label={t("navigation.tools")}
+            onNavigate={goTo}
+            pathname={location.pathname}
+          />
+          {me.root ? (
+            <SidebarNavigationGroup
+              items={systemItems}
+              label={t("navigation.system")}
+              onNavigate={goTo}
+              pathname={location.pathname}
+            />
+          ) : null}
+        </SidebarContent>
+        <SidebarFooter className="border-t">
+          <SidebarMenu>
+            <SidebarMenuItem>
+              <SidebarMenuButton
+                isActive={isNavigationActive(
+                  location.pathname,
+                  "/settings/profile",
+                )}
+                tooltip={t("navigation.profile")}
+                onClick={() => goTo("/settings/profile")}
+              >
+                <ProfileAvatar profile={me.profile} sdk={sdk} />
+                <span>{me.profile!.username}</span>
+              </SidebarMenuButton>
+            </SidebarMenuItem>
+            <SidebarMenuItem>
+              <SidebarMenuButton
+                tooltip={t("auth.signOut")}
+                onClick={() => void signOut()}
+              >
+                <LogOutIcon />
+                <span>{t("auth.signOut")}</span>
+              </SidebarMenuButton>
+            </SidebarMenuItem>
+          </SidebarMenu>
+        </SidebarFooter>
+      </Sidebar>
+      <SidebarInset>
+        <header className="flex h-14 shrink-0 items-center gap-3 border-b bg-background/95 px-4 backdrop-blur supports-backdrop-filter:bg-background/85">
+          <SidebarTrigger />
+          <Separator className="h-5" orientation="vertical" />
+          <h1 className="min-w-0 flex-1 truncate text-sm font-medium">
+            {title}
+          </h1>
+          {isConversationList ? (
+            <Button size="sm" onClick={() => navigate("/groups/new")}>
+              <PlusIcon data-icon="inline-start" />
+              {t("navigation.newGroup")}
+            </Button>
+          ) : null}
+          <LanguageMenu />
+        </header>
+        <div className="min-h-0 flex-1 overflow-auto">
+          <Routes>
+            <Route
+              path="/conversations"
+              element={
+                <ConversationIndex conversations={conversations} sdk={sdk} />
+              }
+            />
+            <Route
+              path="/conversations/:id"
+              element={<ConversationPage me={me} sdk={sdk} />}
+            />
+            <Route
+              path="/conversations/:id/manage"
+              element={<MobileGroupManager me={me} sdk={sdk} />}
+            />
+            <Route path="/directory" element={<Directory sdk={sdk} />} />
+            <Route path="/people/:username" element={<Person sdk={sdk} />} />
+            <Route path="/compose/:username" element={<Compose sdk={sdk} />} />
+            <Route path="/groups/new" element={<GroupCreator sdk={sdk} />} />
+            <Route path="/bots" element={<Bots sdk={sdk} />} />
+            <Route
+              path="/settings/notifications"
+              element={<BarkNotifications sdk={sdk} />}
+            />
+            <Route
+              path="/settings/profile"
+              element={<ProfileEditor me={me} sdk={sdk} />}
+            />
+            <Route
+              path="/admin/system"
+              element={<SystemDashboard sdk={sdk} />}
+            />
+            <Route
+              path="/admin/bark-users"
+              element={<AdminBarkUsers sdk={sdk} />}
+            />
+            <Route
+              path="*"
+              element={<Navigate to="/conversations" replace />}
+            />
+          </Routes>
+        </div>
+      </SidebarInset>
+    </>
+  );
+}
+
+function SidebarNavigationGroup({
+  items,
+  label,
+  onNavigate,
+  pathname,
+}: {
+  items: NavigationItem[];
+  label: string;
+  onNavigate: (to: string) => void;
+  pathname: string;
+}) {
+  return (
+    <SidebarGroup>
+      <SidebarGroupLabel>{label}</SidebarGroupLabel>
+      <SidebarGroupContent>
+        <SidebarMenu>
+          {items.map((item) => (
+            <SidebarMenuItem key={item.to}>
+              <SidebarMenuButton
+                isActive={isNavigationActive(pathname, item.to)}
+                tooltip={item.label}
+                onClick={() => onNavigate(item.to)}
+              >
+                <item.icon />
+                <span>{item.label}</span>
+              </SidebarMenuButton>
+            </SidebarMenuItem>
+          ))}
+        </SidebarMenu>
+      </SidebarGroupContent>
+    </SidebarGroup>
+  );
+}
+
+function isNavigationActive(pathname: string, to: string) {
+  return pathname === to || pathname.startsWith(`${to}/`);
+}
+
+function appPageTitle(pathname: string, t: (key: TranslationKey) => string) {
+  if (pathname.startsWith("/conversations")) return t("conversation.listTitle");
+  if (pathname.startsWith("/directory")) return t("directory.title");
+  if (pathname.startsWith("/people")) return t("profile.title");
+  if (pathname.startsWith("/compose")) return t("compose.title");
+  if (pathname.startsWith("/groups")) return t("group.title");
+  if (pathname.startsWith("/bots")) return t("bots.title");
+  if (pathname.startsWith("/settings/notifications"))
+    return t("barkSettings.title");
+  if (pathname.startsWith("/settings/profile")) return t("profile.title");
+  if (pathname.startsWith("/admin/bark-users"))
+    return t("admin.barkUsersTitle");
+  if (pathname.startsWith("/admin")) return t("navigation.admin");
+  return t("conversation.listTitle");
 }
 
 function ConversationIndex({
@@ -537,34 +677,7 @@ function ConversationIndex({
   conversations: Conversation[];
   sdk: AuthMiniApi;
 }) {
-  const isMobile = useIsMobile();
-  const { t } = useI18n();
-  if (!isMobile) return <ConversationEmpty />;
-  return (
-    <div className="min-h-dvh bg-background">
-      <MobileAppHeader title={t("conversation.listTitle")} />
-      <ConversationListPage conversations={conversations} sdk={sdk} />
-    </div>
-  );
-}
-
-function ConversationEmpty() {
-  const { t } = useI18n();
-  return (
-    <div className="grid min-h-screen place-items-center p-6">
-      <Empty>
-        <EmptyHeader>
-          <EmptyMedia variant="icon">
-            <MessageCircleIcon />
-          </EmptyMedia>
-          <EmptyTitle>{t("conversation.emptyTitle")}</EmptyTitle>
-          <EmptyDescription>
-            {t("conversation.emptyDescription")}
-          </EmptyDescription>
-        </EmptyHeader>
-      </Empty>
-    </div>
-  );
+  return <ConversationListPage conversations={conversations} sdk={sdk} />;
 }
 
 function ConversationList({
@@ -627,16 +740,7 @@ function ConversationListPage({
   const navigate = useNavigate();
   const location = useLocation();
   return (
-    <div className="flex min-h-[calc(100dvh-3.5rem)] flex-col p-3 pb-20">
-      <div className="mb-3 flex items-center justify-between px-1">
-        <p className="text-sm text-muted-foreground">
-          {t("navigation.conversations")}
-        </p>
-        <Button size="sm" onClick={() => navigate("/groups/new")}>
-          <PlusIcon data-icon="inline-start" />
-          {t("navigation.newGroup")}
-        </Button>
-      </div>
+    <div className="mx-auto flex min-h-full w-full max-w-3xl flex-col p-4 md:p-6">
       {conversations.length ? (
         <ConversationList
           conversations={conversations}
@@ -647,7 +751,7 @@ function ConversationListPage({
           }
         />
       ) : (
-        <div className="grid flex-1 place-items-center">
+        <div className="grid min-h-72 flex-1 place-items-center">
           <Empty>
             <EmptyHeader>
               <EmptyMedia variant="icon">
@@ -694,7 +798,7 @@ function ConversationAvatar({
   );
 }
 
-function MobileAppHeader({
+function ConversationSubheader({
   title,
   onBack,
   action,
@@ -705,11 +809,11 @@ function MobileAppHeader({
 }) {
   const { t } = useI18n();
   return (
-    <header className="flex min-h-14 items-center gap-2 border-b px-3">
+    <header className="flex min-h-14 shrink-0 items-center gap-2 border-b px-4 md:px-6">
       {onBack ? (
         <Button
           variant="ghost"
-          size="icon"
+          size="icon-sm"
           aria-label={t("conversation.back")}
           onClick={onBack}
         >
@@ -719,34 +823,6 @@ function MobileAppHeader({
       <h1 className="min-w-0 flex-1 truncate font-semibold">{title}</h1>
       {action}
     </header>
-  );
-}
-
-function MobileNavigator() {
-  const { t } = useI18n();
-  const location = useLocation();
-  const navigate = useNavigate();
-  const items = [
-    ["/conversations", t("navigation.inbox"), MessageCircleIcon],
-    ["/directory", t("navigation.directory"), UsersRoundIcon],
-    ["/bots", t("navigation.bots"), BotIcon],
-    ["/settings/notifications", t("navigation.notifications"), BellIcon],
-    ["/settings/profile", t("navigation.profile"), SettingsIcon],
-  ] as const;
-  return (
-    <nav className="fixed right-0 bottom-0 left-0 z-40 grid grid-cols-5 border-t bg-background/95 px-1 py-1 backdrop-blur md:hidden">
-      {items.map(([to, label, Icon]) => (
-        <Button
-          key={to}
-          variant={location.pathname === to ? "secondary" : "ghost"}
-          className="h-12 flex-col gap-0.5 px-0.5 text-[0.65rem]"
-          onClick={() => navigate(to)}
-        >
-          <Icon />
-          {label}
-        </Button>
-      ))}
-    </nav>
   );
 }
 
@@ -1015,36 +1091,21 @@ function ConversationPage({ me, sdk }: { me: Me; sdk: AuthMiniApi }) {
   };
 
   return (
-    <div className="flex h-dvh min-h-0 flex-col bg-background">
-      {isMobile ? (
-        <MobileAppHeader
-          title={title}
-          onBack={() => navigate("/conversations")}
-          action={
-            detail.data?.kind === "group" ? (
-              <Button
-                variant="ghost"
-                size="icon"
-                aria-label={t("conversation.members")}
-                onClick={manageGroup}
-              >
-                <UsersRoundIcon />
-              </Button>
-            ) : undefined
-          }
-        />
-      ) : (
-        <header className="flex min-h-14 items-center gap-2 border-b px-6">
-          <MessageCircleIcon />
-          <h1 className="min-w-0 flex-1 truncate font-semibold">{title}</h1>
-          {detail.data?.kind === "group" ? (
+    <div className="flex h-full min-h-0 flex-col bg-background">
+      <ConversationSubheader
+        title={title}
+        onBack={() => navigate("/conversations")}
+        action={
+          detail.data?.kind === "group" ? (
             <Button variant="outline" size="sm" onClick={manageGroup}>
               <UsersRoundIcon data-icon="inline-start" />
-              {t("conversation.members")}
+              <span className="max-sm:sr-only">
+                {t("conversation.members")}
+              </span>
             </Button>
-          ) : null}
-        </header>
-      )}
+          ) : undefined
+        }
+      />
       <section
         ref={messageListRef}
         className="min-h-0 flex-1 overflow-auto p-4 md:p-6"
@@ -1206,8 +1267,8 @@ function MobileGroupManager({ me, sdk }: { me: Me; sdk: AuthMiniApi }) {
   if (detail.data.kind !== "group")
     return <Navigate to={`/conversations/${id}`} replace />;
   return (
-    <div className="flex min-h-dvh flex-col bg-background">
-      <MobileAppHeader
+    <div className="flex h-full min-h-0 flex-col bg-background">
+      <ConversationSubheader
         title={t("conversation.manageTitle")}
         onBack={() => navigate(`/conversations/${id}`)}
       />
@@ -2370,7 +2431,7 @@ function Page({
   localeControl?: boolean;
 }) {
   return (
-    <div className="mx-auto w-full max-w-4xl p-6 pb-20 md:pb-6">
+    <div className="mx-auto w-full max-w-4xl p-4 md:p-6">
       <header className="mb-6 flex items-start justify-between gap-4">
         <div>
           <h1 className="text-2xl font-semibold">{title}</h1>
