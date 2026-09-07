@@ -18,11 +18,25 @@ const alice = {
   intro: "Research first",
   avatar_url: "https://images.example.test/alice.webp",
 };
+const aliceNote = {
+  user_id: alice.user_id,
+  name: "Fund investor",
+  updated_at: 1,
+};
 
 function json(value: unknown) {
   return new Response(JSON.stringify(value), {
     status: 200,
     headers: { "Content-Type": "application/json" },
+  });
+}
+
+function batchFetch(profiles: unknown[], notes: unknown[] = []) {
+  return vi.spyOn(globalThis, "fetch").mockImplementation((input) => {
+    const url = String(input);
+    if (url.endsWith("/api/public/profiles/batch")) return Promise.resolve(json(profiles));
+    if (url.endsWith("/api/user-notes/batch")) return Promise.resolve(json(notes));
+    throw new Error(`Unexpected Linkit request: ${url}`);
   });
 }
 
@@ -42,7 +56,7 @@ afterEach(() => {
 
 describe("LinkitUserInfo", () => {
   it("renders the Provider-cached profile and complete user ID inline with an accessible popup", async () => {
-    vi.spyOn(globalThis, "fetch").mockResolvedValue(json([alice]));
+    batchFetch([alice]);
     renderInfo();
     const trigger = await screen.findByRole("button", { name: /user information: alice/i });
     expect(trigger).toHaveTextContent("alice");
@@ -53,7 +67,7 @@ describe("LinkitUserInfo", () => {
   });
 
   it("uses the Provider locale and internal unknown-user copy when no profile exists", async () => {
-    vi.spyOn(globalThis, "fetch").mockResolvedValue(json([]));
+    batchFetch([]);
     renderInfo({ lang: "zh" });
     const trigger = await screen.findByRole("button", { name: /用户资料: 未知用户/ });
     expect(trigger.querySelector("svg")).not.toBeNull();
@@ -64,7 +78,7 @@ describe("LinkitUserInfo", () => {
 
   it("batches distinct user IDs and deduplicates repeated IDs before requesting profiles", async () => {
     const bob = { ...alice, user_id: "660e8400-e29b-41d4-a716-446655440000", username: "bob" };
-    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(json([alice, bob]));
+    const fetchMock = batchFetch([alice, bob]);
     render(
       <LinkitProvider linkitBaseUrl="https://linkit.example.test">
         <LinkitUserInfo userId={alice.user_id} />
@@ -73,9 +87,16 @@ describe("LinkitUserInfo", () => {
       </LinkitProvider>,
     );
     await screen.findByRole("button", { name: /user information: bob/i });
-    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
     expect(fetchMock).toHaveBeenCalledWith(
       "https://linkit.example.test/api/public/profiles/batch",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({ user_ids: [alice.user_id, bob.user_id] }),
+      }),
+    );
+    expect(fetchMock).toHaveBeenCalledWith(
+      "https://linkit.example.test/api/user-notes/batch",
       expect.objectContaining({
         method: "POST",
         body: JSON.stringify({ user_ids: [alice.user_id, bob.user_id] }),
@@ -86,17 +107,19 @@ describe("LinkitUserInfo", () => {
   it("does not issue a second request for an ID while its batch is in flight", async () => {
     let resolveBatch: (response: Response) => void = () => undefined;
     const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(
-      () => new Promise((resolve) => { resolveBatch = resolve; }),
+      (input) => String(input).endsWith("/api/public/profiles/batch")
+        ? new Promise((resolve) => { resolveBatch = resolve; })
+        : Promise.resolve(json([])),
     );
     const subject = (duplicate = false) => <LinkitProvider linkitBaseUrl="https://linkit.example.test">
       <LinkitUserInfo userId={alice.user_id} />
       {duplicate ? <LinkitUserInfo compact userId={alice.user_id} /> : null}
     </LinkitProvider>;
     const rendered = render(subject());
-    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
     rendered.rerender(subject(true));
     await new Promise((resolve) => setTimeout(resolve, 60));
-    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
     resolveBatch(json([alice]));
     expect((await screen.findAllByRole("button", { name: /user information: alice/i })).length).toBe(2);
   });
@@ -105,9 +128,14 @@ describe("LinkitUserInfo", () => {
     const opened = { opener: {} as Window | null, location: { replace: vi.fn() }, close: vi.fn() } as unknown as Window;
     vi.spyOn(window, "open").mockReturnValue(opened);
     vi.spyOn(globalThis, "fetch")
-      .mockResolvedValueOnce(json([alice]))
-      .mockResolvedValueOnce(json({ id: "viewer", root: false, profile: null }))
-      .mockResolvedValueOnce(json({ id: "conversation-1", kind: "direct" }));
+      .mockImplementation((input) => {
+        const url = String(input);
+        if (url.endsWith("/api/public/profiles/batch")) return Promise.resolve(json([alice]));
+        if (url.endsWith("/api/user-notes/batch")) return Promise.resolve(json([]));
+        if (url.endsWith("/api/me")) return Promise.resolve(json({ id: "viewer", root: false, profile: null }));
+        if (url.endsWith("/api/conversations/direct/alice")) return Promise.resolve(json({ id: "conversation-1", kind: "direct" }));
+        throw new Error(`Unexpected Linkit request: ${url}`);
+      });
     renderInfo();
     fireEvent.click(await screen.findByRole("button", { name: /user information: alice/i }));
     fireEvent.click(await screen.findByRole("button", { name: "Message" }));
@@ -118,12 +146,51 @@ describe("LinkitUserInfo", () => {
     const opened = { opener: {} as Window | null, location: { replace: vi.fn() }, close: vi.fn() } as unknown as Window;
     vi.spyOn(window, "open").mockReturnValue(opened);
     vi.spyOn(globalThis, "fetch")
-      .mockResolvedValueOnce(json([alice]))
-      .mockResolvedValueOnce(json({ id: alice.user_id, root: false, profile: null }));
+      .mockImplementation((input) => {
+        const url = String(input);
+        if (url.endsWith("/api/public/profiles/batch")) return Promise.resolve(json([alice]));
+        if (url.endsWith("/api/user-notes/batch")) return Promise.resolve(json([]));
+        if (url.endsWith("/api/me")) return Promise.resolve(json({ id: alice.user_id, root: false, profile: null }));
+        throw new Error(`Unexpected Linkit request: ${url}`);
+      });
     renderInfo();
     fireEvent.click(await screen.findByRole("button", { name: /user information: alice/i }));
     fireEvent.click(await screen.findByRole("button", { name: "Message" }));
     expect(await screen.findByText("You can't send a direct message to yourself.")).toBeInTheDocument();
     expect(opened.close).toHaveBeenCalled();
+  });
+
+  it("shows and maintains a private note when the target has no Linkit profile", async () => {
+    const userId = "770e8400-e29b-41d4-a716-446655440000";
+    const saved = { user_id: userId, name: "New fund investor", updated_at: 2 };
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation((input, init) => {
+      const url = String(input);
+      if (url.endsWith("/api/public/profiles/batch")) return Promise.resolve(json([]));
+      if (url.endsWith("/api/user-notes/batch")) return Promise.resolve(json([{ ...aliceNote, user_id: userId }]));
+      if (url.endsWith(`/api/user-notes/${userId}`) && init?.method === "PUT") return Promise.resolve(json(saved));
+      if (url.endsWith(`/api/user-notes/${userId}`) && init?.method === "DELETE") return Promise.resolve(new Response(null, { status: 204 }));
+      throw new Error(`Unexpected Linkit request: ${url}`);
+    });
+    renderInfo({ userId });
+    const trigger = await screen.findByRole("button", { name: /user information: Fund investor/i });
+    fireEvent.click(trigger);
+    expect(await screen.findByText("This user's Linkit profile is unavailable.")).toBeInTheDocument();
+    const noteInput = await screen.findByLabelText("Private note");
+    expect(noteInput).toHaveValue("Fund investor");
+
+    fireEvent.change(noteInput, { target: { value: "New fund investor" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save note" }));
+    await screen.findByRole("button", { name: /user information: New fund investor/i });
+    expect(fetchMock).toHaveBeenCalledWith(
+      `https://linkit.example.test/api/user-notes/${userId}`,
+      expect.objectContaining({ method: "PUT", body: JSON.stringify({ name: "New fund investor" }) }),
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Remove note" }));
+    await screen.findByRole("button", { name: /user information: Unknown user/i });
+    expect(fetchMock).toHaveBeenCalledWith(
+      `https://linkit.example.test/api/user-notes/${userId}`,
+      expect.objectContaining({ method: "DELETE" }),
+    );
   });
 });

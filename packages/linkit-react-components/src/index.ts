@@ -36,5 +36,6 @@ export type {
   LinkitMessagePage,
   LinkitProfile,
   LinkitProfileUpdate,
+  LinkitUserNote,
   LinkitUserSearchResult,
 } from "./types.js";

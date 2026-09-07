@@ -47,6 +47,7 @@ const AVATAR_BACKFILL_INTERVAL: std::time::Duration = std::time::Duration::from_
 const BARK_NOTIFICATION_BODY_MAX_BYTES: usize = 3_000;
 const MESSAGE_PAGE_SIZE: i64 = 50;
 const PUBLIC_PROFILE_BATCH_SIZE: usize = 100;
+const USER_NOTE_BATCH_SIZE: usize = 100;
 const LIST_CONVERSATIONS_QUERY: &str = "SELECT c.id,c.kind,c.title,c.created_by,c.created_at,CASE WHEN c.kind='group' THEN c.avatar_attachment_id END avatar_attachment_id,CASE WHEN c.kind='direct' THEN COALESCE((SELECT p.username FROM conversation_members cm_peer JOIN profiles p ON p.user_id=cm_peer.user_id WHERE cm_peer.conversation_id=c.id AND cm_peer.user_id<>? LIMIT 1),(SELECT b.name FROM conversation_members cm_peer JOIN bots b ON b.id=cm_peer.user_id WHERE cm_peer.conversation_id=c.id AND cm_peer.user_id<>? LIMIT 1)) END counterpart_name,CASE WHEN c.kind='direct' THEN (SELECT p.avatar_attachment_id FROM conversation_members cm_peer JOIN profiles p ON p.user_id=cm_peer.user_id WHERE cm_peer.conversation_id=c.id AND cm_peer.user_id<>? LIMIT 1) END counterpart_avatar_attachment_id,(SELECT body FROM messages WHERE conversation_id=c.id ORDER BY created_at DESC LIMIT 1) latest_body,(SELECT created_at FROM messages WHERE conversation_id=c.id ORDER BY created_at DESC LIMIT 1) latest_at,(SELECT COUNT(*) FROM messages WHERE conversation_id=c.id AND created_at>cm.last_read_at AND sender_id<>?) unread_count FROM conversations c JOIN conversation_members cm ON cm.conversation_id=c.id WHERE cm.user_id=? ORDER BY COALESCE(latest_at,c.created_at) DESC";
 const CONVERSATION_QUERY: &str = "SELECT c.id,c.kind,c.title,c.created_by,c.created_at,CASE WHEN c.kind='group' THEN c.avatar_attachment_id END avatar_attachment_id,CASE WHEN c.kind='direct' THEN COALESCE((SELECT p.username FROM conversation_members cm_peer JOIN profiles p ON p.user_id=cm_peer.user_id WHERE cm_peer.conversation_id=c.id AND cm_peer.user_id<>? LIMIT 1),(SELECT b.name FROM conversation_members cm_peer JOIN bots b ON b.id=cm_peer.user_id WHERE cm_peer.conversation_id=c.id AND cm_peer.user_id<>? LIMIT 1)) END counterpart_name,CASE WHEN c.kind='direct' THEN (SELECT p.avatar_attachment_id FROM conversation_members cm_peer JOIN profiles p ON p.user_id=cm_peer.user_id WHERE cm_peer.conversation_id=c.id AND cm_peer.user_id<>? LIMIT 1) END counterpart_avatar_attachment_id,(SELECT body FROM messages WHERE conversation_id=c.id ORDER BY created_at DESC LIMIT 1) latest_body,(SELECT created_at FROM messages WHERE conversation_id=c.id ORDER BY created_at DESC LIMIT 1) latest_at,(SELECT COUNT(*) FROM messages WHERE conversation_id=c.id AND created_at>cm.last_read_at AND sender_id<>?) unread_count FROM conversations c JOIN conversation_members cm ON cm.conversation_id=c.id WHERE c.id=? AND cm.user_id=?";
 
@@ -96,6 +97,11 @@ pub fn router(state: AppState) -> Router {
         .route("/api/admin/bark-users", get(bark_notification_users))
         .route("/api/events", get(events))
         .route("/api/profile", put(update_profile))
+        .route("/api/user-notes/batch", post(user_notes_batch))
+        .route(
+            "/api/user-notes/{user_id}",
+            put(save_user_note).delete(delete_user_note),
+        )
         .route(
             "/api/settings/bark",
             get(bark_notification_settings)
@@ -565,6 +571,106 @@ struct PublicProfileRow {
     intro: String,
     avatar_attachment_id: Option<String>,
     updated_at: i64,
+}
+
+#[derive(Debug, Serialize, FromRow)]
+struct UserNote {
+    user_id: String,
+    name: String,
+    updated_at: i64,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct UserNotesBatchInput {
+    user_ids: Vec<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct UserNoteInput {
+    name: String,
+}
+
+async fn user_notes_batch(
+    State(state): State<AppState>,
+    axum::Extension(user): axum::Extension<UserIdentity>,
+    axum::Json(input): axum::Json<UserNotesBatchInput>,
+) -> Result<axum::Json<Vec<UserNote>>, AppError> {
+    let mut user_ids = input
+        .user_ids
+        .into_iter()
+        .map(|user_id| nonempty(&user_id, "user_id", 128))
+        .collect::<Result<Vec<_>, _>>()?;
+    user_ids.sort();
+    user_ids.dedup();
+    if user_ids.len() > USER_NOTE_BATCH_SIZE {
+        return Err(AppError::bad_request(format!(
+            "user_ids must contain at most {USER_NOTE_BATCH_SIZE} entries"
+        )));
+    }
+    if user_ids.is_empty() {
+        return Ok(axum::Json(Vec::new()));
+    }
+    let mut query = QueryBuilder::<Sqlite>::new(
+        "SELECT target_user_id AS user_id,name,updated_at FROM user_notes WHERE owner_user_id=",
+    );
+    query.push_bind(&user.id);
+    query.push(" AND target_user_id IN (");
+    let mut separated = query.separated(",");
+    for user_id in &user_ids {
+        separated.push_bind(user_id);
+    }
+    separated.push_unseparated(") ORDER BY target_user_id");
+    Ok(axum::Json(
+        query
+            .build_query_as::<UserNote>()
+            .fetch_all(&state.db)
+            .await?,
+    ))
+}
+
+async fn save_user_note(
+    State(state): State<AppState>,
+    axum::Extension(user): axum::Extension<UserIdentity>,
+    Path(user_id): Path<String>,
+    axum::Json(input): axum::Json<UserNoteInput>,
+) -> Result<axum::Json<UserNote>, AppError> {
+    let user_id = nonempty(&user_id, "user_id", 128)?;
+    if user_id == user.id {
+        return Err(AppError::bad_request("cannot add a note for yourself"));
+    }
+    let name = valid_user_note_name(&input.name)?;
+    let updated_at = chrono::Utc::now().timestamp();
+    sqlx::query("INSERT INTO user_notes(owner_user_id,target_user_id,name,updated_at) VALUES(?,?,?,?) ON CONFLICT(owner_user_id,target_user_id) DO UPDATE SET name=excluded.name,updated_at=excluded.updated_at")
+        .bind(&user.id)
+        .bind(&user_id)
+        .bind(&name)
+        .bind(updated_at)
+        .execute(&state.db)
+        .await?;
+    Ok(axum::Json(UserNote {
+        user_id,
+        name,
+        updated_at,
+    }))
+}
+
+async fn delete_user_note(
+    State(state): State<AppState>,
+    axum::Extension(user): axum::Extension<UserIdentity>,
+    Path(user_id): Path<String>,
+) -> Result<StatusCode, AppError> {
+    let user_id = nonempty(&user_id, "user_id", 128)?;
+    if user_id == user.id {
+        return Err(AppError::bad_request("cannot add a note for yourself"));
+    }
+    sqlx::query("DELETE FROM user_notes WHERE owner_user_id=? AND target_user_id=?")
+        .bind(&user.id)
+        .bind(user_id)
+        .execute(&state.db)
+        .await?;
+    Ok(StatusCode::NO_CONTENT)
 }
 
 async fn public_profile(
@@ -2502,6 +2608,16 @@ fn valid_username(value: &str) -> Result<String, AppError> {
     Ok(value.to_owned())
 }
 
+fn valid_user_note_name(value: &str) -> Result<String, AppError> {
+    let value = value.trim();
+    if value.is_empty() || value.chars().count() > 80 || value.chars().any(char::is_control) {
+        return Err(AppError::bad_request(
+            "note name must contain 1-80 non-control characters after trimming",
+        ));
+    }
+    Ok(value.to_owned())
+}
+
 fn nonempty(value: &str, field: &str, max: usize) -> Result<String, AppError> {
     let value = bounded(value, field, max)?;
     if value.trim().is_empty() {
@@ -3158,6 +3274,136 @@ mod tests {
             panic!("batch larger than the limit must be rejected");
         };
         assert_eq!(error.status, StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn user_notes_are_private_and_allow_uninitialized_target_users() {
+        let pool = db::connect_memory().await.unwrap();
+        sqlx::query("INSERT INTO users(id,created_at) VALUES('alice',0),('bob',0)")
+            .execute(&pool)
+            .await
+            .unwrap();
+        let state = test_state(pool.clone());
+
+        let saved = save_user_note(
+            State(state.clone()),
+            axum::Extension(UserIdentity { id: "alice".into() }),
+            Path("not-initialized-in-linkit".into()),
+            axum::Json(UserNoteInput {
+                name: "  Fund investor  ".into(),
+            }),
+        )
+        .await
+        .unwrap()
+        .0;
+        assert_eq!(saved.user_id, "not-initialized-in-linkit");
+        assert_eq!(saved.name, "Fund investor");
+        let target_exists: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM users WHERE id='not-initialized-in-linkit'")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(target_exists, 0);
+
+        let axum::Json(alice_notes) = user_notes_batch(
+            State(state.clone()),
+            axum::Extension(UserIdentity { id: "alice".into() }),
+            axum::Json(UserNotesBatchInput {
+                user_ids: vec![
+                    "not-initialized-in-linkit".into(),
+                    "not-initialized-in-linkit".into(),
+                    "missing".into(),
+                ],
+            }),
+        )
+        .await
+        .unwrap();
+        assert_eq!(alice_notes.len(), 1);
+        assert_eq!(alice_notes[0].name, "Fund investor");
+
+        let axum::Json(bob_notes) = user_notes_batch(
+            State(state.clone()),
+            axum::Extension(UserIdentity { id: "bob".into() }),
+            axum::Json(UserNotesBatchInput {
+                user_ids: vec!["not-initialized-in-linkit".into()],
+            }),
+        )
+        .await
+        .unwrap();
+        assert!(bob_notes.is_empty());
+
+        let _ = save_user_note(
+            State(state.clone()),
+            axum::Extension(UserIdentity { id: "bob".into() }),
+            Path("not-initialized-in-linkit".into()),
+            axum::Json(UserNoteInput {
+                name: "Different private name".into(),
+            }),
+        )
+        .await
+        .unwrap();
+        delete_user_note(
+            State(state.clone()),
+            axum::Extension(UserIdentity { id: "alice".into() }),
+            Path("not-initialized-in-linkit".into()),
+        )
+        .await
+        .unwrap();
+
+        let axum::Json(alice_notes) = user_notes_batch(
+            State(state.clone()),
+            axum::Extension(UserIdentity { id: "alice".into() }),
+            axum::Json(UserNotesBatchInput {
+                user_ids: vec!["not-initialized-in-linkit".into()],
+            }),
+        )
+        .await
+        .unwrap();
+        assert!(alice_notes.is_empty());
+        let axum::Json(bob_notes) = user_notes_batch(
+            State(state),
+            axum::Extension(UserIdentity { id: "bob".into() }),
+            axum::Json(UserNotesBatchInput {
+                user_ids: vec!["not-initialized-in-linkit".into()],
+            }),
+        )
+        .await
+        .unwrap();
+        assert_eq!(bob_notes[0].name, "Different private name");
+    }
+
+    #[tokio::test]
+    async fn user_notes_reject_self_references_and_invalid_names() {
+        let pool = db::connect_memory().await.unwrap();
+        sqlx::query("INSERT INTO users(id,created_at) VALUES('alice',0)")
+            .execute(&pool)
+            .await
+            .unwrap();
+        let state = test_state(pool);
+
+        let self_note = save_user_note(
+            State(state.clone()),
+            axum::Extension(UserIdentity { id: "alice".into() }),
+            Path("alice".into()),
+            axum::Json(UserNoteInput {
+                name: "Myself".into(),
+            }),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(self_note.status, StatusCode::BAD_REQUEST);
+
+        for name in ["   ".to_owned(), "note\nname".to_owned(), "a".repeat(81)] {
+            let error = save_user_note(
+                State(state.clone()),
+                axum::Extension(UserIdentity { id: "alice".into() }),
+                Path("another-user".into()),
+                axum::Json(UserNoteInput { name }),
+            )
+            .await
+            .unwrap_err();
+            assert_eq!(error.status, StatusCode::BAD_REQUEST);
+        }
     }
 
     #[tokio::test]

@@ -3,7 +3,7 @@ import { Button as ButtonPrimitive } from "@base-ui/react/button";
 import { Popover as PopoverPrimitive } from "@base-ui/react/popover";
 import { Separator as SeparatorPrimitive } from "@base-ui/react/separator";
 import { CircleAlertIcon, LoaderCircleIcon, MessageCircleIcon, UserRoundIcon } from "lucide-react";
-import { useId, useState } from "react";
+import { useEffect, useId, useState, type FormEvent } from "react";
 import type { LinkitProfile } from "./types.js";
 import { useLinkitUserInfo } from "./linkit-provider.js";
 
@@ -15,12 +15,31 @@ export type LinkitUserInfoProps = {
 export function LinkitUserInfo({ userId, compact = false }: LinkitUserInfoProps) {
   const titleId = useId();
   const descriptionId = useId();
-  const { copy, loading, openDirectConversation, profile } = useLinkitUserInfo(userId);
+  const noteInputId = useId();
+  const {
+    copy,
+    deleteNote,
+    loading,
+    note,
+    noteLoading,
+    notesEnabled,
+    openDirectConversation,
+    profile,
+    saveNote,
+  } = useLinkitUserInfo(userId);
   const [open, setOpen] = useState(false);
   const [directing, setDirecting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [noteName, setNoteName] = useState("");
+  const [savingNote, setSavingNote] = useState(false);
+  const [noteError, setNoteError] = useState<string | null>(null);
   const username = profile?.username?.trim() || "";
-  const displayName = username || copy.unknownUser;
+  const displayName = note?.name || username || copy.unknownUser;
+
+  useEffect(() => {
+    setNoteName(note?.name ?? "");
+    setNoteError(null);
+  }, [note?.name, userId]);
 
   async function openDirectMessage() {
     if (!username) return;
@@ -32,6 +51,33 @@ export function LinkitUserInfo({ userId, compact = false }: LinkitUserInfoProps)
       setError(message(cause));
     } finally {
       setDirecting(false);
+    }
+  }
+
+  async function submitNote(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setSavingNote(true);
+    setNoteError(null);
+    try {
+      const saved = await saveNote(noteName);
+      setNoteName(saved.name);
+    } catch (cause) {
+      setNoteError(message(cause));
+    } finally {
+      setSavingNote(false);
+    }
+  }
+
+  async function removeNote() {
+    setSavingNote(true);
+    setNoteError(null);
+    try {
+      await deleteNote();
+      setNoteName("");
+    } catch (cause) {
+      setNoteError(message(cause));
+    } finally {
+      setSavingNote(false);
     }
   }
 
@@ -66,7 +112,29 @@ export function LinkitUserInfo({ userId, compact = false }: LinkitUserInfoProps)
           {loading ? <div aria-label={copy.userInformation} className="linkit-user-info__skeleton" role="status"><span /><span /></div> : null}
           {!loading && !username ? <InfoAlert>{copy.profileUnavailable}</InfoAlert> : null}
           {profile?.intro ? <p className="linkit-user-info__intro">{profile.intro}</p> : null}
+          {notesEnabled ? <form className="linkit-user-info__note" onSubmit={(event) => void submitNote(event)}>
+            <label htmlFor={noteInputId}>
+              <span>{copy.privateNote}</span>
+              <input
+                disabled={noteLoading || savingNote}
+                id={noteInputId}
+                maxLength={80}
+                placeholder={copy.privateNotePlaceholder}
+                value={noteName}
+                onChange={(event) => setNoteName(event.target.value)}
+              />
+            </label>
+            <p>{copy.privateNoteHint}</p>
+            <div className="linkit-user-info__note-actions">
+              <ButtonPrimitive className="linkit-user-info__note-save" disabled={noteLoading || savingNote || !noteName.trim() || noteName.trim() === (note?.name ?? "")} type="submit">
+                {savingNote ? <LoaderCircleIcon className="linkit-user-info__spinner" data-icon="inline-start" /> : null}
+                {savingNote ? copy.savingNote : copy.saveNote}
+              </ButtonPrimitive>
+              {note ? <ButtonPrimitive className="linkit-user-info__note-remove" disabled={savingNote} type="button" onClick={() => void removeNote()}>{copy.removeNote}</ButtonPrimitive> : null}
+            </div>
+          </form> : null}
           {error ? <InfoAlert destructive><CircleAlertIcon aria-hidden="true" />{error}</InfoAlert> : null}
+          {noteError ? <InfoAlert destructive><CircleAlertIcon aria-hidden="true" />{noteError}</InfoAlert> : null}
           <ButtonPrimitive className="linkit-user-info__dm" disabled={!username || directing} type="button" onClick={() => void openDirectMessage()}>
             {directing ? <LoaderCircleIcon className="linkit-user-info__spinner" data-icon="inline-start" /> : <MessageCircleIcon data-icon="inline-start" />}
             {directing ? copy.openingDirectMessage : copy.directMessage}
