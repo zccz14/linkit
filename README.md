@@ -16,9 +16,9 @@ notifications, and native Bot API tokens.
 - **Direct Bark notifications** — an iPhone running Bark binds directly to its Linkit user and receives APNs notifications without Linkit exposing a public Bark push API.
 - **Bilingual UI** — English and Chinese interfaces, with an in-app language
   picker and browser-language default on first visit.
-- **Native Bots** — each Bot has a durable UUID, one human owner, an `sk-…`
-  bearer token, owner transfer, and token rotation. Bots can message a joined
-  group or directly message any Linkit user.
+- **Native Bots** — each Bot is a `users` principal with a durable UUID, one
+  human control owner, an `sk-…` bearer token, owner transfer, and token
+  rotation. A Bot uses the same profile and conversation APIs as a user.
 - **Auth Mini** — setup verifies its `root_user_id` against an Auth Mini JWT;
   normal app requests validate JWTs against the configured issuer and audience.
 
@@ -37,18 +37,20 @@ initialize the instance. The default production issuer is `https://auth.ntnl.io`
 ## Bot API
 
 Create a Bot as its owner in the Linkit UI. The generated token is shown exactly
-once and starts with `sk-`. Send a direct message using its token and the
-recipient's Linkit username:
+once and starts with `sk-`. The token authenticates the Bot at the normal
+`/api` routes. For example, create a group as the Bot:
 
 ```bash
-curl https://linkit.ntnl.io/bot/v1/messages \
+curl https://linkit.ntnl.io/api/conversations \
   -H 'Authorization: Bearer sk-…' \
   -H 'Content-Type: application/json' \
-  -d '{"recipient_username":"alice","body":"Hello from Linkit Bot"}'
+  -d '{"title":"Fund investors","user_ids":["user-uuid"]}'
 ```
 
-For a group, add the Bot in the owner-managed group path and supply its
-`conversation_id` instead. A Bot cannot post into a group it has not joined.
+A Bot can create and own groups, add or remove their members, update its own
+profile, open direct conversations, and send messages through the corresponding
+normal user routes. Only `/api/bots` remains a human-only control plane: Bots
+cannot create, rotate, transfer, or delete Bots.
 
 See [the Bot direct-message guide](docs/bot-direct-messages.md) for the full
 creation flow, token handling, response contract, and error handling.

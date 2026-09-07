@@ -25,7 +25,6 @@ use rand::{Rng, distr::Alphanumeric};
 use rust_embed::RustEmbed;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use sha2::{Digest, Sha256};
 use sqlx::{FromRow, QueryBuilder, Sqlite, SqlitePool, Transaction};
 use sysinfo::{Disks, Networks, System};
 use tower_http::{
@@ -48,8 +47,8 @@ const AVATAR_BACKFILL_INTERVAL: std::time::Duration = std::time::Duration::from_
 const BARK_NOTIFICATION_BODY_MAX_BYTES: usize = 3_000;
 const MESSAGE_PAGE_SIZE: i64 = 50;
 const PUBLIC_PROFILE_BATCH_SIZE: usize = 100;
-const LIST_CONVERSATIONS_QUERY: &str = "SELECT c.id,c.kind,c.title,c.created_by,c.created_at,CASE WHEN c.kind='group' THEN c.avatar_attachment_id END avatar_attachment_id,CASE WHEN c.kind='direct' THEN COALESCE((SELECT p.username FROM conversation_members cm_peer JOIN profiles p ON p.user_id=cm_peer.user_id WHERE cm_peer.conversation_id=c.id AND cm_peer.user_id<>? LIMIT 1),(SELECT b.name FROM conversation_bots cb JOIN bots b ON b.id=cb.bot_id WHERE cb.conversation_id=c.id LIMIT 1)) END counterpart_name,CASE WHEN c.kind='direct' THEN (SELECT p.avatar_attachment_id FROM conversation_members cm_peer JOIN profiles p ON p.user_id=cm_peer.user_id WHERE cm_peer.conversation_id=c.id AND cm_peer.user_id<>? LIMIT 1) END counterpart_avatar_attachment_id,(SELECT body FROM messages WHERE conversation_id=c.id ORDER BY created_at DESC LIMIT 1) latest_body,(SELECT created_at FROM messages WHERE conversation_id=c.id ORDER BY created_at DESC LIMIT 1) latest_at,(SELECT COUNT(*) FROM messages WHERE conversation_id=c.id AND created_at>cm.last_read_at AND sender_id<>?) unread_count FROM conversations c JOIN conversation_members cm ON cm.conversation_id=c.id WHERE cm.user_id=? ORDER BY COALESCE(latest_at,c.created_at) DESC";
-const CONVERSATION_QUERY: &str = "SELECT c.id,c.kind,c.title,c.created_by,c.created_at,CASE WHEN c.kind='group' THEN c.avatar_attachment_id END avatar_attachment_id,CASE WHEN c.kind='direct' THEN COALESCE((SELECT p.username FROM conversation_members cm_peer JOIN profiles p ON p.user_id=cm_peer.user_id WHERE cm_peer.conversation_id=c.id AND cm_peer.user_id<>? LIMIT 1),(SELECT b.name FROM conversation_bots cb JOIN bots b ON b.id=cb.bot_id WHERE cb.conversation_id=c.id LIMIT 1)) END counterpart_name,CASE WHEN c.kind='direct' THEN (SELECT p.avatar_attachment_id FROM conversation_members cm_peer JOIN profiles p ON p.user_id=cm_peer.user_id WHERE cm_peer.conversation_id=c.id AND cm_peer.user_id<>? LIMIT 1) END counterpart_avatar_attachment_id,(SELECT body FROM messages WHERE conversation_id=c.id ORDER BY created_at DESC LIMIT 1) latest_body,(SELECT created_at FROM messages WHERE conversation_id=c.id ORDER BY created_at DESC LIMIT 1) latest_at,(SELECT COUNT(*) FROM messages WHERE conversation_id=c.id AND created_at>cm.last_read_at AND sender_id<>?) unread_count FROM conversations c JOIN conversation_members cm ON cm.conversation_id=c.id WHERE c.id=? AND cm.user_id=?";
+const LIST_CONVERSATIONS_QUERY: &str = "SELECT c.id,c.kind,c.title,c.created_by,c.created_at,CASE WHEN c.kind='group' THEN c.avatar_attachment_id END avatar_attachment_id,CASE WHEN c.kind='direct' THEN COALESCE((SELECT p.username FROM conversation_members cm_peer JOIN profiles p ON p.user_id=cm_peer.user_id WHERE cm_peer.conversation_id=c.id AND cm_peer.user_id<>? LIMIT 1),(SELECT b.name FROM conversation_members cm_peer JOIN bots b ON b.id=cm_peer.user_id WHERE cm_peer.conversation_id=c.id AND cm_peer.user_id<>? LIMIT 1)) END counterpart_name,CASE WHEN c.kind='direct' THEN (SELECT p.avatar_attachment_id FROM conversation_members cm_peer JOIN profiles p ON p.user_id=cm_peer.user_id WHERE cm_peer.conversation_id=c.id AND cm_peer.user_id<>? LIMIT 1) END counterpart_avatar_attachment_id,(SELECT body FROM messages WHERE conversation_id=c.id ORDER BY created_at DESC LIMIT 1) latest_body,(SELECT created_at FROM messages WHERE conversation_id=c.id ORDER BY created_at DESC LIMIT 1) latest_at,(SELECT COUNT(*) FROM messages WHERE conversation_id=c.id AND created_at>cm.last_read_at AND sender_id<>?) unread_count FROM conversations c JOIN conversation_members cm ON cm.conversation_id=c.id WHERE cm.user_id=? ORDER BY COALESCE(latest_at,c.created_at) DESC";
+const CONVERSATION_QUERY: &str = "SELECT c.id,c.kind,c.title,c.created_by,c.created_at,CASE WHEN c.kind='group' THEN c.avatar_attachment_id END avatar_attachment_id,CASE WHEN c.kind='direct' THEN COALESCE((SELECT p.username FROM conversation_members cm_peer JOIN profiles p ON p.user_id=cm_peer.user_id WHERE cm_peer.conversation_id=c.id AND cm_peer.user_id<>? LIMIT 1),(SELECT b.name FROM conversation_members cm_peer JOIN bots b ON b.id=cm_peer.user_id WHERE cm_peer.conversation_id=c.id AND cm_peer.user_id<>? LIMIT 1)) END counterpart_name,CASE WHEN c.kind='direct' THEN (SELECT p.avatar_attachment_id FROM conversation_members cm_peer JOIN profiles p ON p.user_id=cm_peer.user_id WHERE cm_peer.conversation_id=c.id AND cm_peer.user_id<>? LIMIT 1) END counterpart_avatar_attachment_id,(SELECT body FROM messages WHERE conversation_id=c.id ORDER BY created_at DESC LIMIT 1) latest_body,(SELECT created_at FROM messages WHERE conversation_id=c.id ORDER BY created_at DESC LIMIT 1) latest_at,(SELECT COUNT(*) FROM messages WHERE conversation_id=c.id AND created_at>cm.last_read_at AND sender_id<>?) unread_count FROM conversations c JOIN conversation_members cm ON cm.conversation_id=c.id WHERE c.id=? AND cm.user_id=?";
 
 #[derive(Clone)]
 pub struct AppState {
@@ -139,10 +138,6 @@ pub fn router(state: AppState) -> Router {
         )
         .route("/api/bots", get(list_bots).post(create_bot))
         .route("/api/bots/{id}", patch(update_bot).delete(delete_bot))
-        .route(
-            "/api/bots/{id}/groups/{conversation_id}",
-            post(add_bot_to_group).delete(remove_bot_from_group),
-        )
         .route_layer(from_fn_with_state(state.clone(), auth::authenticate))
         .layer(
             CorsLayer::new()
@@ -184,8 +179,6 @@ pub fn router(state: AppState) -> Router {
             get(public_group_avatar),
         )
         .route("/api/setup", get(setup_status).post(setup))
-        .route("/bot/v1/messages", post(bot_send_message))
-        .route("/bot/v1/conversations/{id}", get(bot_conversation))
         .route("/api/bark/b/{capability}/ping", get(bark_binding_ping))
         .route(
             "/api/bark/b/{capability}/register",
@@ -1184,6 +1177,7 @@ async fn list_conversations(
         .bind(&user.id)
         .bind(&user.id)
         .bind(&user.id)
+        .bind(&user.id)
         .fetch_all(&state.db)
         .await?;
     Ok(axum::Json(rows))
@@ -1193,6 +1187,7 @@ async fn list_conversations(
 struct ConversationMember {
     user_id: String,
     username: String,
+    user_type: String,
     role: String,
 }
 
@@ -1201,7 +1196,6 @@ struct ConversationDetail {
     #[serde(flatten)]
     conversation: Conversation,
     members: Vec<ConversationMember>,
-    bots: Vec<Bot>,
 }
 
 async fn conversation_detail(
@@ -1210,18 +1204,13 @@ async fn conversation_detail(
     Path(id): Path<String>,
 ) -> Result<axum::Json<ConversationDetail>, AppError> {
     let conversation = conversation(&state.db, &id, &user.id).await?;
-    let members = sqlx::query_as("SELECT cm.user_id,p.username,cm.role FROM conversation_members cm JOIN profiles p ON p.user_id=cm.user_id WHERE cm.conversation_id=? ORDER BY cm.joined_at")
-        .bind(&id)
-        .fetch_all(&state.db)
-        .await?;
-    let bots = sqlx::query_as("SELECT b.id,b.owner_user_id,b.name,b.token_prefix,b.created_at,b.updated_at FROM bots b JOIN conversation_bots cb ON cb.bot_id=b.id WHERE cb.conversation_id=? ORDER BY cb.added_at")
+    let members = sqlx::query_as("SELECT cm.user_id,p.username,u.type AS user_type,cm.role FROM conversation_members cm JOIN profiles p ON p.user_id=cm.user_id JOIN users u ON u.id=cm.user_id WHERE cm.conversation_id=? ORDER BY cm.joined_at")
         .bind(&id)
         .fetch_all(&state.db)
         .await?;
     Ok(axum::Json(ConversationDetail {
         conversation,
         members,
-        bots,
     }))
 }
 
@@ -1451,11 +1440,12 @@ async fn send_message(
     axum::Json(input): axum::Json<SendMessageInput>,
 ) -> Result<axum::Json<Message>, AppError> {
     require_member(&state.db, &id, &user.id).await?;
+    let sender_kind = sender_kind(&state.db, &user.id).await?;
     let message = create_message(
         &state.db,
         NewMessage {
             conversation_id: &id,
-            sender_kind: "user",
+            sender_kind: &sender_kind,
             sender_id: &user.id,
             body: input.body,
             attachment_ids: input.attachment_ids,
@@ -1590,6 +1580,7 @@ async fn list_bots(
     State(state): State<AppState>,
     axum::Extension(user): axum::Extension<UserIdentity>,
 ) -> Result<axum::Json<Vec<Bot>>, AppError> {
+    require_human(&state.db, &user.id).await?;
     Ok(axum::Json(sqlx::query_as("SELECT id,owner_user_id,name,token_prefix,created_at,updated_at FROM bots WHERE owner_user_id=? ORDER BY created_at DESC").bind(user.id).fetch_all(&state.db).await?))
 }
 
@@ -1598,6 +1589,7 @@ async fn create_bot(
     axum::Extension(user): axum::Extension<UserIdentity>,
     axum::Json(input): axum::Json<CreateBotInput>,
 ) -> Result<axum::Json<CreatedBot>, AppError> {
+    require_human(&state.db, &user.id).await?;
     let name = nonempty(&input.name, "name", 80)?;
     let id = Uuid::new_v4().to_string();
     let token = new_bot_token();
@@ -1610,7 +1602,14 @@ async fn create_bot(
         created_at: now,
         updated_at: now,
     };
-    sqlx::query("INSERT INTO bots(id,owner_user_id,name,token_prefix,token_hash,created_at,updated_at) VALUES(?,?,?,?,?,?,?)").bind(&bot.id).bind(&bot.owner_user_id).bind(&bot.name).bind(&bot.token_prefix).bind(token_hash(&token)).bind(bot.created_at).bind(bot.updated_at).execute(&state.db).await?;
+    let mut tx = state.db.begin().await?;
+    sqlx::query("INSERT INTO users(id,type,created_at) VALUES(?,'bot',?)")
+        .bind(&bot.id)
+        .bind(bot.created_at)
+        .execute(&mut *tx)
+        .await?;
+    sqlx::query("INSERT INTO bots(id,owner_user_id,name,token_prefix,token_hash,created_at,updated_at) VALUES(?,?,?,?,?,?,?)").bind(&bot.id).bind(&bot.owner_user_id).bind(&bot.name).bind(&bot.token_prefix).bind(auth::token_hash(&token)).bind(bot.created_at).bind(bot.updated_at).execute(&mut *tx).await?;
+    tx.commit().await?;
     Ok(axum::Json(CreatedBot { bot, token }))
 }
 
@@ -1634,6 +1633,7 @@ async fn update_bot(
     Path(id): Path<String>,
     axum::Json(input): axum::Json<UpdateBotInput>,
 ) -> Result<axum::Json<UpdatedBot>, AppError> {
+    require_human(&state.db, &user.id).await?;
     let mut bot: Bot = sqlx::query_as(
         "SELECT id,owner_user_id,name,token_prefix,created_at,updated_at FROM bots WHERE id=?",
     )
@@ -1653,7 +1653,7 @@ async fn update_bot(
         .transpose()?
         .unwrap_or_else(|| bot.name.clone());
     let owner = match input.new_owner_username {
-        Some(username) => user_id_from_username(&state.db, &username).await?,
+        Some(username) => human_user_id_from_username(&state.db, &username).await?,
         None => bot.owner_user_id.clone(),
     };
     let token = input.rotate_token.unwrap_or(false).then(new_bot_token);
@@ -1663,7 +1663,7 @@ async fn update_bot(
         .unwrap_or_else(|| bot.token_prefix.clone());
     let now = chrono::Utc::now().timestamp();
     if let Some(token) = &token {
-        sqlx::query("UPDATE bots SET owner_user_id=?,name=?,token_prefix=?,token_hash=?,updated_at=? WHERE id=?").bind(&owner).bind(&name).bind(&prefix).bind(token_hash(token)).bind(now).bind(&id).execute(&state.db).await?;
+        sqlx::query("UPDATE bots SET owner_user_id=?,name=?,token_prefix=?,token_hash=?,updated_at=? WHERE id=?").bind(&owner).bind(&name).bind(&prefix).bind(auth::token_hash(token)).bind(now).bind(&id).execute(&state.db).await?;
     } else {
         sqlx::query("UPDATE bots SET owner_user_id=?,name=?,updated_at=? WHERE id=?")
             .bind(&owner)
@@ -1685,12 +1685,13 @@ async fn delete_bot(
     axum::Extension(user): axum::Extension<UserIdentity>,
     Path(id): Path<String>,
 ) -> Result<StatusCode, AppError> {
+    require_human(&state.db, &user.id).await?;
     delete_owned_bot(&state.db, &id, &user.id).await?;
     Ok(StatusCode::NO_CONTENT)
 }
 
 async fn delete_owned_bot(db: &SqlitePool, id: &str, owner_user_id: &str) -> Result<(), AppError> {
-    let result = sqlx::query("DELETE FROM bots WHERE id=? AND owner_user_id=?")
+    let result = sqlx::query("DELETE FROM users WHERE id=? AND type='bot' AND EXISTS(SELECT 1 FROM bots WHERE id=users.id AND owner_user_id=?)")
         .bind(id)
         .bind(owner_user_id)
         .execute(db)
@@ -1699,115 +1700,6 @@ async fn delete_owned_bot(db: &SqlitePool, id: &str, owner_user_id: &str) -> Res
         return Err(AppError::not_found("bot not found"));
     }
     Ok(())
-}
-
-async fn add_bot_to_group(
-    State(state): State<AppState>,
-    axum::Extension(user): axum::Extension<UserIdentity>,
-    Path((id, conversation_id)): Path<(String, String)>,
-) -> Result<StatusCode, AppError> {
-    let bot: Option<String> =
-        sqlx::query_scalar("SELECT id FROM bots WHERE id=? AND owner_user_id=?")
-            .bind(&id)
-            .bind(&user.id)
-            .fetch_optional(&state.db)
-            .await?;
-    if bot.is_none() {
-        return Err(AppError::not_found("bot not found"));
-    }
-    require_group_owner(&state.db, &conversation_id, &user.id).await?;
-    sqlx::query("INSERT INTO conversation_bots(conversation_id,bot_id,added_at) VALUES(?,?,?) ON CONFLICT DO NOTHING").bind(&conversation_id).bind(id).bind(chrono::Utc::now().timestamp()).execute(&state.db).await?;
-    Ok(StatusCode::NO_CONTENT)
-}
-
-async fn remove_bot_from_group(
-    State(state): State<AppState>,
-    axum::Extension(user): axum::Extension<UserIdentity>,
-    Path((id, conversation_id)): Path<(String, String)>,
-) -> Result<StatusCode, AppError> {
-    require_group_owner(&state.db, &conversation_id, &user.id).await?;
-    let result = sqlx::query("DELETE FROM conversation_bots WHERE conversation_id=? AND bot_id=?")
-        .bind(&conversation_id)
-        .bind(&id)
-        .execute(&state.db)
-        .await?;
-    if result.rows_affected() == 0 {
-        return Err(AppError::not_found("group bot not found"));
-    }
-    Ok(StatusCode::NO_CONTENT)
-}
-
-#[derive(Deserialize)]
-struct BotMessageInput {
-    conversation_id: Option<String>,
-    recipient_username: Option<String>,
-    body: String,
-    attachment_ids: Option<Vec<String>>,
-    #[serde(default)]
-    urgent: bool,
-    client_message_id: Option<String>,
-}
-
-#[derive(Serialize, FromRow)]
-struct BotConversation {
-    id: String,
-    kind: String,
-    title: String,
-}
-
-async fn bot_conversation(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    Path(id): Path<String>,
-) -> Result<axum::Json<BotConversation>, AppError> {
-    let bot = bot_from_headers(&state.db, &headers).await?;
-    let conversation: Option<BotConversation> = sqlx::query_as("SELECT c.id,c.kind,c.title FROM conversations c JOIN conversation_bots cb ON cb.conversation_id=c.id WHERE c.id=? AND cb.bot_id=?")
-        .bind(&id).bind(&bot.id).fetch_optional(&state.db).await?;
-    conversation
-        .map(axum::Json)
-        .ok_or_else(|| AppError::forbidden("bot is not a member of this conversation"))
-}
-
-async fn bot_send_message(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    axum::Json(input): axum::Json<BotMessageInput>,
-) -> Result<axum::Json<Message>, AppError> {
-    let bot = bot_from_headers(&state.db, &headers).await?;
-    let conversation_id = match (input.conversation_id, input.recipient_username) {
-        (Some(id), None) => {
-            let allowed: Option<String> = sqlx::query_scalar("SELECT c.id FROM conversations c JOIN conversation_bots cb ON cb.conversation_id=c.id WHERE c.id=? AND cb.bot_id=?").bind(&id).bind(&bot.id).fetch_optional(&state.db).await?;
-            allowed
-                .ok_or_else(|| AppError::forbidden("bot is not a member of this conversation"))?
-        }
-        (None, Some(username)) => open_bot_direct(&state.db, &bot.id, &username).await?,
-        _ => {
-            return Err(AppError::bad_request(
-                "provide exactly one of conversation_id or recipient_username",
-            ));
-        }
-    };
-    let message = create_message(
-        &state.db,
-        NewMessage {
-            conversation_id: &conversation_id,
-            sender_kind: "bot",
-            sender_id: &bot.id,
-            body: input.body,
-            attachment_ids: input.attachment_ids.unwrap_or_default(),
-            urgent: input.urgent,
-            attachment_owner: None,
-            client_message_id: input.client_message_id,
-        },
-    )
-    .await?;
-    let _ = state.events.send(ConversationEvent {
-        conversation_id: conversation_id.clone(),
-        sender_id: bot.id,
-        message: message.clone(),
-    });
-    dispatch_bark_notifications(state, conversation_id, None, message.clone());
-    Ok(axum::Json(message))
 }
 
 #[derive(FromRow)]
@@ -2369,7 +2261,7 @@ async fn messages_for(
 
     let (mut rows, direction) = if let Some(cursor) = before_cursor {
         let (created_at, sequence) = parse_message_cursor(&cursor)?;
-        let rows = sqlx::query_as("SELECT m.id,m.conversation_id,m.sender_kind,m.sender_id,COALESCE(p.username,b.name,m.sender_id) sender_name,(m.sender_kind='bot' AND b.id IS NULL) sender_deleted,m.body,m.urgent,m.created_at,m.sequence FROM messages m LEFT JOIN profiles p ON m.sender_kind='user' AND p.user_id=m.sender_id LEFT JOIN bots b ON m.sender_kind='bot' AND b.id=m.sender_id WHERE m.conversation_id=? AND (m.created_at<? OR (m.created_at=? AND m.sequence<?)) ORDER BY m.created_at DESC,m.sequence DESC LIMIT ?")
+        let rows = sqlx::query_as("SELECT m.id,m.conversation_id,m.sender_kind,m.sender_id,COALESCE(p.username,b.name,m.sender_id) sender_name,(m.sender_kind='bot' AND b.id IS NULL) sender_deleted,m.body,m.urgent,m.created_at,m.sequence FROM messages m LEFT JOIN profiles p ON p.user_id=m.sender_id LEFT JOIN bots b ON m.sender_kind='bot' AND b.id=m.sender_id WHERE m.conversation_id=? AND (m.created_at<? OR (m.created_at=? AND m.sequence<?)) ORDER BY m.created_at DESC,m.sequence DESC LIMIT ?")
                 .bind(conversation_id)
                 .bind(created_at)
                 .bind(created_at)
@@ -2380,7 +2272,7 @@ async fn messages_for(
         (rows, PageDirection::Older)
     } else if let Some(cursor) = after_cursor {
         let (created_at, sequence) = parse_message_cursor(&cursor)?;
-        let rows = sqlx::query_as("SELECT m.id,m.conversation_id,m.sender_kind,m.sender_id,COALESCE(p.username,b.name,m.sender_id) sender_name,(m.sender_kind='bot' AND b.id IS NULL) sender_deleted,m.body,m.urgent,m.created_at,m.sequence FROM messages m LEFT JOIN profiles p ON m.sender_kind='user' AND p.user_id=m.sender_id LEFT JOIN bots b ON m.sender_kind='bot' AND b.id=m.sender_id WHERE m.conversation_id=? AND (m.created_at>? OR (m.created_at=? AND m.sequence>?)) ORDER BY m.created_at,m.sequence LIMIT ?")
+        let rows = sqlx::query_as("SELECT m.id,m.conversation_id,m.sender_kind,m.sender_id,COALESCE(p.username,b.name,m.sender_id) sender_name,(m.sender_kind='bot' AND b.id IS NULL) sender_deleted,m.body,m.urgent,m.created_at,m.sequence FROM messages m LEFT JOIN profiles p ON p.user_id=m.sender_id LEFT JOIN bots b ON m.sender_kind='bot' AND b.id=m.sender_id WHERE m.conversation_id=? AND (m.created_at>? OR (m.created_at=? AND m.sequence>?)) ORDER BY m.created_at,m.sequence LIMIT ?")
                 .bind(conversation_id)
                 .bind(created_at)
                 .bind(created_at)
@@ -2390,7 +2282,7 @@ async fn messages_for(
                 .await?;
         (rows, PageDirection::Newer)
     } else {
-        let rows = sqlx::query_as("SELECT m.id,m.conversation_id,m.sender_kind,m.sender_id,COALESCE(p.username,b.name,m.sender_id) sender_name,(m.sender_kind='bot' AND b.id IS NULL) sender_deleted,m.body,m.urgent,m.created_at,m.sequence FROM messages m LEFT JOIN profiles p ON m.sender_kind='user' AND p.user_id=m.sender_id LEFT JOIN bots b ON m.sender_kind='bot' AND b.id=m.sender_id WHERE m.conversation_id=? ORDER BY m.created_at DESC,m.sequence DESC LIMIT ?")
+        let rows = sqlx::query_as("SELECT m.id,m.conversation_id,m.sender_kind,m.sender_id,COALESCE(p.username,b.name,m.sender_id) sender_name,(m.sender_kind='bot' AND b.id IS NULL) sender_deleted,m.body,m.urgent,m.created_at,m.sequence FROM messages m LEFT JOIN profiles p ON p.user_id=m.sender_id LEFT JOIN bots b ON m.sender_kind='bot' AND b.id=m.sender_id WHERE m.conversation_id=? ORDER BY m.created_at DESC,m.sequence DESC LIMIT ?")
                 .bind(conversation_id)
                 .bind(MESSAGE_PAGE_SIZE + 1)
                 .fetch_all(db)
@@ -2421,7 +2313,7 @@ async fn messages_for(
 }
 
 async fn message(db: &SqlitePool, id: &str) -> Result<Message, AppError> {
-    let row: StoredMessage = sqlx::query_as("SELECT m.id,m.conversation_id,m.sender_kind,m.sender_id,COALESCE(p.username,b.name,m.sender_id) sender_name,(m.sender_kind='bot' AND b.id IS NULL) sender_deleted,m.body,m.urgent,m.created_at,m.sequence FROM messages m LEFT JOIN profiles p ON m.sender_kind='user' AND p.user_id=m.sender_id LEFT JOIN bots b ON m.sender_kind='bot' AND b.id=m.sender_id WHERE m.id=?").bind(id).fetch_optional(db).await?.ok_or_else(|| AppError::not_found("message not found"))?;
+    let row: StoredMessage = sqlx::query_as("SELECT m.id,m.conversation_id,m.sender_kind,m.sender_id,COALESCE(p.username,b.name,m.sender_id) sender_name,(m.sender_kind='bot' AND b.id IS NULL) sender_deleted,m.body,m.urgent,m.created_at,m.sequence FROM messages m LEFT JOIN profiles p ON p.user_id=m.sender_id LEFT JOIN bots b ON m.sender_kind='bot' AND b.id=m.sender_id WHERE m.id=?").bind(id).fetch_optional(db).await?.ok_or_else(|| AppError::not_found("message not found"))?;
     message_from_row(db, row).await
 }
 
@@ -2431,6 +2323,7 @@ async fn attachments_for(db: &SqlitePool, message_id: &str) -> Result<Vec<Attach
 
 async fn conversation(db: &SqlitePool, id: &str, user_id: &str) -> Result<Conversation, AppError> {
     sqlx::query_as(CONVERSATION_QUERY)
+        .bind(user_id)
         .bind(user_id)
         .bind(user_id)
         .bind(user_id)
@@ -2471,6 +2364,28 @@ async fn require_group_owner(
         ));
     }
     Ok(())
+}
+
+async fn require_human(db: &SqlitePool, user_id: &str) -> Result<(), AppError> {
+    let human: Option<i64> = sqlx::query_scalar("SELECT 1 FROM users WHERE id=? AND type='human'")
+        .bind(user_id)
+        .fetch_optional(db)
+        .await?;
+    if human.is_none() {
+        return Err(AppError::forbidden(
+            "bot credentials cannot manage Bot credentials",
+        ));
+    }
+    Ok(())
+}
+
+async fn sender_kind(db: &SqlitePool, user_id: &str) -> Result<String, AppError> {
+    let user_type: String = sqlx::query_scalar("SELECT type FROM users WHERE id=?")
+        .bind(user_id)
+        .fetch_optional(db)
+        .await?
+        .ok_or_else(|| AppError::unauthorized("authenticated user does not exist"))?;
+    Ok(if user_type == "bot" { "bot" } else { "user" }.to_owned())
 }
 
 async fn require_root(db: &SqlitePool, user_id: &str) -> Result<(), AppError> {
@@ -2550,33 +2465,14 @@ async fn user_id_from_username(db: &SqlitePool, username: &str) -> Result<String
         .ok_or_else(|| AppError::not_found("user not found"))
 }
 
-async fn open_bot_direct(
-    db: &SqlitePool,
-    bot_id: &str,
-    recipient_username: &str,
-) -> Result<String, AppError> {
-    let recipient = user_id_from_username(db, recipient_username).await?;
-    let direct_key = format!("bot:{bot_id}:user:{recipient}");
-    let now = chrono::Utc::now().timestamp();
-    let id = Uuid::new_v4().to_string();
-    let mut tx = db.begin().await?;
-    sqlx::query("INSERT INTO conversations(id,kind,title,direct_key,created_by,created_at) VALUES(?,'direct','',?,?,?) ON CONFLICT(direct_key) DO NOTHING").bind(&id).bind(&direct_key).bind(&recipient).bind(now).execute(&mut *tx).await?;
-    let actual_id: String = sqlx::query_scalar("SELECT id FROM conversations WHERE direct_key=?")
-        .bind(&direct_key)
-        .fetch_one(&mut *tx)
-        .await?;
-    sqlx::query("INSERT INTO conversation_members(conversation_id,user_id,role,joined_at) VALUES(?,?,'member',?) ON CONFLICT DO NOTHING").bind(&actual_id).bind(&recipient).bind(now).execute(&mut *tx).await?;
-    sqlx::query("INSERT INTO conversation_bots(conversation_id,bot_id,added_at) VALUES(?,?,?) ON CONFLICT DO NOTHING").bind(&actual_id).bind(bot_id).bind(now).execute(&mut *tx).await?;
-    tx.commit().await?;
-    Ok(actual_id)
-}
-
-async fn bot_from_headers(db: &SqlitePool, headers: &HeaderMap) -> Result<Bot, AppError> {
-    let token = bearer_token(headers)?;
-    if !token.starts_with("sk-") {
-        return Err(AppError::unauthorized("bot token must start with sk-"));
-    }
-    sqlx::query_as("SELECT id,owner_user_id,name,token_prefix,created_at,updated_at FROM bots WHERE token_hash=?").bind(token_hash(token)).fetch_optional(db).await?.ok_or_else(|| AppError::unauthorized("bot token is invalid"))
+async fn human_user_id_from_username(db: &SqlitePool, username: &str) -> Result<String, AppError> {
+    sqlx::query_scalar(
+        "SELECT p.user_id FROM profiles p JOIN users u ON u.id=p.user_id WHERE p.username=? COLLATE NOCASE AND u.type='human'",
+    )
+    .bind(username.trim())
+    .fetch_optional(db)
+    .await?
+    .ok_or_else(|| AppError::not_found("human user not found"))
 }
 
 async fn meta(db: &SqlitePool, key: &str) -> Result<String, AppError> {
@@ -2692,9 +2588,6 @@ fn new_bot_token() -> String {
             .map(char::from)
             .collect::<String>()
     )
-}
-fn token_hash(token: &str) -> String {
-    format!("{:x}", Sha256::digest(token.as_bytes()))
 }
 
 include!(concat!(env!("OUT_DIR"), "/embedded_assets_fingerprint.rs"));
@@ -3894,6 +3787,10 @@ mod tests {
             .execute(&pool)
             .await
             .unwrap();
+        sqlx::query("INSERT INTO users(id,type,created_at) VALUES('bot','bot',0)")
+            .execute(&pool)
+            .await
+            .unwrap();
         sqlx::query("INSERT INTO bots(id,owner_user_id,name,token_prefix,token_hash,created_at,updated_at) VALUES('bot','owner','Support Bot','sk-support','hash',0,0)")
             .execute(&pool)
             .await
@@ -3902,7 +3799,7 @@ mod tests {
             .execute(&pool)
             .await
             .unwrap();
-        sqlx::query("INSERT INTO conversation_bots(conversation_id,bot_id,added_at) VALUES('conversation','bot',0)")
+        sqlx::query("INSERT INTO conversation_members(conversation_id,user_id,role,joined_at) VALUES('conversation','bot','member',0)")
             .execute(&pool)
             .await
             .unwrap();
@@ -3923,7 +3820,7 @@ mod tests {
                 .await
                 .unwrap();
         let group_membership_count: i64 =
-            sqlx::query_scalar("SELECT COUNT(*) FROM conversation_bots WHERE bot_id='bot'")
+            sqlx::query_scalar("SELECT COUNT(*) FROM conversation_members WHERE user_id='bot'")
                 .fetch_one(&pool)
                 .await
                 .unwrap();
@@ -4023,6 +3920,134 @@ mod tests {
             );
             assert_eq!(group_count().await, 1);
         }
+    }
+
+    #[tokio::test]
+    async fn bot_token_uses_the_standard_profile_and_group_routes() {
+        let pool = db::connect_memory().await.unwrap();
+        for user_id in ["owner", "investor"] {
+            sqlx::query("INSERT INTO users(id,created_at) VALUES(?,0)")
+                .bind(user_id)
+                .execute(&pool)
+                .await
+                .unwrap();
+            sqlx::query(
+                "INSERT INTO profiles(user_id,username,intro,updated_at) VALUES(?,?, '',0)",
+            )
+            .bind(user_id)
+            .bind(user_id)
+            .execute(&pool)
+            .await
+            .unwrap();
+        }
+        let token = "sk-fund-bot-token";
+        sqlx::query("INSERT INTO users(id,type,created_at) VALUES('bot','bot',0)")
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query("INSERT INTO bots(id,owner_user_id,name,token_prefix,token_hash,created_at,updated_at) VALUES('bot','owner','Fund Bot','sk-fund','',0,0)")
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query("UPDATE bots SET token_hash=? WHERE id='bot'")
+            .bind(auth::token_hash(token))
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        let app = router(test_state(pool.clone()));
+        let profile = app
+            .clone()
+            .oneshot(
+                axum::http::Request::builder()
+                    .method("PUT")
+                    .uri("/api/profile")
+                    .header(header::AUTHORIZATION, format!("Bearer {token}"))
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(r#"{"username":"fund-bot","intro":""}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(profile.status(), StatusCode::OK);
+
+        let response = app
+            .clone()
+            .oneshot(
+                axum::http::Request::builder()
+                    .method("POST")
+                    .uri("/api/conversations")
+                    .header(header::AUTHORIZATION, format!("Bearer {token}"))
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(
+                        r#"{"title":"Fund investors","user_ids":["owner","investor"]}"#,
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = response.into_body().collect().await.unwrap().to_bytes();
+        let conversation_id = serde_json::from_slice::<Value>(&body).unwrap()["id"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        let owner: String = sqlx::query_scalar(
+            "SELECT user_id FROM conversation_members WHERE conversation_id=? AND role='owner'",
+        )
+        .bind(&conversation_id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(owner, "bot");
+
+        let sent = app
+            .clone()
+            .oneshot(
+                axum::http::Request::builder()
+                    .method("POST")
+                    .uri(format!("/api/conversations/{conversation_id}/messages"))
+                    .header(header::AUTHORIZATION, format!("Bearer {token}"))
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(
+                        r#"{"body":"Fund group is ready","attachment_ids":[],"urgent":false}"#,
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(sent.status(), StatusCode::OK);
+        let sent_body = sent.into_body().collect().await.unwrap().to_bytes();
+        assert_eq!(
+            serde_json::from_slice::<Value>(&sent_body).unwrap()["sender_kind"],
+            "bot"
+        );
+
+        let legacy = app
+            .clone()
+            .oneshot(
+                axum::http::Request::builder()
+                    .method("POST")
+                    .uri("/bot/v1/messages")
+                    .header(header::AUTHORIZATION, format!("Bearer {token}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(legacy.status(), StatusCode::NOT_FOUND);
+
+        let blocked = app
+            .oneshot(
+                axum::http::Request::builder()
+                    .uri("/api/bots")
+                    .header(header::AUTHORIZATION, format!("Bearer {token}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(blocked.status(), StatusCode::FORBIDDEN);
     }
 
     #[tokio::test]
