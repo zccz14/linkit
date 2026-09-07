@@ -160,7 +160,7 @@ describe("LinkitUserInfo", () => {
     expect(opened.close).toHaveBeenCalled();
   });
 
-  it("shows and maintains a private note when the target has no Linkit profile", async () => {
+  it("edits a private note inline and saves with Enter or blur", async () => {
     const userId = "770e8400-e29b-41d4-a716-446655440000";
     const saved = { user_id: userId, name: "New fund investor", updated_at: 2 };
     const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation((input, init) => {
@@ -175,22 +175,43 @@ describe("LinkitUserInfo", () => {
     const trigger = await screen.findByRole("button", { name: /user information: Fund investor/i });
     fireEvent.click(trigger);
     expect(await screen.findByText("This user's Linkit profile is unavailable.")).toBeInTheDocument();
-    const noteInput = await screen.findByLabelText("Private note");
+    fireEvent.click(await screen.findByRole("button", { name: "Edit private note" }));
+    const noteInput = screen.getByLabelText("Private note");
     expect(noteInput).toHaveValue("Fund investor");
 
     fireEvent.change(noteInput, { target: { value: "New fund investor" } });
-    fireEvent.click(screen.getByRole("button", { name: "Save note" }));
+    fireEvent.submit(noteInput.closest("form")!);
     await screen.findByRole("button", { name: /user information: New fund investor/i });
     expect(fetchMock).toHaveBeenCalledWith(
       `https://linkit.example.test/api/user-notes/${userId}`,
       expect.objectContaining({ method: "PUT", body: JSON.stringify({ name: "New fund investor" }) }),
     );
 
-    fireEvent.click(screen.getByRole("button", { name: "Remove note" }));
-    await screen.findByRole("button", { name: /user information: Unknown user/i });
-    expect(fetchMock).toHaveBeenCalledWith(
+    fireEvent.click(await screen.findByRole("button", { name: "Edit private note" }));
+    const emptyNoteInput = screen.getByLabelText("Private note");
+    fireEvent.change(emptyNoteInput, { target: { value: "" } });
+    fireEvent.blur(emptyNoteInput);
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith(
       `https://linkit.example.test/api/user-notes/${userId}`,
       expect.objectContaining({ method: "DELETE" }),
+    ));
+    await screen.findByRole("button", { name: /user information: Unknown user/i });
+  });
+
+  it("cancels an inline note edit without saving", async () => {
+    const fetchMock = batchFetch([alice], [aliceNote]);
+    renderInfo();
+    fireEvent.click(await screen.findByRole("button", { name: /user information: Fund investor/i }));
+    fireEvent.click(await screen.findByRole("button", { name: "Edit private note" }));
+    const noteInput = screen.getByLabelText("Private note");
+    fireEvent.change(noteInput, { target: { value: "Discarded" } });
+    fireEvent.blur(noteInput);
+    fireEvent.click(screen.getByRole("button", { name: "Cancel note editing" }));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(screen.getAllByText("Fund investor").length).toBeGreaterThan(0);
+    expect(fetchMock).not.toHaveBeenCalledWith(
+      expect.stringContaining(`/api/user-notes/${alice.user_id}`),
+      expect.objectContaining({ method: "PUT" }),
     );
   });
 });
