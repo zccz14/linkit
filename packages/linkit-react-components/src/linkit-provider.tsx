@@ -37,9 +37,9 @@ type LinkitUserInfoCopy = {
   signInToMessage: string;
   popupBlocked: string;
   privateNote: string;
-  privateNoteHint: string;
   privateNotePlaceholder: string;
-  saveNote: string;
+  editNote: string;
+  cancelNote: string;
   savingNote: string;
   removeNote: string;
 };
@@ -696,9 +696,9 @@ function userInfoLabels(value: string): LinkitUserInfoCopy {
       signInToMessage: "登录后才能发送私信。",
       popupBlocked: "浏览器阻止了 Linkit 私聊窗口。",
       privateNote: "私有备注",
-      privateNoteHint: "仅你自己可见。",
       privateNotePlaceholder: "输入备注名",
-      saveNote: "保存备注",
+      editNote: "编辑私有备注",
+      cancelNote: "取消编辑备注",
       savingNote: "正在保存备注…",
       removeNote: "删除备注",
     };
@@ -713,9 +713,9 @@ function userInfoLabels(value: string): LinkitUserInfoCopy {
     signInToMessage: "Sign in to send a direct message.",
     popupBlocked: "Your browser blocked the Linkit conversation window.",
     privateNote: "Private note",
-    privateNoteHint: "Only you can see this.",
     privateNotePlaceholder: "Add a note",
-    saveNote: "Save note",
+    editNote: "Edit private note",
+    cancelNote: "Cancel note editing",
     savingNote: "Saving note…",
     removeNote: "Remove note",
   };
