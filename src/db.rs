@@ -213,4 +213,81 @@ mod tests {
             .unwrap();
         assert_eq!(intro, "Existing introduction");
     }
+
+    #[tokio::test]
+    async fn bot_user_migration_makes_bots_user_principals_and_group_members() {
+        let mut connection = SqliteConnection::connect_with(
+            &"sqlite::memory:".parse::<SqliteConnectOptions>().unwrap(),
+        )
+        .await
+        .unwrap();
+        sqlx::raw_sql(
+            r#"
+            CREATE TABLE users (id TEXT PRIMARY KEY, created_at INTEGER NOT NULL);
+            CREATE TABLE conversations (id TEXT PRIMARY KEY);
+            CREATE TABLE conversation_members (
+              conversation_id TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+              user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+              role TEXT NOT NULL CHECK(role IN ('member','owner')),
+              joined_at INTEGER NOT NULL,
+              PRIMARY KEY(conversation_id,user_id)
+            );
+            CREATE TABLE bots (
+              id TEXT PRIMARY KEY,
+              owner_user_id TEXT NOT NULL REFERENCES users(id),
+              name TEXT NOT NULL,
+              token_prefix TEXT NOT NULL,
+              token_hash TEXT NOT NULL UNIQUE,
+              created_at INTEGER NOT NULL,
+              updated_at INTEGER NOT NULL
+            );
+            CREATE TABLE conversation_bots (
+              conversation_id TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+              bot_id TEXT NOT NULL REFERENCES bots(id) ON DELETE CASCADE,
+              added_at INTEGER NOT NULL,
+              PRIMARY KEY(conversation_id,bot_id)
+            );
+            INSERT INTO users(id,created_at) VALUES('owner',1);
+            INSERT INTO conversations(id) VALUES('group');
+            INSERT INTO bots(id,owner_user_id,name,token_prefix,token_hash,created_at,updated_at)
+            VALUES('bot','owner','Fund Bot','sk-prefix','hash',2,2);
+            INSERT INTO conversation_bots(conversation_id,bot_id,added_at)
+            VALUES('group','bot',3);
+            "#,
+        )
+        .execute(&mut connection)
+        .await
+        .unwrap();
+
+        sqlx::raw_sql(include_str!("../migrations/20260907000001_bot_users.sql"))
+            .execute(&mut connection)
+            .await
+            .unwrap();
+
+        let bot_type: String = sqlx::query_scalar("SELECT type FROM users WHERE id='bot'")
+            .fetch_one(&mut connection)
+            .await
+            .unwrap();
+        let owner_type: String = sqlx::query_scalar("SELECT type FROM users WHERE id='owner'")
+            .fetch_one(&mut connection)
+            .await
+            .unwrap();
+        let member_role: String = sqlx::query_scalar(
+            "SELECT role FROM conversation_members WHERE conversation_id='group' AND user_id='bot'",
+        )
+        .fetch_one(&mut connection)
+        .await
+        .unwrap();
+        let bot_user_fk: String = sqlx::query_scalar(
+            "SELECT \"table\" FROM pragma_foreign_key_list('bots') WHERE \"from\"='id'",
+        )
+        .fetch_one(&mut connection)
+        .await
+        .unwrap();
+
+        assert_eq!(bot_type, "bot");
+        assert_eq!(owner_type, "human");
+        assert_eq!(member_role, "member");
+        assert_eq!(bot_user_fk, "users");
+    }
 }

@@ -34,9 +34,9 @@ export type ConversationDetail = Conversation & {
   members: Array<{
     user_id: string;
     username: string;
-      role: string;
+    user_type: "human" | "bot";
+    role: string;
   }>;
-  bots: Bot[];
 };
 
 export type Message = {

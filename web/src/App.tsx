@@ -99,14 +99,6 @@ import {
   FieldLabel,
 } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
-import {
-  Select,
-  SelectContent,
-  SelectGroup,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
 import { Separator } from "@/components/ui/separator";
 import { Toaster } from "@/components/ui/sonner";
 import { Textarea } from "@/components/ui/textarea";
@@ -1240,15 +1232,10 @@ function GroupManagementContent({
     detail.avatar_attachment_id ?? "",
   );
   const [username, setUsername] = useState("");
-  const [botId, setBotId] = useState("");
   useEffect(() => {
     setGroupTitle(detail.title);
     setGroupAvatar(detail.avatar_attachment_id ?? "");
   }, [detail.avatar_attachment_id, detail.id, detail.title]);
-  const bots = useQuery({
-    queryKey: ["bots"],
-    queryFn: () => api<Bot[]>(sdk, "/api/bots"),
-  });
   const refresh = () =>
     void queryClient.invalidateQueries({
       queryKey: ["conversation", detail.id],
@@ -1317,30 +1304,8 @@ function GroupManagementContent({
     },
     onError: (error) => toast.error(error.message),
   });
-  const addBot = useMutation({
-    mutationFn: () =>
-      api(sdk, `/api/bots/${botId}/groups/${detail.id}`, { method: "POST" }),
-    onSuccess: () => {
-      setBotId("");
-      refresh();
-      toast.success(t("conversation.addBotSuccess"));
-    },
-    onError: (error) => toast.error(error.message),
-  });
-  const removeBot = useMutation({
-    mutationFn: (id: string) =>
-      api(sdk, `/api/bots/${id}/groups/${detail.id}`, { method: "DELETE" }),
-    onSuccess: () => {
-      refresh();
-      toast.success(t("conversation.removeBotSuccess"));
-    },
-    onError: (error) => toast.error(error.message),
-  });
   const isOwner = detail.members.some(
     (member) => member.user_id === me.id && member.role === "owner",
-  );
-  const availableBots = (bots.data ?? []).filter(
-    (bot) => !detail.bots.some((member) => member.id === bot.id),
   );
 
   return (
@@ -1436,6 +1401,9 @@ function GroupManagementContent({
                 {member.role === "owner" ? (
                   <Badge variant="secondary">{t("conversation.owner")}</Badge>
                 ) : null}
+                {member.user_type === "bot" ? (
+                  <Badge variant="secondary">{t("conversation.bot")}</Badge>
+                ) : null}
                 {isOwner && member.role !== "owner" ? (
                   <Button
                     variant="ghost"
@@ -1471,74 +1439,6 @@ function GroupManagementContent({
                 {t("conversation.addMember")}
               </Button>
             </form>
-          ) : null}
-        </section>
-        <Separator />
-        <section className="flex flex-col gap-3">
-          <div className="flex items-center justify-between">
-            <h2 className="font-medium">{t("navigation.bots")}</h2>
-            <Badge variant="secondary">{detail.bots.length}</Badge>
-          </div>
-          {detail.bots.length ? (
-            <div className="flex flex-col gap-1">
-              {detail.bots.map((bot) => (
-                <div
-                  key={bot.id}
-                  className="flex items-center gap-3 rounded-lg px-2 py-2"
-                >
-                  <Avatar>
-                    <AvatarFallback>
-                      <BotIcon />
-                    </AvatarFallback>
-                  </Avatar>
-                  <p className="min-w-0 flex-1 truncate text-sm font-medium">
-                    {bot.name}
-                  </p>
-                  {isOwner ? (
-                    <Button
-                      variant="ghost"
-                      size="icon-sm"
-                      aria-label={t("conversation.removeBot")}
-                      disabled={removeBot.isPending}
-                      onClick={() => removeBot.mutate(bot.id)}
-                    >
-                      <XIcon />
-                    </Button>
-                  ) : null}
-                </div>
-              ))}
-            </div>
-          ) : null}
-          {isOwner ? (
-            <Field>
-              <FieldLabel>{t("conversation.addBot")}</FieldLabel>
-              <div className="flex gap-2">
-                <Select
-                  value={botId || null}
-                  onValueChange={(value) => setBotId(value ?? "")}
-                >
-                  <SelectTrigger className="min-w-0 flex-1">
-                    <SelectValue placeholder={t("conversation.selectBot")} />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectGroup>
-                      {availableBots.map((bot) => (
-                        <SelectItem key={bot.id} value={bot.id}>
-                          {bot.name}
-                        </SelectItem>
-                      ))}
-                    </SelectGroup>
-                  </SelectContent>
-                </Select>
-                <Button
-                  disabled={!botId || addBot.isPending}
-                  onClick={() => addBot.mutate()}
-                >
-                  <BotIcon data-icon="inline-start" />
-                  {t("conversation.addBot")}
-                </Button>
-              </div>
-            </Field>
           ) : null}
         </section>
       </div>

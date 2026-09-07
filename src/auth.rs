@@ -6,6 +6,7 @@ use axum::{
     middleware::Next,
     response::{IntoResponse, Response},
 };
+use sha2::{Digest, Sha256};
 use tokio::sync::RwLock;
 
 use crate::{AppError, AppState};
@@ -67,6 +68,23 @@ pub async fn authenticate(
         Some(token) => token,
         None => return AppError::unauthorized("invalid or expired bearer token").into_response(),
     };
+    if token.starts_with("sk-") {
+        let bot_id = sqlx::query_scalar(
+            "SELECT b.id FROM bots b JOIN users u ON u.id=b.id WHERE b.token_hash=? AND u.type='bot'",
+        )
+        .bind(token_hash(token))
+        .fetch_optional(&state.db)
+        .await;
+        let bot_id: Option<String> = match bot_id {
+            Ok(value) => value,
+            Err(error) => return AppError::from(error).into_response(),
+        };
+        let Some(id) = bot_id else {
+            return AppError::unauthorized("invalid or expired bearer token").into_response();
+        };
+        request.extensions_mut().insert(UserIdentity { id });
+        return next.run(request).await;
+    }
     let layers = match state.auth.layers().await {
         Ok(layers) => layers,
         Err(error) => return error.into_response(),
@@ -103,8 +121,22 @@ pub async fn authenticate(
     {
         return AppError::from(error).into_response();
     }
+    let user_type: Result<Option<String>, sqlx::Error> =
+        sqlx::query_scalar("SELECT type FROM users WHERE id=?")
+            .bind(&identity.id)
+            .fetch_optional(&state.db)
+            .await;
+    match user_type {
+        Ok(Some(user_type)) if user_type == "human" => {}
+        Ok(_) => return AppError::unauthorized("invalid or expired bearer token").into_response(),
+        Err(error) => return AppError::from(error).into_response(),
+    }
     request.extensions_mut().insert(identity);
     next.run(request).await
+}
+
+pub(crate) fn token_hash(token: &str) -> String {
+    format!("{:x}", Sha256::digest(token.as_bytes()))
 }
 
 fn bearer_token(headers: &axum::http::HeaderMap) -> Option<&str> {

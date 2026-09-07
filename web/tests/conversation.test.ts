@@ -3,7 +3,7 @@ import test from "node:test";
 
 import { updatedConversationDetail } from "../src/lib/conversation.ts";
 
-test("updating a group avatar preserves the loaded group members and bots", () => {
+test("updating a group avatar preserves the loaded group members", () => {
   const detail = {
     id: "group",
     kind: "group" as const,
@@ -12,8 +12,9 @@ test("updating a group avatar preserves the loaded group members and bots", () =
     created_by: "owner",
     created_at: 0,
     unread_count: 0,
-    members: [{ user_id: "owner", username: "owner", role: "owner" }],
-    bots: [],
+    members: [
+      { user_id: "owner", username: "owner", user_type: "human", role: "owner" },
+    ],
   };
   const updated = updatedConversationDetail(detail, {
     title: "After",
@@ -22,5 +23,4 @@ test("updating a group avatar preserves the loaded group members and bots", () =
   assert.equal(updated?.title, "After");
   assert.equal(updated?.avatar_attachment_id, "group-avatar");
   assert.deepEqual(updated?.members, detail.members);
-  assert.deepEqual(updated?.bots, detail.bots);
 });
