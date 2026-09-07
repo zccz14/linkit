@@ -23,7 +23,7 @@
 - `LinkitConversationDisplay` renders a group or direct conversation identity.
 - `LinkitMyInfo` renders the package-owned application-header account trigger, Linkit inbox action with unread-message badge, and Base UI dialog for username, intro, avatar upload, UID copy, passkey registration, sign-in-method settings, and sign out. It accepts no props: language, profile state, unread count, navigation, save, and sign-out behavior are owned by `LinkitProvider` and available through `useLinkit`.
 - `LinkitUserPicker` searches username prefixes and UUID-character `user_id` prefixes, then writes the chosen `user_id` in controlled or uncontrolled form usage.
-- `LinkitUserInfo` accepts only `userId` and optional `compact`. Its inline avatar, username, complete `user_id`, localized fixed copy, cached public profile lookup, and Linkit direct-message action are owned by `LinkitProvider`. Multiple uncached IDs are deduplicated and fetched through one debounced public batch request; a direct-message action always opens the corresponding Linkit conversation in a new window.
+- `LinkitUserInfo` accepts only `userId` and optional `compact`. Its inline avatar, username, complete `user_id`, localized fixed copy, cached public profile lookup, private note, and Linkit direct-message action are owned by `LinkitProvider`. Multiple uncached IDs are deduplicated and fetched through debounced profile and private-note batches; a direct-message action always opens the corresponding Linkit conversation in a new window. A private note belongs only to the authenticated viewer, overrides the inline display name, remains available when the target has not initialized a Linkit profile, and is never included in public profile data.
 - `LinkitEmbeddedConversation` mounts a complete member-authorized direct or group conversation for a specific `conversationId`: it loads history, supports earlier-message paging, receives new message events with a bounded polling fallback, renders attachments, and includes file upload, urgent-message and accessible message-compose controls. The component never accepts a token, user ID, or membership flag from its consumer.
 
 ## Embedded conversation
@@ -45,9 +45,13 @@ A Linkit username is the sole human-readable user identity. Linkit trims it befo
 
 `LinkitProfile` contains `user_id`, `username`, optional `avatar_url`, optional `intro`, optional `avatar_attachment_id`, and optional `updated_at`. There is no nickname or `display_name` field.
 
+`LinkitUserNote` contains the target `user_id`, the viewer-owned `name`, and `updated_at`. It is read and written only by `LinkitProvider`'s authenticated user-info flow; applications must not proxy or persist another user's note data.
+
 ## Public data and CORS
 
 `getProfile(userId)` reads the minimal public profile without sending a Bearer token. `LinkitUserInfo` uses `POST /api/public/profiles/batch` internally for debounced batches of up to 100 IDs; missing profiles are represented by their absence from the returned list and cached as unavailable. Public profile data contains `user_id`, `username`, the user-authored `intro`, and optional versioned public `avatar_url`; search data remains limited to `user_id`, `username`, and optional avatar URL. Neither response exposes attachment IDs, email, login methods, sessions, or security data. Authenticated API calls require an outer token whose `aud` includes `linkit.ntnl.io`; Bearer CORS never enables credentials. The `LinkitUserInfo` direct-message action opens a protected Linkit conversation through `openDirectConversation(username)` and navigates a new Linkit window using only the returned conversation ID—no token is added to the URL.
+
+When the outer Auth Mini session is authenticated, `LinkitUserInfo` separately batches its private notes through `POST /api/user-notes/batch`, then saves or deletes a note through the corresponding `/api/user-notes/{user_id}` route. The server derives the note owner exclusively from that Bearer identity; neither the SDK nor the API accepts an owner ID, and the target ID does not need a Linkit profile or local Linkit user row.
 
 ## Styles and dependencies
 

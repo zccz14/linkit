@@ -17,6 +17,7 @@ import type {
   LinkitMessagePage,
   LinkitProfile,
   LinkitProfileUpdate,
+  LinkitUserNote,
   LinkitUserSearchResult,
 } from "./types.js";
 
@@ -35,6 +36,12 @@ type LinkitUserInfoCopy = {
   cannotMessageYourself: string;
   signInToMessage: string;
   popupBlocked: string;
+  privateNote: string;
+  privateNoteHint: string;
+  privateNotePlaceholder: string;
+  saveNote: string;
+  savingNote: string;
+  removeNote: string;
 };
 
 type LinkitUserInfoContextValue = {
@@ -42,10 +49,16 @@ type LinkitUserInfoContextValue = {
   openDirectConversation: (userId: string, username: string) => Promise<void>;
   profiles: ReadonlyMap<string, LinkitProfile | null>;
   requestProfiles: (userIds: readonly string[]) => void;
+  notesEnabled: boolean;
+  notes: ReadonlyMap<string, LinkitUserNote | null>;
+  requestNotes: (userIds: readonly string[]) => void;
+  saveNote: (userId: string, name: string) => Promise<LinkitUserNote>;
+  deleteNote: (userId: string) => Promise<void>;
 };
 
 const profileBatchDelayMs = 40;
 const profileBatchSize = 100;
+const userNoteBatchSize = 100;
 
 type LinkitMessageEvent = {
   conversation_id: string;
@@ -116,10 +129,21 @@ export function LinkitProvider({
   const [profiles, setProfiles] = useState<Map<string, LinkitProfile | null>>(
     () => new Map(),
   );
+  const [notes, setNotes] = useState<Map<string, LinkitUserNote | null>>(
+    () => new Map(),
+  );
   const profilesRef = useRef(profiles);
+  const notesRef = useRef(notes);
   const pendingProfileIds = useRef(new Set<string>());
   const requestedProfileIds = useRef(new Set<string>());
+  const pendingNoteIds = useRef(new Set<string>());
+  const requestedNoteIds = useRef(new Set<string>());
+  const noteRevisions = useRef(new Map<string, number>());
+  const noteCacheGeneration = useRef(0);
   const profileBatchTimer = useRef<ReturnType<typeof setTimeout> | undefined>(
+    undefined,
+  );
+  const noteBatchTimer = useRef<ReturnType<typeof setTimeout> | undefined>(
     undefined,
   );
   const storeProfiles = useCallback(
@@ -131,6 +155,28 @@ export function LinkitProvider({
     },
     [],
   );
+  const storeNotes = useCallback(
+    (updates: ReadonlyMap<string, LinkitUserNote | null>) => {
+      const next = new Map(notesRef.current);
+      for (const [userId, note] of updates) next.set(userId, note);
+      notesRef.current = next;
+      setNotes(next);
+    },
+    [],
+  );
+  const clearNotes = useCallback(() => {
+    if (noteBatchTimer.current) {
+      clearTimeout(noteBatchTimer.current);
+      noteBatchTimer.current = undefined;
+    }
+    pendingNoteIds.current.clear();
+    requestedNoteIds.current.clear();
+    noteRevisions.current.clear();
+    noteCacheGeneration.current += 1;
+    const next = new Map<string, LinkitUserNote | null>();
+    notesRef.current = next;
+    setNotes(next);
+  }, []);
   const requestRaw = useCallback(
     async (path: string, init: RequestInit = {}) => {
       const target = resolvePath(baseUrl, path);
@@ -242,9 +288,103 @@ export function LinkitProvider({
     },
     [flushProfileBatch],
   );
+  const flushUserNoteBatch = useCallback(async () => {
+    noteBatchTimer.current = undefined;
+    const userIds = [...pendingNoteIds.current];
+    pendingNoteIds.current.clear();
+    if (!userIds.length) return;
+    const generation = noteCacheGeneration.current;
+    const revisions = new Map(
+      userIds.map((userId) => [userId, noteRevisions.current.get(userId)]),
+    );
+    try {
+      const notes = (
+        await Promise.all(
+          Array.from(
+            { length: Math.ceil(userIds.length / userNoteBatchSize) },
+            (_, index) =>
+              request<LinkitUserNote[]>("/api/user-notes/batch", {
+                method: "POST",
+                body: JSON.stringify({
+                  user_ids: userIds.slice(
+                    index * userNoteBatchSize,
+                    (index + 1) * userNoteBatchSize,
+                  ),
+                }),
+              }),
+          ),
+        )
+      ).flat();
+      if (generation !== noteCacheGeneration.current) return;
+      const byUserId = new Map(notes.map((note) => [note.user_id, note]));
+      const updates = new Map<string, LinkitUserNote | null>();
+      for (const userId of userIds) {
+        if (noteRevisions.current.get(userId) === revisions.get(userId)) {
+          updates.set(userId, byUserId.get(userId) ?? null);
+        }
+      }
+      if (updates.size) storeNotes(updates);
+    } catch {
+      if (generation === noteCacheGeneration.current) {
+        const updates = new Map<string, LinkitUserNote | null>();
+        for (const userId of userIds) {
+          if (noteRevisions.current.get(userId) === revisions.get(userId)) {
+            updates.set(userId, null);
+          }
+        }
+        if (updates.size) storeNotes(updates);
+      }
+    } finally {
+      for (const userId of userIds) requestedNoteIds.current.delete(userId);
+    }
+  }, [request, storeNotes]);
+  const requestNotes = useCallback(
+    (userIds: readonly string[]) => {
+      if (!auth.isAuthenticated) return;
+      for (const userId of new Set(userIds)) {
+        if (!userId || notesRef.current.has(userId) || requestedNoteIds.current.has(userId)) continue;
+        requestedNoteIds.current.add(userId);
+        pendingNoteIds.current.add(userId);
+      }
+      if (!pendingNoteIds.current.size || noteBatchTimer.current) return;
+      noteBatchTimer.current = setTimeout(() => {
+        void flushUserNoteBatch();
+      }, profileBatchDelayMs);
+    },
+    [auth.isAuthenticated, flushUserNoteBatch],
+  );
+  const saveUserNote = useCallback(
+    async (userId: string, name: string) => {
+      const note = await request<LinkitUserNote>(
+        `/api/user-notes/${encodeURIComponent(userId)}`,
+        { method: "PUT", body: JSON.stringify({ name }) },
+      );
+      noteRevisions.current.set(
+        userId,
+        (noteRevisions.current.get(userId) ?? 0) + 1,
+      );
+      storeNotes(new Map([[userId, note]]));
+      return note;
+    },
+    [request, storeNotes],
+  );
+  const deleteUserNote = useCallback(
+    async (userId: string) => {
+      await request<void>(`/api/user-notes/${encodeURIComponent(userId)}`, {
+        method: "DELETE",
+      });
+      noteRevisions.current.set(
+        userId,
+        (noteRevisions.current.get(userId) ?? 0) + 1,
+      );
+      storeNotes(new Map([[userId, null]]));
+    },
+    [request, storeNotes],
+  );
   useEffect(
     () => () => {
       if (profileBatchTimer.current) clearTimeout(profileBatchTimer.current);
+      if (noteBatchTimer.current) clearTimeout(noteBatchTimer.current);
     },
     [],
   );
@@ -321,21 +461,23 @@ export function LinkitProvider({
   const signOut = useCallback(async () => {
     await auth.signOut();
     clearProfiles();
+    clearNotes();
     setMyProfile(null);
     setMyProfileError(null);
     setMyProfileLoading(false);
     setMyUserId(null);
     setUnreadMessageCount(0);
-  }, [auth, clearProfiles]);
+  }, [auth, clearNotes, clearProfiles]);
   useEffect(() => {
     if (auth.isAuthenticated) return;
     clearProfiles();
+    clearNotes();
     setMyProfile(null);
     setMyProfileError(null);
     setMyProfileLoading(false);
     setMyUserId(null);
     setUnreadMessageCount(0);
-  }, [auth.isAuthenticated, clearProfiles]);
+  }, [auth.isAuthenticated, clearNotes, clearProfiles]);
   const openLinkitInbox = useCallback(() => {
     window.open(linkitInboxUrl(baseUrl), "_blank", "noopener,noreferrer");
   }, [baseUrl]);
@@ -461,8 +603,23 @@ export function LinkitProvider({
       openDirectConversation: openUserDirectConversation,
       profiles,
       requestProfiles,
+      notesEnabled: auth.isAuthenticated,
+      notes,
+      requestNotes,
+      saveNote: saveUserNote,
+      deleteNote: deleteUserNote,
     }),
-    [openUserDirectConversation, profiles, requestProfiles, userInfoCopy],
+    [
+      auth.isAuthenticated,
+      deleteUserNote,
+      notes,
+      openUserDirectConversation,
+      profiles,
+      requestNotes,
+      requestProfiles,
+      saveUserNote,
+      userInfoCopy,
+    ],
   );
   return (
     <LinkitContext.Provider value={value}>
@@ -484,12 +641,18 @@ export function useLinkitUserInfo(userId: string) {
   if (!value) throw new Error("LinkitUserInfo must be used within LinkitProvider.");
   useEffect(() => {
     value.requestProfiles([userId]);
+    value.requestNotes([userId]);
   }, [userId, value]);
   return {
     copy: value.copy,
     openDirectConversation: value.openDirectConversation,
     profile: value.profiles.get(userId) ?? null,
     loading: !value.profiles.has(userId),
+    note: value.notes.get(userId) ?? null,
+    noteLoading: value.notesEnabled && !value.notes.has(userId),
+    notesEnabled: value.notesEnabled,
+    saveNote: (name: string) => value.saveNote(userId, name),
+    deleteNote: () => value.deleteNote(userId),
   };
 }
 
@@ -532,6 +695,12 @@ function userInfoLabels(value: string): LinkitUserInfoCopy {
       cannotMessageYourself: "不能向自己发送私信。",
       signInToMessage: "登录后才能发送私信。",
       popupBlocked: "浏览器阻止了 Linkit 私聊窗口。",
+      privateNote: "私有备注",
+      privateNoteHint: "仅你自己可见。",
+      privateNotePlaceholder: "输入备注名",
+      saveNote: "保存备注",
+      savingNote: "正在保存备注…",
+      removeNote: "删除备注",
     };
   }
   return {
@@ -543,6 +712,12 @@ function userInfoLabels(value: string): LinkitUserInfoCopy {
     cannotMessageYourself: "You can't send a direct message to yourself.",
     signInToMessage: "Sign in to send a direct message.",
     popupBlocked: "Your browser blocked the Linkit conversation window.",
+    privateNote: "Private note",
+    privateNoteHint: "Only you can see this.",
+    privateNotePlaceholder: "Add a note",
+    saveNote: "Save note",
+    savingNote: "Saving note…",
+    removeNote: "Remove note",
   };
 }
 

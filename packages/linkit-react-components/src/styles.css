@@ -81,6 +81,18 @@
 .linkit-user-info__detail-username { font-size: 1rem; font-weight: 650; }
 .linkit-user-info__detail-id { overflow-wrap: anywhere; color: var(--muted-foreground, #64748b); font-size: .75rem; }
 .linkit-user-info__intro { color: var(--muted-foreground, #64748b); font-size: .875rem; line-height: 1.5; white-space: pre-wrap; }
+.linkit-user-info__note { display: grid; gap: .45rem; }
+.linkit-user-info__note label { display: grid; gap: .35rem; color: var(--foreground, #0f172a); font-size: .8rem; font-weight: 600; }
+.linkit-user-info__note input { min-width: 0; min-height: 2.4rem; padding: .5rem .65rem; color: inherit; font: inherit; font-size: .875rem; background: var(--background, #fff); border: 1px solid var(--border, #e2e8f0); border-radius: .5rem; }
+.linkit-user-info__note input:focus-visible { outline: 3px solid color-mix(in srgb, var(--ring, #2563eb) 55%, transparent); outline-offset: 1px; }
+.linkit-user-info__note input:disabled { cursor: wait; opacity: .65; }
+.linkit-user-info__note p { margin: 0; color: var(--muted-foreground, #64748b); font-size: .75rem; }
+.linkit-user-info__note-actions { display: flex; flex-wrap: wrap; gap: .5rem; }
+.linkit-user-info__note-save, .linkit-user-info__note-remove { display: inline-flex; min-height: 2.2rem; align-items: center; justify-content: center; gap: .35rem; padding: .45rem .65rem; font: inherit; font-size: .8rem; font-weight: 600; cursor: pointer; border: 1px solid var(--border, #e2e8f0); border-radius: .5rem; }
+.linkit-user-info__note-save { color: var(--primary-foreground, #fff); background: var(--primary, #0f172a); border-color: var(--primary, #0f172a); }
+.linkit-user-info__note-remove { color: var(--destructive, #b91c1c); background: transparent; }
+.linkit-user-info__note-save:disabled, .linkit-user-info__note-remove:disabled { cursor: not-allowed; opacity: .55; }
+.linkit-user-info__note-save:focus-visible, .linkit-user-info__note-remove:focus-visible { outline: 3px solid color-mix(in srgb, var(--ring, #2563eb) 55%, transparent); outline-offset: 2px; }
 .linkit-user-info__separator { width: 100%; height: 1px; background: var(--border, #e2e8f0); }
 .linkit-user-info__dm { display: inline-flex; min-height: 2.5rem; align-items: center; justify-content: center; gap: .4rem; padding: .5rem .75rem; color: var(--primary-foreground, #fff); font: inherit; font-size: .875rem; font-weight: 600; cursor: pointer; background: var(--primary, #0f172a); border: 0; border-radius: .5rem; }
 .linkit-user-info__dm:hover:not(:disabled) { background: color-mix(in srgb, var(--primary, #0f172a) 84%, black); }

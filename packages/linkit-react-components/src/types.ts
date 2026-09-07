@@ -21,6 +21,12 @@ export type LinkitProfileUpdate = {
   avatar_attachment_id?: string;
 };
 
+export type LinkitUserNote = {
+  user_id: string;
+  name: string;
+  updated_at: number;
+};
+
 export type LinkitConversation = {
   id: string;
   kind: "direct" | "group";
