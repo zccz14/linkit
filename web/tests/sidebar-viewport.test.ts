@@ -3,23 +3,43 @@ import { readFileSync } from "node:fs";
 import test from "node:test";
 
 const app = readFileSync(new URL("../src/App.tsx", import.meta.url), "utf8");
+const sidebar = readFileSync(
+  new URL("../src/components/ui/sidebar.tsx", import.meta.url),
+  "utf8",
+);
 
-test("desktop shell keeps all sidebar regions reachable through one internal scroller", () => {
+test("shell uses one responsive drawer and a shared app header", () => {
   assert.match(
     app,
-    /<div className="grid h-dvh min-h-0 grid-cols-\[17rem_1fr\] overflow-hidden bg-muted\/30 max-md:grid-cols-1">/,
+    /<TooltipProvider>\s*<SidebarProvider className="h-dvh">\s*<LinkitShell/,
   );
   assert.match(
     app,
-    /<aside className="flex min-h-0 flex-col gap-4 overflow-y-auto border-r bg-background p-4 max-md:hidden">/,
+    /<Sidebar collapsible="icon">[\s\S]*?<SidebarHeader[\s\S]*?<SidebarContent>[\s\S]*?<SidebarFooter/,
   );
   assert.match(
     app,
-    /<div>\{conversationList\}<\/div>\s*<div className="mt-auto flex items-center gap-2 border-t pt-4">/,
+    /<SidebarInset>[\s\S]*?<SidebarTrigger \/>[\s\S]*?<Routes>/,
   );
-  assert.doesNotMatch(app, /min-h-0 flex-1 overflow-y-auto/);
   assert.match(
     app,
-    /<main className="min-h-0 min-w-0 overflow-y-auto">\s*<Routes>/,
+    /function ConversationIndex[\s\S]*?return <ConversationListPage conversations=\{conversations\} sdk=\{sdk\} \/>;/,
   );
+  assert.doesNotMatch(app, /function MobileNavigator/);
+  assert.doesNotMatch(app, /<div>\{conversationList\}<\/div>/);
+});
+
+test("the shared sidebar renders its navigation once on mobile", () => {
+  const sidebarComponent = sidebar.slice(
+    sidebar.indexOf("function Sidebar({"),
+    sidebar.indexOf("function SidebarTrigger"),
+  );
+  const mobileBranch = sidebarComponent.slice(
+    sidebarComponent.indexOf("if (isMobile) {"),
+    sidebarComponent.indexOf(
+      "\n\n  return (",
+      sidebarComponent.indexOf("if (isMobile) {"),
+    ),
+  );
+  assert.equal((mobileBranch.match(/\{children\}/g) ?? []).length, 1);
 });
