@@ -121,7 +121,9 @@ pub fn router(state: AppState) -> Router {
         )
         .route(
             "/api/conversations/{id}",
-            get(conversation_detail).patch(update_group_title),
+            get(conversation_detail)
+                .patch(update_group_title)
+                .delete(delete_group),
         )
         .route("/api/conversations/direct/{username}", post(open_direct))
         .route(
@@ -1310,7 +1312,7 @@ async fn conversation_detail(
     Path(id): Path<String>,
 ) -> Result<axum::Json<ConversationDetail>, AppError> {
     let conversation = conversation(&state.db, &id, &user.id).await?;
-    let members = sqlx::query_as("SELECT cm.user_id,p.username,u.type AS user_type,cm.role FROM conversation_members cm JOIN profiles p ON p.user_id=cm.user_id JOIN users u ON u.id=cm.user_id WHERE cm.conversation_id=? ORDER BY cm.joined_at")
+    let members = sqlx::query_as("SELECT cm.user_id,COALESCE(p.username,cm.user_id) username,u.type AS user_type,cm.role FROM conversation_members cm JOIN users u ON u.id=cm.user_id LEFT JOIN profiles p ON p.user_id=cm.user_id WHERE cm.conversation_id=? ORDER BY cm.joined_at")
         .bind(&id)
         .fetch_all(&state.db)
         .await?;
@@ -1376,6 +1378,22 @@ async fn update_group_title(
     conversation(&state.db, &id, &user.id).await.map(axum::Json)
 }
 
+async fn delete_group(
+    State(state): State<AppState>,
+    axum::Extension(user): axum::Extension<UserIdentity>,
+    Path(id): Path<String>,
+) -> Result<StatusCode, AppError> {
+    require_group_owner(&state.db, &id, &user.id).await?;
+    let result = sqlx::query("DELETE FROM conversations WHERE id=? AND kind='group'")
+        .bind(&id)
+        .execute(&state.db)
+        .await?;
+    if result.rows_affected() == 0 {
+        return Err(AppError::not_found("conversation not found"));
+    }
+    Ok(StatusCode::NO_CONTENT)
+}
+
 async fn create_group(
     State(state): State<AppState>,
     axum::Extension(user): axum::Extension<UserIdentity>,
@@ -1433,7 +1451,7 @@ async fn open_direct(
 
 #[derive(Deserialize)]
 struct MemberInput {
-    username: String,
+    user_id: String,
 }
 
 async fn add_member(
@@ -1445,7 +1463,7 @@ async fn add_member(
     require_group_owner(&state.db, &id, &user.id).await?;
     let now = chrono::Utc::now().timestamp();
     let mut tx = state.db.begin().await?;
-    add_member_by_username(&mut tx, &id, &input.username, now).await?;
+    add_member_by_user_id(&mut tx, &id, &user.id, &input.user_id, now).await?;
     tx.commit().await?;
     Ok(StatusCode::NO_CONTENT)
 }
@@ -1457,7 +1475,7 @@ async fn remove_member(
     axum::Json(input): axum::Json<MemberInput>,
 ) -> Result<StatusCode, AppError> {
     require_group_owner(&state.db, &id, &user.id).await?;
-    let member_id = user_id_from_username(&state.db, &input.username).await?;
+    let member_id = nonempty(&input.user_id, "user_id", 128)?;
     if member_id == user.id {
         return Err(AppError::bad_request(
             "a group owner cannot remove themselves",
@@ -2525,41 +2543,31 @@ async fn add_member_by_user_id(
     user_id: &str,
     now: i64,
 ) -> Result<(), AppError> {
+    let user_id = nonempty(user_id, "user_id", 128)?;
     if user_id == owner_id {
         return Err(AppError::bad_request("a group owner is already a member"));
     }
-    let exists: Option<String> = sqlx::query_scalar("SELECT user_id FROM profiles WHERE user_id=?")
-        .bind(user_id)
+    let exists: Option<String> = sqlx::query_scalar("SELECT id FROM users WHERE id=?")
+        .bind(&user_id)
         .fetch_optional(&mut **tx)
         .await?;
     if exists.is_none() {
-        return Err(AppError::not_found("user not found"));
+        Uuid::parse_str(&user_id).map_err(|_| AppError::not_found("user not found"))?;
+        sqlx::query("INSERT INTO users(id,type,created_at) VALUES(?,'human',?)")
+            .bind(&user_id)
+            .bind(now)
+            .execute(&mut **tx)
+            .await?;
     }
     let result = sqlx::query("INSERT INTO conversation_members(conversation_id,user_id,role,joined_at) VALUES(?,?,'member',?) ON CONFLICT DO NOTHING")
         .bind(conversation_id)
-        .bind(user_id)
+        .bind(&user_id)
         .bind(now)
         .execute(&mut **tx)
         .await?;
     if result.rows_affected() == 0 {
         return Err(AppError::bad_request("user is already a group member"));
     }
-    Ok(())
-}
-
-async fn add_member_by_username(
-    tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
-    conversation_id: &str,
-    username: &str,
-    now: i64,
-) -> Result<(), AppError> {
-    let user_id: Option<String> =
-        sqlx::query_scalar("SELECT user_id FROM profiles WHERE username=?")
-            .bind(username.trim())
-            .fetch_optional(&mut **tx)
-            .await?;
-    let user_id = user_id.ok_or_else(|| AppError::not_found("user not found"))?;
-    sqlx::query("INSERT INTO conversation_members(conversation_id,user_id,role,joined_at) VALUES(?,?,'member',?) ON CONFLICT DO NOTHING").bind(conversation_id).bind(user_id).bind(now).execute(&mut **tx).await?;
     Ok(())
 }
 
@@ -4166,6 +4174,75 @@ mod tests {
             );
             assert_eq!(group_count().await, 1);
         }
+    }
+
+    #[tokio::test]
+    async fn group_creation_adds_an_uninitialized_auth_mini_user_by_id() {
+        let pool = db::connect_memory().await.unwrap();
+        sqlx::query("INSERT INTO users(id,created_at) VALUES('owner',0)")
+            .execute(&pool)
+            .await
+            .unwrap();
+        let target = "550e8400-e29b-41d4-a716-446655440000";
+        let group = create_group(
+            State(test_state(pool.clone())),
+            axum::Extension(UserIdentity { id: "owner".into() }),
+            axum::Json(GroupInput {
+                title: "Fund investors".into(),
+                user_ids: vec![target.into()],
+            }),
+        )
+        .await
+        .unwrap()
+        .0;
+
+        let member: (String, String) = sqlx::query_as(
+            "SELECT cm.user_id,u.type FROM conversation_members cm JOIN users u ON u.id=cm.user_id WHERE cm.conversation_id=? AND cm.role='member'",
+        )
+        .bind(group.id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(member, (target.into(), "human".into()));
+    }
+
+    #[tokio::test]
+    async fn group_owner_can_delete_a_group() {
+        let pool = db::connect_memory().await.unwrap();
+        sqlx::query("INSERT INTO users(id,created_at) VALUES('owner',0),('member',0)")
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query(
+            "INSERT INTO conversations(id,kind,title,created_by,created_at) VALUES('group','group','Fund investors','owner',0)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO conversation_members(conversation_id,user_id,role,joined_at) VALUES('group','owner','owner',0),('group','member','member',0)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let response = delete_group(
+            State(test_state(pool.clone())),
+            axum::Extension(UserIdentity { id: "owner".into() }),
+            Path("group".into()),
+        )
+        .await
+        .unwrap();
+        assert_eq!(response, StatusCode::NO_CONTENT);
+        let groups: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM conversations")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        let members: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM conversation_members")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!((groups, members), (0, 0));
     }
 
     #[tokio::test]

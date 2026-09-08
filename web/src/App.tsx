@@ -1342,11 +1342,16 @@ function GroupManagementContent({
   };
 
   const addMember = useMutation({
-    mutationFn: () =>
-      api(sdk, `/api/conversations/${detail.id}/members`, {
+    mutationFn: async () => {
+      const member = await api<Profile>(
+        sdk,
+        `/api/users/${encodeURIComponent(username.trim())}`,
+      );
+      return api(sdk, `/api/conversations/${detail.id}/members`, {
         method: "POST",
-        body: JSON.stringify({ username }),
-      }),
+        body: JSON.stringify({ user_id: member.user_id }),
+      });
+    },
     onSuccess: () => {
       setUsername("");
       refresh();
@@ -1354,10 +1359,10 @@ function GroupManagementContent({
     onError: (error) => toast.error(error.message),
   });
   const removeMember = useMutation({
-    mutationFn: (memberUsername: string) =>
+    mutationFn: (memberUserId: string) =>
       api(sdk, `/api/conversations/${detail.id}/members`, {
         method: "DELETE",
-        body: JSON.stringify({ username: memberUsername }),
+        body: JSON.stringify({ user_id: memberUserId }),
       }),
     onSuccess: () => {
       refresh();
@@ -1471,7 +1476,7 @@ function GroupManagementContent({
                     size="icon-sm"
                     aria-label={t("conversation.removeMember")}
                     disabled={removeMember.isPending}
-                    onClick={() => removeMember.mutate(member.username)}
+                    onClick={() => removeMember.mutate(member.user_id)}
                   >
                     <XIcon />
                   </Button>
