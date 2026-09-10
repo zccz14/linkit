@@ -686,41 +686,70 @@ function ConversationList({
   sdk: AuthMiniApi;
   onOpen: (conversation: Conversation) => void;
 }) {
-  const { t } = useI18n();
   return (
     <div className="flex flex-col gap-1">
-      {conversations.map((conversation) => {
-        const label =
-          conversation.title ||
-          conversation.counterpart_name ||
-          t("conversation.direct");
-        return (
-          <Button
-            key={conversation.id}
-            variant={
-              currentPath === `/conversations/${conversation.id}`
-                ? "secondary"
-                : "ghost"
-            }
-            className="h-auto justify-start gap-3 px-2 py-2 text-left"
-            onClick={() => onOpen(conversation)}
-          >
-            <ConversationAvatar conversation={conversation} sdk={sdk} />
-            <span className="min-w-0 flex-1">
-              <span className="block truncate font-medium">{label}</span>
-              {conversation.latest_body ? (
-                <span className="block truncate text-xs font-normal text-muted-foreground">
-                  {conversation.latest_body}
-                </span>
-              ) : null}
-            </span>
-            {conversation.unread_count ? (
-              <Badge>{conversation.unread_count}</Badge>
-            ) : null}
-          </Button>
-        );
-      })}
+      {conversations.map((conversation) => (
+        <ConversationListItem
+          key={conversation.id}
+          conversation={conversation}
+          currentPath={currentPath}
+          sdk={sdk}
+          onOpen={onOpen}
+        />
+      ))}
     </div>
+  );
+}
+
+function ConversationListItem({
+  conversation,
+  currentPath,
+  sdk,
+  onOpen,
+}: {
+  conversation: Conversation;
+  currentPath: string;
+  sdk: AuthMiniApi;
+  onOpen: (conversation: Conversation) => void;
+}) {
+  const { t } = useI18n();
+  const { note } = useLinkitUserInfo(conversation.counterpart_user_id ?? "");
+  const group = conversation.kind === "group";
+  const counterpartName = conversation.counterpart_name;
+  const label = group
+    ? conversation.title || t("group.title")
+    : note?.name || counterpartName || t("conversation.direct");
+  const showCounterpartName = Boolean(
+    !group && note?.name && counterpartName && note.name !== counterpartName,
+  );
+  return (
+    <Button
+      variant={
+        currentPath === `/conversations/${conversation.id}`
+          ? "secondary"
+          : "ghost"
+      }
+      className="h-auto justify-start gap-3 px-2 py-2 text-left"
+      onClick={() => onOpen(conversation)}
+    >
+      <ConversationAvatar conversation={conversation} sdk={sdk} />
+      <span className="min-w-0 flex-1">
+        <span className="block truncate font-medium">{label}</span>
+        {showCounterpartName ? (
+          <span className="block truncate text-xs font-normal text-muted-foreground">
+            {counterpartName}
+          </span>
+        ) : null}
+        {conversation.latest_body ? (
+          <span className="block truncate text-xs font-normal text-muted-foreground">
+            {conversation.latest_body}
+          </span>
+        ) : null}
+      </span>
+      {conversation.unread_count ? (
+        <Badge>{conversation.unread_count}</Badge>
+      ) : null}
+    </Button>
   );
 }
 
