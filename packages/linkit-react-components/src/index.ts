@@ -1,4 +1,8 @@
-export { LinkitProvider, useLinkit } from "./linkit-provider.js";
+export {
+  LinkitProvider,
+  useLinkit,
+  useLinkitUserInfo,
+} from "./linkit-provider.js";
 export type {
   LinkitContextValue,
   LinkitProviderProps,
