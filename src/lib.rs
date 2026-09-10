@@ -93,7 +93,7 @@ impl AppState {
 pub fn router(state: AppState) -> Router {
     let signed_in = Router::new()
         .route("/api/me", get(me))
-        .route("/api/admin/system", get(system_overview))
+        .route("/api/admin/resources", get(system_overview))
         .route("/api/admin/bark-users", get(bark_notification_users))
         .route("/api/events", get(events))
         .route("/api/profile", put(update_profile))
@@ -964,21 +964,36 @@ async fn me(
 struct SystemOverview {
     generated_at: i64,
     cpu_usage_percent: f32,
+    cpu_load_1m: f64,
+    logical_cpu_count: usize,
     used_memory_bytes: u64,
     total_memory_bytes: u64,
+    available_memory_bytes: u64,
+    used_swap_bytes: u64,
+    total_swap_bytes: u64,
     received_bytes_per_second: f64,
     transmitted_bytes_per_second: f64,
     received_bytes_total: u64,
     transmitted_bytes_total: u64,
-    sqlite_bytes: u64,
-    disks: Vec<DiskOverview>,
+    network_interface_count: usize,
+    disk: Option<DiskOverview>,
+    sqlite: SqliteOverview,
 }
 
 #[derive(Serialize)]
 struct DiskOverview {
     mount_point: String,
+    used_bytes: u64,
     total_bytes: u64,
     available_bytes: u64,
+}
+
+#[derive(Serialize)]
+struct SqliteOverview {
+    main_bytes: u64,
+    wal_bytes: u64,
+    shm_bytes: u64,
+    total_bytes: u64,
 }
 
 struct SystemMonitor {
@@ -998,7 +1013,7 @@ impl SystemMonitor {
         }
     }
 
-    fn snapshot(&mut self, sqlite_bytes: u64) -> SystemOverview {
+    fn snapshot(&mut self, database_path: &FilePath, sqlite: SqliteOverview) -> SystemOverview {
         self.system.refresh_cpu_usage();
         self.system.refresh_memory();
         self.disks.refresh(false);
@@ -1035,23 +1050,31 @@ impl SystemMonitor {
         SystemOverview {
             generated_at: chrono::Utc::now().timestamp(),
             cpu_usage_percent: self.system.global_cpu_usage(),
+            cpu_load_1m: System::load_average().one,
+            logical_cpu_count: self.system.cpus().len(),
             used_memory_bytes: self.system.used_memory(),
             total_memory_bytes: self.system.total_memory(),
+            available_memory_bytes: self.system.available_memory(),
+            used_swap_bytes: self.system.used_swap(),
+            total_swap_bytes: self.system.total_swap(),
             received_bytes_per_second,
             transmitted_bytes_per_second,
             received_bytes_total,
             transmitted_bytes_total,
-            sqlite_bytes,
-            disks: self
+            network_interface_count: self.networks.len(),
+            disk: self
                 .disks
                 .list()
                 .iter()
+                .filter(|disk| database_path.starts_with(disk.mount_point()))
+                .max_by_key(|disk| disk.mount_point().components().count())
                 .map(|disk| DiskOverview {
                     mount_point: disk.mount_point().display().to_string(),
+                    used_bytes: disk.total_space().saturating_sub(disk.available_space()),
                     total_bytes: disk.total_space(),
                     available_bytes: disk.available_space(),
-                })
-                .collect(),
+                }),
+            sqlite,
         }
     }
 }
@@ -1061,12 +1084,12 @@ async fn system_overview(
     axum::Extension(user): axum::Extension<UserIdentity>,
 ) -> Result<axum::Json<SystemOverview>, AppError> {
     require_root(&state.db, &user.id).await?;
-    let sqlite_bytes = sqlite_bytes(&state.database_path)?;
+    let sqlite = sqlite_usage(&state.database_path)?;
     let overview = state
         .system_monitor
         .lock()
         .expect("system monitor mutex is not poisoned")
-        .snapshot(sqlite_bytes);
+        .snapshot(&state.database_path, sqlite);
     Ok(axum::Json(overview))
 }
 
@@ -2521,11 +2544,16 @@ async fn require_root(db: &SqlitePool, user_id: &str) -> Result<(), AppError> {
     Ok(())
 }
 
-fn sqlite_bytes(database_path: &FilePath) -> Result<u64, AppError> {
-    let mut bytes = file_size(database_path)?;
-    bytes += file_size(&database_path.with_extension("sqlite3-wal"))?;
-    bytes += file_size(&database_path.with_extension("sqlite3-shm"))?;
-    Ok(bytes)
+fn sqlite_usage(database_path: &FilePath) -> Result<SqliteOverview, AppError> {
+    let main_bytes = file_size(database_path)?;
+    let wal_bytes = file_size(&database_path.with_extension("sqlite3-wal"))?;
+    let shm_bytes = file_size(&database_path.with_extension("sqlite3-shm"))?;
+    Ok(SqliteOverview {
+        main_bytes,
+        wal_bytes,
+        shm_bytes,
+        total_bytes: main_bytes + wal_bytes + shm_bytes,
+    })
 }
 
 fn file_size(path: &FilePath) -> Result<u64, AppError> {
@@ -4696,14 +4724,18 @@ mod tests {
     }
 
     #[test]
-    fn sqlite_bytes_includes_wal_and_shared_memory_files() {
+    fn sqlite_usage_includes_wal_and_shared_memory_files() {
         let directory = std::env::temp_dir().join(Uuid::new_v4().to_string());
         std::fs::create_dir(&directory).unwrap();
         let database = directory.join("linkit.sqlite3");
         std::fs::write(&database, [0; 5]).unwrap();
         std::fs::write(directory.join("linkit.sqlite3-wal"), [0; 7]).unwrap();
         std::fs::write(directory.join("linkit.sqlite3-shm"), [0; 11]).unwrap();
-        assert_eq!(sqlite_bytes(&database).unwrap(), 23);
+        let usage = sqlite_usage(&database).unwrap();
+        assert_eq!(usage.main_bytes, 5);
+        assert_eq!(usage.wal_bytes, 7);
+        assert_eq!(usage.shm_bytes, 11);
+        assert_eq!(usage.total_bytes, 23);
         std::fs::remove_dir_all(directory).unwrap();
     }
 }
