@@ -23,10 +23,14 @@ import {
   BotIcon,
   CopyIcon,
   ChevronLeftIcon,
+  CpuIcon,
+  DatabaseIcon,
   FileIcon,
+  HardDriveIcon,
   ImageIcon,
-  LogOutIcon,
+  MemoryStickIcon,
   MessageCircleIcon,
+  NetworkIcon,
   PaperclipIcon,
   PlusIcon,
   RotateCcwIcon,
@@ -34,15 +38,14 @@ import {
   SendIcon,
   SmartphoneIcon,
   Trash2Icon,
-  ShieldCheckIcon,
   type LucideIcon,
-  UserRoundIcon,
   UsersRoundIcon,
   XIcon,
 } from "lucide-react";
 import { toast } from "sonner";
 import {
   LinkitProvider,
+  LinkitMyInfo,
   LinkitUserPicker,
   useLinkitUserInfo,
 } from "linkit-react-components";
@@ -125,7 +128,6 @@ import { Separator } from "@/components/ui/separator";
 import {
   Sidebar,
   SidebarContent,
-  SidebarFooter,
   SidebarGroup,
   SidebarGroupContent,
   SidebarGroupLabel,
@@ -192,7 +194,7 @@ function appendMessage(
 }
 
 export default function App() {
-  const { t } = useI18n();
+  const { locale, t } = useI18n();
   const config = useQuery({
     queryKey: ["config"],
     queryFn: () => publicApi<Config>("/api/config"),
@@ -223,6 +225,7 @@ export default function App() {
       onAuthError={(error) => toast.error(error.message)}
     >
       <LinkitProvider
+        lang={locale}
         linkitBaseUrl={config.data.public_origin ?? window.location.origin}
       >
         <AuthedApp />
@@ -412,7 +415,6 @@ function AuthedApp() {
   if (!isReady || !isAuthenticated || !sdk || me.isPending)
     return <LoadingScreen>{t("app.restoring")}</LoadingScreen>;
   if (me.isError) return <LoadingScreen>{me.error.message}</LoadingScreen>;
-  if (!me.data.profile) return <ProfileEditor me={me.data} sdk={sdk} />;
   return <Shell me={me.data} sdk={sdk} />;
 }
 
@@ -465,7 +467,6 @@ function LinkitShell({
   sdk: AuthMiniApi;
 }) {
   const { t } = useI18n();
-  const { signOut } = useAuthMini();
   const location = useLocation();
   const navigate = useNavigate();
   const { isMobile, setOpenMobile } = useSidebar();
@@ -491,9 +492,9 @@ function LinkitShell({
   ];
   const systemItems: NavigationItem[] = [
     {
-      icon: ShieldCheckIcon,
-      label: t("navigation.admin"),
-      to: "/admin/system",
+      icon: HardDriveIcon,
+      label: t("admin.resources"),
+      to: "/admin/resources",
     },
     {
       icon: BellIcon,
@@ -548,32 +549,6 @@ function LinkitShell({
             />
           ) : null}
         </SidebarContent>
-        <SidebarFooter className="border-t">
-          <SidebarMenu>
-            <SidebarMenuItem>
-              <SidebarMenuButton
-                isActive={isNavigationActive(
-                  location.pathname,
-                  "/settings/profile",
-                )}
-                tooltip={t("navigation.profile")}
-                onClick={() => goTo("/settings/profile")}
-              >
-                <ProfileAvatar profile={me.profile} sdk={sdk} />
-                <span>{me.profile!.username}</span>
-              </SidebarMenuButton>
-            </SidebarMenuItem>
-            <SidebarMenuItem>
-              <SidebarMenuButton
-                tooltip={t("auth.signOut")}
-                onClick={() => void signOut()}
-              >
-                <LogOutIcon />
-                <span>{t("auth.signOut")}</span>
-              </SidebarMenuButton>
-            </SidebarMenuItem>
-          </SidebarMenu>
-        </SidebarFooter>
       </Sidebar>
       <SidebarInset>
         <header className="flex h-14 shrink-0 items-center gap-3 border-b bg-background/95 px-4 backdrop-blur supports-backdrop-filter:bg-background/85">
@@ -589,6 +564,7 @@ function LinkitShell({
             </Button>
           ) : null}
           <LanguageMenu />
+          <LinkitMyInfo />
         </header>
         <div className="min-h-0 flex-1 overflow-auto">
           <Routes>
@@ -616,12 +592,8 @@ function LinkitShell({
               element={<BarkNotifications sdk={sdk} />}
             />
             <Route
-              path="/settings/profile"
-              element={<ProfileEditor me={me} sdk={sdk} />}
-            />
-            <Route
-              path="/admin/system"
-              element={<SystemDashboard sdk={sdk} />}
+              path="/admin/resources"
+              element={<SystemResourcesPage sdk={sdk} />}
             />
             <Route
               path="/admin/bark-users"
@@ -686,6 +658,7 @@ function appPageTitle(pathname: string, t: (key: TranslationKey) => string) {
   if (pathname.startsWith("/settings/notifications"))
     return t("barkSettings.title");
   if (pathname.startsWith("/settings/profile")) return t("profile.title");
+  if (pathname.startsWith("/admin/resources")) return t("admin.resources");
   if (pathname.startsWith("/admin/bark-users"))
     return t("admin.barkUsersTitle");
   if (pathname.startsWith("/admin")) return t("navigation.admin");
@@ -848,11 +821,11 @@ function ConversationSubheader({
   );
 }
 
-function SystemDashboard({ sdk }: { sdk: AuthMiniApi }) {
+function SystemResourcesPage({ sdk }: { sdk: AuthMiniApi }) {
   const { locale, t } = useI18n();
   const overview = useQuery({
-    queryKey: ["admin", "system"],
-    queryFn: () => api<SystemOverview>(sdk, "/api/admin/system"),
+    queryKey: ["admin", "resources"],
+    queryFn: () => api<SystemOverview>(sdk, "/api/admin/resources"),
     refetchInterval: 5_000,
   });
   if (overview.isPending)
@@ -862,60 +835,79 @@ function SystemDashboard({ sdk }: { sdk: AuthMiniApi }) {
 
   const data = overview.data;
   return (
-    <Page title={t("admin.title")} description={t("admin.description")}>
+    <Page
+      title={t("admin.resources")}
+      description={t("admin.resourcesDescription")}
+    >
       <p className="mb-4 text-sm text-muted-foreground">
         {t("admin.updated", {
           time: new Date(data.generated_at * 1000).toLocaleTimeString(locale),
         })}
       </p>
-      <div className="grid gap-4 sm:grid-cols-2">
+      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
         <MetricCard
+          icon={CpuIcon}
           label={t("admin.cpu")}
           value={`${data.cpu_usage_percent.toFixed(1)}%`}
+          detail={t("admin.cpuDetail", {
+            load: data.cpu_load_1m.toFixed(2),
+            count: String(data.logical_cpu_count),
+          })}
         />
         <MetricCard
+          icon={MemoryStickIcon}
           label={t("admin.memory")}
           value={t("admin.used", {
             used: byteSize(data.used_memory_bytes),
             total: byteSize(data.total_memory_bytes),
           })}
+          detail={t("admin.memoryDetail", {
+            available: byteSize(data.available_memory_bytes),
+            swapUsed: byteSize(data.used_swap_bytes),
+            swapTotal: byteSize(data.total_swap_bytes),
+          })}
         />
         <MetricCard
+          icon={NetworkIcon}
           label={t("admin.network")}
           value={`${t("admin.receive")} ${byteRate(data.received_bytes_per_second)} · ${t("admin.transmit")} ${byteRate(data.transmitted_bytes_per_second)}`}
-          detail={`${t("admin.total")}: ↓ ${byteSize(data.received_bytes_total)} · ↑ ${byteSize(data.transmitted_bytes_total)}`}
+          detail={t("admin.networkDetail", {
+            count: String(data.network_interface_count),
+            received: byteSize(data.received_bytes_total),
+            transmitted: byteSize(data.transmitted_bytes_total),
+          })}
         />
         <MetricCard
+          icon={HardDriveIcon}
+          label={t("admin.disk")}
+          value={
+            data.disk
+              ? t("admin.used", {
+                  used: byteSize(data.disk.used_bytes),
+                  total: byteSize(data.disk.total_bytes),
+                })
+              : "—"
+          }
+          detail={
+            data.disk
+              ? t("admin.diskDetail", {
+                  available: byteSize(data.disk.available_bytes),
+                  mountPoint: data.disk.mount_point,
+                })
+              : t("admin.resourceUnavailable")
+          }
+        />
+        <MetricCard
+          icon={DatabaseIcon}
           label={t("admin.sqlite")}
-          value={byteSize(data.sqlite_bytes)}
+          value={byteSize(data.sqlite.total_bytes)}
+          detail={t("admin.sqliteDetail", {
+            main: byteSize(data.sqlite.main_bytes),
+            wal: byteSize(data.sqlite.wal_bytes),
+            shm: byteSize(data.sqlite.shm_bytes),
+          })}
         />
       </div>
-      <Card className="mt-6">
-        <CardHeader>
-          <CardTitle>{t("admin.disk")}</CardTitle>
-        </CardHeader>
-        <CardContent className="flex flex-col gap-4">
-          {data.disks.map((disk) => (
-            <div
-              key={disk.mount_point}
-              className="flex flex-wrap items-center justify-between gap-2 border-b pb-4 last:border-0 last:pb-0"
-            >
-              <div>
-                <p className="font-medium">{disk.mount_point}</p>
-                <p className="text-sm text-muted-foreground">
-                  {t("admin.used", {
-                    used: byteSize(disk.total_bytes - disk.available_bytes),
-                    total: byteSize(disk.total_bytes),
-                  })}
-                </p>
-              </div>
-              <Badge variant="secondary">
-                {t("admin.available")}: {byteSize(disk.available_bytes)}
-              </Badge>
-            </div>
-          ))}
-        </CardContent>
-      </Card>
     </Page>
   );
 }
@@ -987,17 +979,22 @@ function AdminBarkUsers({ sdk }: { sdk: AuthMiniApi }) {
 
 function MetricCard({
   detail,
+  icon: Icon,
   label,
   value,
 }: {
   detail?: string;
+  icon: LucideIcon;
   label: string;
   value: string;
 }) {
   return (
     <Card>
       <CardHeader>
-        <CardDescription>{label}</CardDescription>
+        <CardDescription className="flex items-center gap-2">
+          <Icon />
+          {label}
+        </CardDescription>
         <CardTitle className="text-2xl">{value}</CardTitle>
         {detail ? <CardDescription>{detail}</CardDescription> : null}
       </CardHeader>
@@ -1473,39 +1470,13 @@ function GroupManagementContent({
           </div>
           <div className="flex flex-col gap-1">
             {detail.members.map((member) => (
-              <div
+              <GroupMemberRow
                 key={member.user_id}
-                className="flex items-center gap-3 rounded-lg px-2 py-2"
-              >
-                <Avatar>
-                  <AvatarFallback>{member.username.slice(0, 1)}</AvatarFallback>
-                </Avatar>
-                <div className="min-w-0 flex-1">
-                  <p className="truncate text-sm font-medium">
-                    {member.username}
-                  </p>
-                  <p className="truncate text-xs text-muted-foreground">
-                    @{member.username}
-                  </p>
-                </div>
-                {member.role === "owner" ? (
-                  <Badge variant="secondary">{t("conversation.owner")}</Badge>
-                ) : null}
-                {member.user_type === "bot" ? (
-                  <Badge variant="secondary">{t("conversation.bot")}</Badge>
-                ) : null}
-                {isOwner && member.role !== "owner" ? (
-                  <Button
-                    variant="ghost"
-                    size="icon-sm"
-                    aria-label={t("conversation.removeMember")}
-                    disabled={removeMember.isPending}
-                    onClick={() => removeMember.mutate(member.user_id)}
-                  >
-                    <XIcon />
-                  </Button>
-                ) : null}
-              </div>
+                member={member}
+                canRemove={isOwner && member.role !== "owner"}
+                removing={removeMember.isPending}
+                onRemove={(userId) => removeMember.mutate(userId)}
+              />
             ))}
           </div>
           {isOwner ? (
@@ -1532,6 +1503,55 @@ function GroupManagementContent({
           ) : null}
         </section>
       </div>
+    </div>
+  );
+}
+
+function GroupMemberRow({
+  canRemove,
+  member,
+  onRemove,
+  removing,
+}: {
+  canRemove: boolean;
+  member: ConversationDetail["members"][number];
+  onRemove: (userId: string) => void;
+  removing: boolean;
+}) {
+  const { t } = useI18n();
+  const { note, profile } = useLinkitUserInfo(member.user_id);
+  const displayName = note?.name || profile?.username || member.username;
+  const avatarFallback =
+    Array.from(displayName.trim())[0]?.toLocaleUpperCase() ?? "?";
+  return (
+    <div className="flex items-center gap-3 rounded-lg px-2 py-2">
+      <Avatar aria-label={displayName}>
+        <AvatarImage src={profile?.avatar_url ?? undefined} alt="" />
+        <AvatarFallback>{avatarFallback}</AvatarFallback>
+      </Avatar>
+      <div className="min-w-0 flex-1">
+        <p className="truncate text-sm font-medium">{displayName}</p>
+        <p className="truncate text-xs text-muted-foreground">
+          @{member.username}
+        </p>
+      </div>
+      {member.role === "owner" ? (
+        <Badge variant="secondary">{t("conversation.owner")}</Badge>
+      ) : null}
+      {member.user_type === "bot" ? (
+        <Badge variant="secondary">{t("conversation.bot")}</Badge>
+      ) : null}
+      {canRemove ? (
+        <Button
+          variant="ghost"
+          size="icon-sm"
+          aria-label={t("conversation.removeMember")}
+          disabled={removing}
+          onClick={() => onRemove(member.user_id)}
+        >
+          <XIcon />
+        </Button>
+      ) : null}
     </div>
   );
 }
@@ -2055,118 +2075,6 @@ function Bots({ sdk }: { sdk: AuthMiniApi }) {
   );
 }
 
-function ProfileEditor({ me, sdk }: { me: Me; sdk: AuthMiniApi }) {
-  const { t } = useI18n();
-  const queryClient = useQueryClient();
-  const [username, setUsername] = useState(me.profile?.username ?? "");
-  const [intro, setIntro] = useState(me.profile?.intro ?? "");
-  const [avatar, setAvatar] = useState(me.profile?.avatar_attachment_id ?? "");
-  const fileRef = useRef<HTMLInputElement>(null);
-  const save = useMutation({
-    mutationFn: () =>
-      api<Profile>(sdk, "/api/profile", {
-        method: "PUT",
-        body: JSON.stringify({
-          username,
-          intro,
-          avatar_attachment_id: avatar || undefined,
-        }),
-      }),
-    onSuccess: () => {
-      void queryClient.invalidateQueries({ queryKey: ["me"] });
-      toast.success(t("profileEditor.saved"));
-    },
-    onError: (error) => toast.error(error.message),
-  });
-  const chooseAvatar = async (event: React.ChangeEvent<HTMLInputElement>) => {
-    const file = event.target.files?.[0];
-    if (!file) return;
-    try {
-      const attachment = await upload(sdk, file);
-      if (!attachment.media_type.startsWith("image/"))
-        throw new Error(t("profileEditor.avatarError"));
-      setAvatar(attachment.id);
-    } catch (error) {
-      toast.error(
-        error instanceof Error ? error.message : t("profileEditor.uploadError"),
-      );
-    }
-    event.target.value = "";
-  };
-  return (
-    <Page
-      title={t("profileEditor.title")}
-      description={t("profileEditor.description")}
-      localeControl={!me.profile}
-    >
-      <form
-        className="max-w-xl"
-        onSubmit={(event) => {
-          event.preventDefault();
-          save.mutate();
-        }}
-      >
-        <FieldGroup>
-          <Field>
-            <FieldLabel>{t("profileEditor.avatar")}</FieldLabel>
-            <FieldDescription>
-              头像会居中裁剪为方形并压缩为 WebP；原始上传保留，可重新处理。
-            </FieldDescription>
-            <div className="flex items-center gap-3">
-              <ProfileAvatar
-                sdk={sdk}
-                profile={
-                  avatar
-                    ? { ...me.profile, avatar_attachment_id: avatar }
-                    : me.profile
-                }
-              />
-              <input
-                ref={fileRef}
-                className="hidden"
-                type="file"
-                accept="image/*"
-                onChange={chooseAvatar}
-              />
-              <Button
-                type="button"
-                variant="outline"
-                onClick={() => fileRef.current?.click()}
-              >
-                <ImageIcon data-icon="inline-start" />
-                {t("profileEditor.uploadImage")}
-              </Button>
-            </div>
-          </Field>
-          <Field>
-            <FieldLabel htmlFor="username">
-              {t("profileEditor.username")}
-            </FieldLabel>
-            <Input
-              id="username"
-              required
-              value={username}
-              onChange={(event) => setUsername(event.target.value)}
-            />
-          </Field>
-          <Field>
-            <FieldLabel htmlFor="intro">{t("profileEditor.intro")}</FieldLabel>
-            <Textarea
-              id="intro"
-              value={intro}
-              onChange={(event) => setIntro(event.target.value)}
-            />
-          </Field>
-        </FieldGroup>
-        <Button type="submit" className="mt-5" disabled={save.isPending}>
-          <UserRoundIcon data-icon="inline-start" />
-          {t("profileEditor.save")}
-        </Button>
-      </form>
-    </Page>
-  );
-}
-
 function BarkNotifications({ sdk }: { sdk: AuthMiniApi }) {
   const { locale, t } = useI18n();
   const queryClient = useQueryClient();
@@ -2421,13 +2329,20 @@ function BarkNotifications({ sdk }: { sdk: AuthMiniApi }) {
 }
 
 function ProfileCard({ profile, sdk }: { profile: Profile; sdk: AuthMiniApi }) {
+  const { note } = useLinkitUserInfo(profile.user_id);
+  const displayName = note?.name || profile.username;
   return (
     <Link to={profileRoute(profile.username)}>
       <Card className="h-full hover:bg-muted/50">
         <CardContent className="flex items-center gap-3 p-4">
           <ProfileAvatar profile={profile} sdk={sdk} />
           <div className="min-w-0">
-            <p className="truncate font-medium">{profile.username}</p>
+            <p className="truncate font-medium">{displayName}</p>
+            {note ? (
+              <p className="truncate text-xs text-muted-foreground">
+                @{profile.username}
+              </p>
+            ) : null}
             <p className="mt-1 line-clamp-2 text-sm text-muted-foreground">
               {profile.intro}
             </p>

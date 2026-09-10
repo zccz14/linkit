@@ -83,18 +83,30 @@ export type Me = {
 export type SystemOverview = {
   generated_at: number;
   cpu_usage_percent: number;
+  cpu_load_1m: number;
+  logical_cpu_count: number;
   used_memory_bytes: number;
   total_memory_bytes: number;
+  available_memory_bytes: number;
+  used_swap_bytes: number;
+  total_swap_bytes: number;
   received_bytes_per_second: number;
   transmitted_bytes_per_second: number;
   received_bytes_total: number;
   transmitted_bytes_total: number;
-  sqlite_bytes: number;
-  disks: Array<{
+  network_interface_count: number;
+  disk?: {
     mount_point: string;
+    used_bytes: number;
     total_bytes: number;
     available_bytes: number;
-  }>;
+  };
+  sqlite: {
+    main_bytes: number;
+    wal_bytes: number;
+    shm_bytes: number;
+    total_bytes: number;
+  };
 };
 
 export type BarkNotificationUser = {
@@ -201,7 +213,10 @@ export async function attachmentObjectUrl(sdk: AuthMiniApi, id: string) {
 }
 
 export async function avatarObjectUrl(sdk: AuthMiniApi, id: string) {
-  const response = await authenticatedFetch(sdk, `/api/attachments/${id}/avatar`);
+  const response = await authenticatedFetch(
+    sdk,
+    `/api/attachments/${id}/avatar`,
+  );
   if (!response.ok) throw new Error("Could not download avatar");
   return URL.createObjectURL(await response.blob());
 }

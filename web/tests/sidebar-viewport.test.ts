@@ -15,12 +15,13 @@ test("shell uses one responsive drawer and a shared app header", () => {
   );
   assert.match(
     app,
-    /<Sidebar collapsible="icon">[\s\S]*?<SidebarHeader[\s\S]*?<SidebarContent>[\s\S]*?<SidebarFooter/,
+    /<Sidebar collapsible="icon">[\s\S]*?<SidebarHeader[\s\S]*?<SidebarContent>/,
   );
   assert.match(
     app,
-    /<SidebarInset>[\s\S]*?<SidebarTrigger \/>[\s\S]*?<Routes>/,
+    /<SidebarInset>[\s\S]*?<SidebarTrigger \/>[\s\S]*?<LinkitMyInfo \/>[\s\S]*?<Routes>/,
   );
+  assert.doesNotMatch(app, /<SidebarFooter/);
   assert.match(
     app,
     /function ConversationIndex[\s\S]*?return <ConversationListPage conversations=\{conversations\} sdk=\{sdk\} \/>;/,
