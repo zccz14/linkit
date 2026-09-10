@@ -66,8 +66,11 @@ import {
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import {
   Attachment as MessageAttachment,
+  AttachmentAction,
+  AttachmentActions,
   AttachmentContent,
   AttachmentDescription,
+  AttachmentGroup,
   AttachmentMedia,
   AttachmentTitle,
   AttachmentTrigger,
@@ -145,6 +148,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { useIsMobile } from "@/hooks/use-mobile";
 import { updatedConversationDetail } from "@/lib/conversation";
+import { clipboardFiles, isGifMediaType } from "@/lib/clipboard-files";
 import { MessageMarkdown } from "@/lib/message-markdown";
 import { shouldSendMessageOnEnter } from "@/lib/message";
 import {
@@ -1054,6 +1058,7 @@ function ConversationPage({ me, sdk }: { me: Me; sdk: AuthMiniApi }) {
   const queryClient = useQueryClient();
   const [body, setBody] = useState("");
   const [attachments, setAttachments] = useState<Attachment[]>([]);
+  const [pendingAttachmentUploads, setPendingAttachmentUploads] = useState(0);
   const [urgent, setUrgent] = useState(false);
   const [manageOpen, setManageOpen] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
@@ -1103,21 +1108,46 @@ function ConversationPage({ me, sdk }: { me: Me; sdk: AuthMiniApi }) {
       () => undefined,
     );
   }, [id, sdk]);
-  const chooseFile = async (event: React.ChangeEvent<HTMLInputElement>) => {
-    const file = event.target.files?.[0];
-    if (!file) return;
-    try {
-      const attachment = await upload(sdk, file);
-      setAttachments((current) => [...current, attachment]);
-    } catch (error) {
+  const uploadFiles = async (files: File[]) => {
+    if (!files.length) return;
+    setPendingAttachmentUploads((current) => current + 1);
+    const results = await Promise.allSettled(
+      files.map((file) => upload(sdk, file)),
+    );
+    const uploaded = results.flatMap((result) =>
+      result.status === "fulfilled" ? [result.value] : [],
+    );
+    if (uploaded.length) setAttachments((current) => [...current, ...uploaded]);
+    const rejected = results.find(
+      (result): result is PromiseRejectedResult => result.status === "rejected",
+    );
+    if (rejected) {
       toast.error(
-        error instanceof Error ? error.message : t("profileEditor.uploadError"),
+        rejected.reason instanceof Error
+          ? rejected.reason.message
+          : t("profileEditor.uploadError"),
       );
     }
+    setPendingAttachmentUploads((current) => current - 1);
+  };
+  const chooseFile = (event: React.ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(event.target.files ?? []);
     event.target.value = "";
+    void uploadFiles(files);
+  };
+  const pasteFiles = (event: React.ClipboardEvent<HTMLTextAreaElement>) => {
+    const files = clipboardFiles(event.clipboardData);
+    if (!files.length) return;
+    event.preventDefault();
+    void uploadFiles(files);
   };
   const sendMessage = () => {
-    if (send.isPending || (!body.trim() && !attachments.length)) return;
+    if (
+      send.isPending ||
+      pendingAttachmentUploads ||
+      (!body.trim() && !attachments.length)
+    )
+      return;
     send.mutate();
   };
   const title =
@@ -1196,13 +1226,38 @@ function ConversationPage({ me, sdk }: { me: Me; sdk: AuthMiniApi }) {
         }}
       >
         {attachments.length ? (
-          <div className="mb-2 flex flex-wrap gap-2">
+          <AttachmentGroup className="mb-2">
             {attachments.map((attachment) => (
-              <Badge key={attachment.id} variant="secondary">
-                {attachment.file_name}
-              </Badge>
+              <MessageAttachment key={attachment.id} size="sm">
+                <AttachmentMedia variant="icon">
+                  {attachment.media_type.startsWith("image/") ? (
+                    <ImageIcon />
+                  ) : (
+                    <FileIcon />
+                  )}
+                </AttachmentMedia>
+                <AttachmentContent>
+                  <AttachmentTitle>{attachment.file_name}</AttachmentTitle>
+                  <AttachmentDescription>
+                    {byteSize(attachment.byte_size)}
+                  </AttachmentDescription>
+                </AttachmentContent>
+                <AttachmentActions>
+                  <AttachmentAction
+                    type="button"
+                    aria-label={attachment.file_name}
+                    onClick={() =>
+                      setAttachments((current) =>
+                        current.filter(({ id }) => id !== attachment.id),
+                      )
+                    }
+                  >
+                    <XIcon />
+                  </AttachmentAction>
+                </AttachmentActions>
+              </MessageAttachment>
             ))}
-          </div>
+          </AttachmentGroup>
         ) : null}
         <div className="mb-2 flex items-center justify-between gap-2">
           <label className="flex items-center gap-2 text-sm">
@@ -1224,6 +1279,7 @@ function ConversationPage({ me, sdk }: { me: Me; sdk: AuthMiniApi }) {
             ref={fileRef}
             className="hidden"
             type="file"
+            multiple
             onChange={chooseFile}
           />
           <Button
@@ -1240,6 +1296,7 @@ function ConversationPage({ me, sdk }: { me: Me; sdk: AuthMiniApi }) {
             className="min-h-9 max-h-36 resize-none"
             value={body}
             onChange={(event) => setBody(event.target.value)}
+            onPaste={pasteFiles}
             onCompositionStart={() => {
               composingRef.current = true;
             }}
@@ -1264,7 +1321,11 @@ function ConversationPage({ me, sdk }: { me: Me; sdk: AuthMiniApi }) {
           />
           <Button
             type="submit"
-            disabled={send.isPending || (!body.trim() && !attachments.length)}
+            disabled={
+              send.isPending ||
+              pendingAttachmentUploads > 0 ||
+              (!body.trim() && !attachments.length)
+            }
           >
             <SendIcon data-icon="inline-start" />
             {t("conversation.send")}
@@ -1661,6 +1722,7 @@ function AttachmentView({
   const { t } = useI18n();
   const [url, setUrl] = useState("");
   const image = attachment.media_type.startsWith("image/");
+  const gif = isGifMediaType(attachment.media_type);
   useEffect(() => {
     let active = true;
     let objectUrl = "";
@@ -1676,6 +1738,16 @@ function AttachmentView({
       if (objectUrl) URL.revokeObjectURL(objectUrl);
     };
   }, [attachment.id, sdk]);
+  if (gif && url)
+    return (
+      <a href={url} target="_blank" rel="noreferrer">
+        <img
+          src={url}
+          alt={attachment.file_name}
+          className="max-h-80 max-w-full rounded-md object-contain"
+        />
+      </a>
+    );
   return (
     <MessageAttachment size="sm" state={url ? "done" : "processing"}>
       <AttachmentMedia variant={image ? "image" : "icon"}>

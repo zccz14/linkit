@@ -69,7 +69,7 @@ const english = {
   "conversation.scrollToLatest": "Scroll to latest message",
   "conversation.writeMessage": "Write a message…",
   "conversation.composeHint":
-    "Enter to send · Shift+Enter for a new line · IME Enter confirms composition",
+    "Enter to send · Shift+Enter for a new line · Paste files or images to attach",
   "conversation.send": "Send",
   "conversation.urgent": "Urgent",
   "conversation.urgentNotice":
@@ -270,7 +270,7 @@ const chinese: Record<TranslationKey, string> = {
   "conversation.scrollToLatest": "滚动到最新消息",
   "conversation.writeMessage": "输入消息…",
   "conversation.composeHint":
-    "Enter 发送 · Shift+Enter 换行 · 输入法确认候选时不会发送",
+    "Enter 发送 · Shift+Enter 换行 · 可直接粘贴图片或文件作为附件",
   "conversation.send": "发送",
   "conversation.urgent": "加急",
   "conversation.urgentNotice":
