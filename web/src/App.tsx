@@ -1,10 +1,4 @@
-import {
-  useEffect,
-  useLayoutEffect,
-  useRef,
-  useState,
-  type ReactNode,
-} from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import {
   type InfiniteData,
   useInfiniteQuery,
@@ -24,6 +18,7 @@ import {
   useParams,
 } from "react-router-dom";
 import {
+  ArrowDownIcon,
   BellIcon,
   BotIcon,
   CopyIcon,
@@ -46,7 +41,11 @@ import {
   XIcon,
 } from "lucide-react";
 import { toast } from "sonner";
-import { LinkitProvider, LinkitUserPicker } from "linkit-react-components";
+import {
+  LinkitProvider,
+  LinkitUserPicker,
+  useLinkitUserInfo,
+} from "linkit-react-components";
 import { QRCodeSVG } from "qrcode.react";
 
 import { LanguageMenu } from "@/components/language-menu";
@@ -62,8 +61,17 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
+import {
+  Attachment as MessageAttachment,
+  AttachmentContent,
+  AttachmentDescription,
+  AttachmentMedia,
+  AttachmentTitle,
+  AttachmentTrigger,
+} from "@/components/ui/attachment";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Bubble, BubbleContent } from "@/components/ui/bubble";
 import {
   Card,
   CardContent,
@@ -99,6 +107,20 @@ import {
   FieldLabel,
 } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
+import {
+  Message as ChatMessage,
+  MessageAvatar,
+  MessageContent,
+  MessageHeader,
+} from "@/components/ui/message";
+import {
+  MessageScroller,
+  MessageScrollerButton,
+  MessageScrollerContent,
+  MessageScrollerItem,
+  MessageScrollerProvider,
+  MessageScrollerViewport,
+} from "@/components/ui/message-scroller";
 import { Separator } from "@/components/ui/separator";
 import {
   Sidebar,
@@ -1009,8 +1031,6 @@ function ConversationPage({ me, sdk }: { me: Me; sdk: AuthMiniApi }) {
   const [urgent, setUrgent] = useState(false);
   const [manageOpen, setManageOpen] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
-  const messageListRef = useRef<HTMLElement>(null);
-  const openedConversationRef = useRef("");
   const composingRef = useRef(false);
   const messages = useInfiniteQuery({
     queryKey: ["messages", id],
@@ -1057,13 +1077,6 @@ function ConversationPage({ me, sdk }: { me: Me; sdk: AuthMiniApi }) {
       () => undefined,
     );
   }, [id, sdk]);
-  useLayoutEffect(() => {
-    if (!messages.data || openedConversationRef.current === id) return;
-    const messageList = messageListRef.current;
-    if (!messageList) return;
-    messageList.scrollTop = messageList.scrollHeight;
-    openedConversationRef.current = id;
-  }, [id, messages.data]);
   const chooseFile = async (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
     if (!file) return;
@@ -1106,38 +1119,49 @@ function ConversationPage({ me, sdk }: { me: Me; sdk: AuthMiniApi }) {
           ) : undefined
         }
       />
-      <section
-        ref={messageListRef}
-        className="min-h-0 flex-1 overflow-auto p-4 md:p-6"
-      >
-        <div className="flex flex-col gap-4">
-          {messages.hasPreviousPage ? (
-            <Button
-              className="self-center"
-              variant="ghost"
-              size="sm"
-              disabled={messages.isFetchingPreviousPage}
-              onClick={() => void messages.fetchPreviousPage()}
-            >
-              {messages.isFetchingPreviousPage
-                ? t("conversation.loadingOlder")
-                : t("conversation.loadOlder")}
-            </Button>
-          ) : null}
-          {messages.data?.pages
-            .flatMap((page) => page.messages)
-            .map((message) => (
-              <MessageRow
-                key={message.id}
-                message={message}
-                mine={
-                  message.sender_kind === "user" && message.sender_id === me.id
-                }
-                sdk={sdk}
-              />
-            ))}
-        </div>
-      </section>
+      <MessageScrollerProvider autoScroll defaultScrollPosition="end">
+        <MessageScroller className="h-auto flex-1">
+          <MessageScrollerViewport className="p-4 md:p-6" aria-label={title}>
+            <MessageScrollerContent className="gap-4">
+              {messages.hasPreviousPage ? (
+                <MessageScrollerItem messageId="load-earlier-messages">
+                  <Button
+                    className="self-center"
+                    variant="ghost"
+                    size="sm"
+                    disabled={messages.isFetchingPreviousPage}
+                    onClick={() => void messages.fetchPreviousPage()}
+                  >
+                    {messages.isFetchingPreviousPage
+                      ? t("conversation.loadingOlder")
+                      : t("conversation.loadOlder")}
+                  </Button>
+                </MessageScrollerItem>
+              ) : null}
+              {messages.data?.pages
+                .flatMap((page) => page.messages)
+                .map((message) => {
+                  const mine =
+                    message.sender_kind === "user" &&
+                    message.sender_id === me.id;
+                  return (
+                    <MessageScrollerItem
+                      key={message.id}
+                      messageId={message.id}
+                      scrollAnchor={mine}
+                    >
+                      <MessageRow message={message} mine={mine} sdk={sdk} />
+                    </MessageScrollerItem>
+                  );
+                })}
+            </MessageScrollerContent>
+          </MessageScrollerViewport>
+          <MessageScrollerButton>
+            <ArrowDownIcon data-icon="inline-start" />
+            <span className="sr-only">{t("conversation.scrollToLatest")}</span>
+          </MessageScrollerButton>
+        </MessageScroller>
+      </MessageScrollerProvider>
       <form
         className="shrink-0 border-t p-3 md:p-4"
         onSubmit={(event) => {
@@ -1522,39 +1546,59 @@ function MessageRow({
   sdk: AuthMiniApi;
 }) {
   const { locale, t } = useI18n();
+  const { note, profile } = useLinkitUserInfo(message.sender_id);
+  const senderName = message.sender_deleted
+    ? t("conversation.deletedBot")
+    : note?.name ||
+      profile?.username ||
+      message.sender_name ||
+      message.sender_id;
+  const avatarFallback =
+    Array.from(senderName.trim())[0]?.toLocaleUpperCase() ?? "?";
   return (
-    <div className={mine ? "ml-auto max-w-xl" : "max-w-xl"}>
-      <div className="mb-1 flex items-center gap-2 text-xs text-muted-foreground">
-        <span>
-          {message.sender_deleted
-            ? t("conversation.deletedBot")
-            : message.sender_name}
-        </span>
-        {message.sender_kind === "bot" ? (
-          <Badge variant="secondary">{t("conversation.bot")}</Badge>
-        ) : null}
-        {message.urgent ? (
-          <Badge variant="destructive">{t("conversation.urgent")}</Badge>
-        ) : null}
-        <time>
-          {new Date(message.created_at * 1000).toLocaleString(locale)}
-        </time>
-      </div>
-      <Card className={mine ? "bg-primary text-primary-foreground" : ""}>
-        <CardContent className="flex flex-col gap-3 p-3">
-          {message.body ? (
-            <MessageMarkdown>{message.body}</MessageMarkdown>
-          ) : null}
-          {message.attachments.map((attachment) => (
-            <AttachmentView
-              key={attachment.id}
-              attachment={attachment}
-              sdk={sdk}
-            />
-          ))}
-        </CardContent>
-      </Card>
-    </div>
+    <ChatMessage align={mine ? "end" : "start"}>
+      <MessageAvatar>
+        <Avatar aria-label={senderName}>
+          <AvatarImage src={profile?.avatar_url ?? undefined} alt="" />
+          <AvatarFallback>{avatarFallback}</AvatarFallback>
+        </Avatar>
+      </MessageAvatar>
+      <MessageContent>
+        <MessageHeader className="gap-2">
+          <span className="min-w-0 truncate" title={senderName}>
+            {senderName}
+          </span>
+          <time className="shrink-0">
+            {new Date(message.created_at * 1000).toLocaleString(locale)}
+          </time>
+        </MessageHeader>
+        <Bubble
+          align={mine ? "end" : "start"}
+          variant={mine ? "default" : "secondary"}
+        >
+          <BubbleContent>
+            <div className="flex flex-col gap-3">
+              {message.body ? (
+                <MessageMarkdown>{message.body}</MessageMarkdown>
+              ) : null}
+              {message.sender_kind === "bot" ? (
+                <Badge variant="secondary">{t("conversation.bot")}</Badge>
+              ) : null}
+              {message.urgent ? (
+                <Badge variant="destructive">{t("conversation.urgent")}</Badge>
+              ) : null}
+              {message.attachments.map((attachment) => (
+                <AttachmentView
+                  key={attachment.id}
+                  attachment={attachment}
+                  sdk={sdk}
+                />
+              ))}
+            </div>
+          </BubbleContent>
+        </Bubble>
+      </MessageContent>
+    </ChatMessage>
   );
 }
 
@@ -1567,6 +1611,7 @@ function AttachmentView({
 }) {
   const { t } = useI18n();
   const [url, setUrl] = useState("");
+  const image = attachment.media_type.startsWith("image/");
   useEffect(() => {
     let active = true;
     let objectUrl = "";
@@ -1582,33 +1627,39 @@ function AttachmentView({
       if (objectUrl) URL.revokeObjectURL(objectUrl);
     };
   }, [attachment.id, sdk]);
-  if (attachment.media_type.startsWith("image/"))
-    return url ? (
-      <a href={url} target="_blank" rel="noreferrer">
-        <img
-          className="max-h-72 rounded-md object-contain"
-          src={url}
-          alt={attachment.file_name}
+  return (
+    <MessageAttachment size="sm" state={url ? "done" : "processing"}>
+      <AttachmentMedia variant={image ? "image" : "icon"}>
+        {image && url ? (
+          <img src={url} alt={attachment.file_name} />
+        ) : image ? (
+          <ImageIcon />
+        ) : (
+          <FileIcon />
+        )}
+      </AttachmentMedia>
+      <AttachmentContent>
+        <AttachmentTitle>{attachment.file_name}</AttachmentTitle>
+        <AttachmentDescription>
+          {url
+            ? byteSize(attachment.byte_size)
+            : t("attachment.loading", { name: attachment.file_name })}
+        </AttachmentDescription>
+      </AttachmentContent>
+      {url ? (
+        <AttachmentTrigger
+          aria-label={attachment.file_name}
+          render={
+            <a
+              href={url}
+              target={image ? "_blank" : undefined}
+              rel={image ? "noreferrer" : undefined}
+              download={image ? undefined : attachment.file_name}
+            />
+          }
         />
-      </a>
-    ) : (
-      <Badge variant="secondary">
-        {t("attachment.loading", { name: attachment.file_name })}
-      </Badge>
-    );
-  return url ? (
-    <a
-      className="flex items-center gap-2 text-sm underline"
-      href={url}
-      download={attachment.file_name}
-    >
-      <FileIcon />
-      {attachment.file_name}
-    </a>
-  ) : (
-    <Badge variant="secondary">
-      {t("attachment.loading", { name: attachment.file_name })}
-    </Badge>
+      ) : null}
+    </MessageAttachment>
   );
 }
 

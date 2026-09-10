@@ -66,6 +66,7 @@ const english = {
   "conversation.attachFile": "Attach file",
   "conversation.loadOlder": "Load earlier messages",
   "conversation.loadingOlder": "Loading earlier messages…",
+  "conversation.scrollToLatest": "Scroll to latest message",
   "conversation.writeMessage": "Write a message…",
   "conversation.composeHint":
     "Enter to send · Shift+Enter for a new line · IME Enter confirms composition",
@@ -255,6 +256,7 @@ const chinese: Record<TranslationKey, string> = {
   "conversation.attachFile": "附加文件",
   "conversation.loadOlder": "加载更早的消息",
   "conversation.loadingOlder": "正在加载更早的消息…",
+  "conversation.scrollToLatest": "滚动到最新消息",
   "conversation.writeMessage": "输入消息…",
   "conversation.composeHint":
     "Enter 发送 · Shift+Enter 换行 · 输入法确认候选时不会发送",
