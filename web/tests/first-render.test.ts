@@ -17,5 +17,5 @@ test("unauthenticated first render shares the Auth Mini context with the source-
     viteConfig,
     /dedupe:\s*\[[\s\S]*?["']auth-mini-react-components["'][\s\S]*?["']react["'][\s\S]*?["']react-dom["'][\s\S]*?\]/,
   );
-  assert.equal(packageJson.dependencies["auth-mini-react-components"], "^0.6.2");
+  assert.equal(packageJson.dependencies["auth-mini-react-components"], "^0.6.4");
 });

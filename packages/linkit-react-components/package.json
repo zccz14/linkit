@@ -54,13 +54,13 @@
     "@testing-library/react": "^16.3.0",
     "@types/react": "^19.1.16",
     "@types/react-dom": "^19.1.9",
-    "auth-mini-react-components": "^0.6.2",
+    "auth-mini-react-components": "^0.6.4",
     "jsdom": "^26.1.0",
     "react": "^19.1.1",
     "react-dom": "^19.1.1",
     "typescript": "^5.9.3",
     "vite": "^6.3.5",
     "vitest": "^3.2.4",
-    "auth-mini": "^0.4.6"
+    "auth-mini": "^0.4.9"
   }
 }
