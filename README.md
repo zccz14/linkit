@@ -34,6 +34,13 @@ Open the app, enter your Auth Mini issuer, app hostname audience, public origin,
 and Auth Mini subject as `root_user_id`, then sign in with the matching user and
 initialize the instance. The default production issuer is `https://auth.ntnl.io`.
 
+## Auth Mini user synchronization
+
+The Root User can configure an Auth Mini **user ID directory token** under
+**System → Auth Mini user sync**. Linkit imports missing human user IDs immediately,
+on startup and every 60 seconds without receiving any other Auth Mini user data.
+See [the configuration and API guide](docs/auth-mini-user-sync.md).
+
 ## Bot API
 
 Create a Bot as its owner in the Linkit UI. The generated token is shown exactly
@@ -123,8 +130,9 @@ variables `AWS_DEPLOY_ROLE_ARN`, `AWS_REGION`, and `EC2_INSTANCE_ID`.
 
 ## Design boundary
 
-Linkit intentionally does not include an administrative console yet. Setup is
-the one-time configuration boundary. Auth Mini owns sign-in and session issuance;
+Root-only administration includes resource monitoring, Bark user visibility and
+Auth Mini directory synchronization. Setup establishes the authentication
+boundary. Auth Mini owns sign-in and session issuance;
 Linkit owns downstream authorization, profiles, conversations, Bot ownership,
 and message data.
 
