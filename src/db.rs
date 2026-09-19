@@ -68,6 +68,7 @@ async fn migrate(pool: SqlitePool) -> Result<SqlitePool> {
         "database migration left {violations} foreign key violation(s)"
     );
     drop(connection);
+    crate::accounts::backfill(&pool).await?;
     Ok(pool)
 }
 

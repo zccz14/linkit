@@ -20,7 +20,9 @@ notifications, and native Bot API tokens.
   human control owner, an `sk-…` bearer token, owner transfer, and token
   rotation. A Bot uses the same profile and conversation APIs as a user.
 - **Auth Mini** — setup verifies its `root_user_id` against an Auth Mini JWT;
-  normal app requests validate JWTs against the configured issuer and audience.
+  authenticated requests validate JWTs against the configured issuer and audience,
+  then silently ensure the user's account and default profile exist. No separate
+  registration form is required.
 
 ## Quick start
 
@@ -34,11 +36,23 @@ Open the app, enter your Auth Mini issuer, app hostname audience, public origin,
 and Auth Mini subject as `root_user_id`, then sign in with the matching user and
 initialize the instance. The default production issuer is `https://auth.ntnl.io`.
 
+## Silent account and profile creation
+
+Every valid Auth Mini JWT on a protected API request passes through a shared
+`ensure` operation before the route runs. New users receive a Linkit account and
+a profile with an editable `user_<12 hexadecimal characters>` username. Existing
+profiles are never overwritten; missing profiles are repaired automatically.
+This works without configuring a directory token or visiting the Linkit UI.
+
+See [the provisioning contract](docs/silent-account-provisioning.md) for
+concurrency, collision handling and authorization boundaries.
+
 ## Auth Mini user synchronization
 
 The Root User can configure an Auth Mini **user ID directory token** under
-**System → Auth Mini user sync**. Linkit imports missing human user IDs immediately,
-on startup and every 60 seconds without receiving any other Auth Mini user data.
+**System → Auth Mini user sync**. Linkit silently provisions missing human accounts
+and default profiles immediately, on startup and every 60 seconds, using only
+Auth Mini user IDs and without receiving other Auth Mini user data.
 See [the configuration and API guide](docs/auth-mini-user-sync.md).
 
 ## Bot API

@@ -199,25 +199,19 @@ async fn fetch_user_ids(issuer: &str, token: &str) -> Result<Vec<String>, AppErr
 async fn sync_and_save(db: &SqlitePool, token: &str) -> Result<(), AppError> {
     let ids = fetch_user_ids(&meta(db, "auth_issuer").await?, token).await?;
     let now = chrono::Utc::now().timestamp();
-    let mut tx = db.begin().await?;
     let bots: HashSet<String> = sqlx::query_scalar("SELECT id FROM users WHERE type='bot'")
-        .fetch_all(&mut *tx)
+        .fetch_all(db)
         .await?
         .into_iter()
         .collect();
+    let mut tx = db.begin().await?;
     for id in &ids {
         if bots.contains(id) {
             return Err(AppError::conflict(
                 "Auth Mini user ID conflicts with a Linkit Bot",
             ));
         }
-        sqlx::query(
-            "INSERT INTO users(id,type,created_at) VALUES(?,'human',?) ON CONFLICT(id) DO NOTHING",
-        )
-        .bind(id)
-        .bind(now)
-        .execute(&mut *tx)
-        .await?;
+        crate::accounts::ensure_human(&mut tx, id, now).await?;
     }
     sqlx::query("UPDATE auth_directory_sync SET token=?,last_synced_at=?,user_count=?,last_error=NULL WHERE id=1")
         .bind(token).bind(now).bind(ids.len() as i64).execute(&mut *tx).await?;
@@ -363,7 +357,13 @@ mod tests {
         .0;
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].user_id, NEW_USER);
-        assert_eq!(results[0].username, NEW_USER);
+        let generated = crate::profile_for_user(&state.db, NEW_USER)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(results[0].username, generated.username);
+        assert!(generated.username.starts_with("user_"));
+        assert!(generated.intro.is_empty());
         assert!(results[0].avatar_url.is_none());
         *upstream.write().await = (StatusCode::OK, json!({"user_ids": []}));
         sync_configured(&state).await.unwrap();
@@ -549,6 +549,12 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(count, 0);
+        assert!(
+            crate::profile_for_user(&state.db, NEW_USER)
+                .await
+                .unwrap()
+                .is_none()
+        );
         assert!(saved_token(&state.db).await.unwrap().is_empty());
     }
 

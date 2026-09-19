@@ -9,7 +9,7 @@ const english = {
   "directorySync.instructions":
     "Generate a directory token in Auth Mini → Admin → Users, then paste it here. Saving validates the token and synchronizes immediately. The backend also synchronizes on startup and every 60 seconds. The saved token is never returned to the browser.",
   "directorySync.boundary":
-    "Only missing human user IDs are added. Profiles, Bots and chat history are preserved; accounts are not automatically deleted. Users without a profile can be found by UUID in the user picker.",
+    "Missing human accounts and profiles are created silently with a default username. Existing profiles, Bots and chat history are preserved; accounts are not automatically deleted. Users are searchable by username or UUID.",
   "directorySync.configured": "Token configured · automatic sync enabled",
   "directorySync.unconfigured": "No token configured · automatic sync disabled",
   "directorySync.token": "Directory token (write-only)",
@@ -232,7 +232,7 @@ const chinese: Record<TranslationKey, string> = {
   "directorySync.instructions":
     "在 Auth Mini → 管理 → 用户中生成目录 Token，然后粘贴到此处。保存时校验 Token 并立即同步，后端启动时及每 60 秒自动同步。已保存的 Token 不会返回浏览器。",
   "directorySync.boundary":
-    "仅补齐缺失的真人用户 ID，保留个人资料、机器人及聊天记录，不自动删除账号。未完善资料的用户可在用户选择器中通过 UUID 搜索。",
+    "静默创建缺失的真人账户和 profile，并生成默认用户名。保留已有个人资料、机器人及聊天记录，不自动删除账号。用户可通过用户名或 UUID 搜索。",
   "directorySync.configured": "已配置 Token · 自动同步已启用",
   "directorySync.unconfigured": "未配置 Token · 自动同步未启用",
   "directorySync.token": "目录 Token（只写）",

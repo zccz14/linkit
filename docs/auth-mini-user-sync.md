@@ -45,13 +45,18 @@ an explicit error rather than partially imported. Requests time out after 15
 seconds and do not follow redirects. HTTPS is required except on loopback for
 local development, using the existing Auth Mini issuer configuration.
 
-Synchronization inserts missing human `users` records idempotently. It does not
-create placeholder profiles or overwrite usernames, intros, avatars or creation
-timestamps. Users without profiles become searchable by UUID in the user picker;
-the profile directory continues to list completed profiles. A collision with a
-local Bot ID rejects the whole import. Local IDs missing from a later snapshot
-are retained: synchronization does not delete or deactivate accounts, remove
-Bots, erase history or replace Linkit's authentication checks.
+Synchronization calls the same [account provisioning](silent-account-provisioning.md)
+operation used after JWT verification. It creates missing human accounts and
+profiles with an editable default `user_<12 hexadecimal characters>` username,
+empty intro and no avatar. Those users immediately appear in the profile
+directory and can be searched by username or UUID and messaged without first
+visiting Linkit. Existing usernames, intros, avatars and creation timestamps are
+preserved. A collision with a local Bot ID rejects the whole import. Local IDs
+missing from a later snapshot are retained: synchronization does not delete or
+deactivate accounts, remove Bots, erase history or replace authentication checks.
+
+On startup, Linkit also backfills missing profiles for existing local human
+accounts, independently of whether a directory token has been configured.
 
 ## Linkit administration API
 
