@@ -10,9 +10,13 @@
 - username 前缀继续使用 `UNIQUE COLLATE NOCASE` 索引。UUID 字符集仅包含不会成为 `LIKE` 通配符的字符，user_id 前缀路径使用 `users_id_nocase` 索引并左连接个人资料，保持有界、可解释的 typeahead 查询计划；
 - `%`、`_`、`\\` 会在 username 查询中作为普通字符转义；请求方必须使用 URL 查询编码。
 
-## 尚未完善资料的 Auth Mini 用户
+## 静默注册的用户
 
-[用户 ID 同步](auth-mini-user-sync.md)后，UUID 前缀搜索会包含尚未创建 Linkit
-个人资料的用户。这类结果的 `username` 使用 UUID，`avatar_url` 为 null。
-该显示值不会创建个人资料，也不会占用 UUID 对应的用户名。
+真人用户通过有效 JWT 调用受保护接口，或通过 [用户 ID 同步](auth-mini-user-sync.md)
+被发现时，后端会自动补齐账户与 profile。默认用户名形如 `user_7a28d10f93ac`，
+用户随后可以修改；自动生成时若重名，会依次追加 `_2`、`_3` 等后缀。
+这些用户可直接通过用户名和 UUID 前缀搜索，无需先填写资料。
+
+若某个条目仍未设置 profile（例如 Bot），搜索结果的 `username` 使用 UUID，
+`avatar_url` 为 null。该显示值不会创建个人资料，也不会占用对应用户名。
 添加群成员等操作应使用 `user_id`。

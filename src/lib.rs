@@ -1,3 +1,4 @@
+mod accounts;
 pub mod auth;
 pub mod bark;
 pub mod config;
@@ -542,11 +543,7 @@ async fn setup(
             .execute(&mut *tx)
             .await?;
     }
-    sqlx::query("INSERT INTO users(id,created_at) VALUES(?,?) ON CONFLICT(id) DO NOTHING")
-        .bind(&input.root_user_id)
-        .bind(now)
-        .execute(&mut *tx)
-        .await?;
+    accounts::ensure_human(&mut tx, &input.root_user_id, now).await?;
     tx.commit().await?;
     state.auth.configure(&issuer, &trusted_audiences).await?;
     Ok(axum::Json(SetupStatus {
@@ -2592,17 +2589,15 @@ async fn add_member_by_user_id(
     if user_id == owner_id {
         return Err(AppError::bad_request("a group owner is already a member"));
     }
-    let exists: Option<String> = sqlx::query_scalar("SELECT id FROM users WHERE id=?")
+    let user_type: Option<String> = sqlx::query_scalar("SELECT type FROM users WHERE id=?")
         .bind(&user_id)
         .fetch_optional(&mut **tx)
         .await?;
-    if exists.is_none() {
+    if user_type.is_none() {
         Uuid::parse_str(&user_id).map_err(|_| AppError::not_found("user not found"))?;
-        sqlx::query("INSERT INTO users(id,type,created_at) VALUES(?,'human',?)")
-            .bind(&user_id)
-            .bind(now)
-            .execute(&mut **tx)
-            .await?;
+    }
+    if user_type.as_deref() != Some("bot") {
+        accounts::ensure_human(tx, &user_id, now).await?;
     }
     let result = sqlx::query("INSERT INTO conversation_members(conversation_id,user_id,role,joined_at) VALUES(?,?,'member',?) ON CONFLICT DO NOTHING")
         .bind(conversation_id)
@@ -4215,6 +4210,10 @@ mod tests {
             vec!["owner".into()],
             vec!["member".into(), "member".into()],
             vec!["missing".into()],
+            vec![
+                "550e8400-e29b-41d4-a716-446655440000".into(),
+                "missing".into(),
+            ],
         ] {
             assert!(
                 create_group(
@@ -4230,6 +4229,19 @@ mod tests {
             );
             assert_eq!(group_count().await, 1);
         }
+        let incomplete: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM users WHERE id='550e8400-e29b-41d4-a716-446655440000'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(incomplete, 0);
+        assert!(
+            profile_for_user(&pool, "550e8400-e29b-41d4-a716-446655440000")
+                .await
+                .unwrap()
+                .is_none()
+        );
     }
 
     #[tokio::test]
@@ -4260,6 +4272,10 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(member, (target.into(), "human".into()));
+        let profile = profile_for_user(&pool, target).await.unwrap().unwrap();
+        assert!(profile.username.starts_with("user_"));
+        assert!(profile.intro.is_empty());
+        assert!(profile.avatar_attachment_id.is_none());
     }
 
     #[tokio::test]
