@@ -51,6 +51,7 @@ import {
 } from "linkit-react-components";
 import { QRCodeSVG } from "qrcode.react";
 
+import { AuthMiniDirectory } from "@/components/admin/auth-mini-directory";
 import { LanguageMenu } from "@/components/language-menu";
 import { useI18n } from "@/components/use-i18n";
 import {
@@ -496,6 +497,11 @@ function LinkitShell({
   ];
   const systemItems: NavigationItem[] = [
     {
+      icon: UsersRoundIcon,
+      label: t("directorySync.title"),
+      to: "/admin/auth-mini-directory",
+    },
+    {
       icon: HardDriveIcon,
       label: t("admin.resources"),
       to: "/admin/resources",
@@ -596,6 +602,16 @@ function LinkitShell({
               element={<BarkNotifications sdk={sdk} />}
             />
             <Route
+              path="/admin/auth-mini-directory"
+              element={
+                me.root ? (
+                  <AuthMiniDirectory sdk={sdk} />
+                ) : (
+                  <Navigate to="/conversations" replace />
+                )
+              }
+            />
+            <Route
               path="/admin/resources"
               element={<SystemResourcesPage sdk={sdk} />}
             />
@@ -662,6 +678,8 @@ function appPageTitle(pathname: string, t: (key: TranslationKey) => string) {
   if (pathname.startsWith("/settings/notifications"))
     return t("barkSettings.title");
   if (pathname.startsWith("/settings/profile")) return t("profile.title");
+  if (pathname.startsWith("/admin/auth-mini-directory"))
+    return t("directorySync.title");
   if (pathname.startsWith("/admin/resources")) return t("admin.resources");
   if (pathname.startsWith("/admin/bark-users"))
     return t("admin.barkUsersTitle");

@@ -2,6 +2,7 @@ pub mod auth;
 pub mod bark;
 pub mod config;
 pub mod db;
+mod directory;
 
 use std::{
     io::Cursor,
@@ -54,6 +55,7 @@ const CONVERSATION_QUERY: &str = "SELECT c.id,c.kind,c.title,c.created_by,c.crea
 #[derive(Clone)]
 pub struct AppState {
     pub db: SqlitePool,
+    directory_sync_lock: Arc<tokio::sync::Mutex<()>>,
     pub auth: AuthManager,
     pub uploads: Arc<PathBuf>,
     bark: bark::BarkGateway,
@@ -78,6 +80,7 @@ impl AppState {
         });
         let state = Self {
             db,
+            directory_sync_lock: Arc::new(tokio::sync::Mutex::new(())),
             auth,
             uploads: Arc::new(bootstrap.upload_dir),
             bark,
@@ -86,6 +89,7 @@ impl AppState {
             events,
         };
         schedule_avatar_backfill(state.clone());
+        directory::schedule(state.clone());
         Ok(state)
     }
 }
@@ -94,6 +98,16 @@ pub fn router(state: AppState) -> Router {
     let signed_in = Router::new()
         .route("/api/me", get(me))
         .route("/api/admin/resources", get(system_overview))
+        .route(
+            "/api/admin/auth-mini-directory",
+            get(directory::get_settings)
+                .put(directory::save_settings)
+                .delete(directory::clear_settings),
+        )
+        .route(
+            "/api/admin/auth-mini-directory/sync",
+            post(directory::sync_now),
+        )
         .route("/api/admin/bark-users", get(bark_notification_users))
         .route("/api/events", get(events))
         .route("/api/profile", put(update_profile))
@@ -1212,9 +1226,9 @@ async fn search_users(
                 FROM profiles
                 WHERE username LIKE ? ESCAPE '\\' COLLATE NOCASE
                 UNION ALL
-                SELECT user_id,username,avatar_attachment_id,updated_at,1 AS source
-                FROM profiles
-                WHERE user_id LIKE ? COLLATE NOCASE
+                SELECT u.id,COALESCE(p.username,u.id),p.avatar_attachment_id,COALESCE(p.updated_at,u.created_at),1 AS source
+                FROM users u LEFT JOIN profiles p ON p.user_id=u.id
+                WHERE u.id LIKE ? COLLATE NOCASE
              ), deduplicated AS (
                 SELECT user_id,username,avatar_attachment_id,updated_at,MIN(source) AS source
                 FROM matches
@@ -2789,7 +2803,7 @@ mod tests {
     use http_body_util::BodyExt;
     use tower::ServiceExt;
 
-    fn test_state(db: SqlitePool) -> AppState {
+    pub(super) fn test_state(db: SqlitePool) -> AppState {
         test_state_with_bark(db, bark::BarkGateway::test_gateway())
     }
 
@@ -2797,6 +2811,7 @@ mod tests {
         let (events, _) = tokio::sync::broadcast::channel(1);
         AppState {
             db,
+            directory_sync_lock: Arc::new(tokio::sync::Mutex::new(())),
             auth: AuthManager::default(),
             uploads: Arc::new(std::env::temp_dir()),
             bark,

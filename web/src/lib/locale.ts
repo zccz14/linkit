@@ -3,6 +3,26 @@ export const supportedLocales = ["en", "zh-CN"] as const;
 export type Locale = (typeof supportedLocales)[number];
 
 const english = {
+  "directorySync.title": "Auth Mini user sync",
+  "directorySync.description":
+    "Pull the complete user ID list without any other Auth Mini user information.",
+  "directorySync.instructions":
+    "Generate a directory token in Auth Mini → Admin → Users, then paste it here. Saving validates the token and synchronizes immediately. The backend also synchronizes on startup and every 60 seconds. The saved token is never returned to the browser.",
+  "directorySync.boundary":
+    "Only missing human user IDs are added. Profiles, Bots and chat history are preserved; accounts are not automatically deleted. Users without a profile can be found by UUID in the user picker.",
+  "directorySync.configured": "Token configured · automatic sync enabled",
+  "directorySync.unconfigured": "No token configured · automatic sync disabled",
+  "directorySync.token": "Directory token (write-only)",
+  "directorySync.save": "Save and sync",
+  "directorySync.sync": "Sync now",
+  "directorySync.clear": "Remove token",
+  "directorySync.confirmClear":
+    "Remove the token and stop automatic sync? Existing users and messages will be preserved.",
+  "directorySync.saved": "Token saved and users synchronized",
+  "directorySync.synced": "Users synchronized",
+  "directorySync.disabled": "Automatic sync disabled",
+  "directorySync.lastSync": "Last successful sync",
+  "directorySync.userCount": "Auth Mini IDs in last successful sync",
   "app.loading": "Loading Linkit…",
   "app.restoring": "Restoring your Linkit session…",
   "app.authIssuerMissing": "Auth Mini issuer is missing.",
@@ -206,6 +226,26 @@ const english = {
 export type TranslationKey = keyof typeof english;
 
 const chinese: Record<TranslationKey, string> = {
+  "directorySync.title": "Auth Mini 用户同步",
+  "directorySync.description":
+    "拉取完整用户 ID 列表，不获取 Auth Mini 的其他用户信息。",
+  "directorySync.instructions":
+    "在 Auth Mini → 管理 → 用户中生成目录 Token，然后粘贴到此处。保存时校验 Token 并立即同步，后端启动时及每 60 秒自动同步。已保存的 Token 不会返回浏览器。",
+  "directorySync.boundary":
+    "仅补齐缺失的真人用户 ID，保留个人资料、机器人及聊天记录，不自动删除账号。未完善资料的用户可在用户选择器中通过 UUID 搜索。",
+  "directorySync.configured": "已配置 Token · 自动同步已启用",
+  "directorySync.unconfigured": "未配置 Token · 自动同步未启用",
+  "directorySync.token": "目录 Token（只写）",
+  "directorySync.save": "保存并同步",
+  "directorySync.sync": "立即同步",
+  "directorySync.clear": "移除 Token",
+  "directorySync.confirmClear":
+    "移除 Token 并停止自动同步？现有用户和消息将保留。",
+  "directorySync.saved": "Token 已保存，用户已同步",
+  "directorySync.synced": "用户已同步",
+  "directorySync.disabled": "自动同步已关闭",
+  "directorySync.lastSync": "最近成功同步",
+  "directorySync.userCount": "最近成功同步的 Auth Mini 用户 ID 数量",
   "app.loading": "正在加载 Linkit…",
   "app.restoring": "正在恢复你的 Linkit 会话…",
   "app.authIssuerMissing": "缺少 Auth Mini 签发方。",
