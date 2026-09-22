@@ -161,19 +161,7 @@ pub fn router(state: AppState) -> Router {
         )
         .route("/api/bots", get(list_bots).post(create_bot))
         .route("/api/bots/{id}", patch(update_bot).delete(delete_bot))
-        .route_layer(from_fn_with_state(state.clone(), auth::authenticate))
-        .layer(
-            CorsLayer::new()
-                .allow_origin(Any)
-                .allow_methods([
-                    axum::http::Method::GET,
-                    axum::http::Method::POST,
-                    axum::http::Method::PUT,
-                    axum::http::Method::PATCH,
-                    axum::http::Method::DELETE,
-                ])
-                .allow_headers([header::AUTHORIZATION, header::CONTENT_TYPE]),
-        );
+        .route_layer(from_fn_with_state(state.clone(), auth::authenticate));
 
     let public_profiles = Router::new()
         .route("/api/public/profiles/batch", post(public_profiles_batch))
@@ -181,16 +169,6 @@ pub fn router(state: AppState) -> Router {
         .route(
             "/api/public/profiles/{user_id}/avatar",
             get(public_profile_avatar),
-        )
-        .layer(
-            CorsLayer::new()
-                .allow_origin(Any)
-                .allow_methods([
-                    axum::http::Method::GET,
-                    axum::http::Method::HEAD,
-                    axum::http::Method::POST,
-                ])
-                .allow_headers([header::AUTHORIZATION, header::CONTENT_TYPE]),
         );
 
     Router::new()
@@ -219,6 +197,19 @@ pub fn router(state: AppState) -> Router {
                     path = request_log_path(request.uri().path()),
                 )
             }),
+        )
+        .layer(
+            CorsLayer::new()
+                .allow_origin(Any)
+                .allow_methods([
+                    axum::http::Method::GET,
+                    axum::http::Method::HEAD,
+                    axum::http::Method::POST,
+                    axum::http::Method::PUT,
+                    axum::http::Method::PATCH,
+                    axum::http::Method::DELETE,
+                ])
+                .allow_headers([header::AUTHORIZATION, header::CONTENT_TYPE]),
         )
         .with_state(state)
 }
@@ -2962,24 +2953,61 @@ mod tests {
             .unwrap();
         assert_eq!(response.status(), StatusCode::OK);
         assert_eq!(response.headers()[header::ACCESS_CONTROL_ALLOW_ORIGIN], "*");
+    }
+
+    #[tokio::test]
+    async fn cors_any_covers_outer_routes_and_unmatched_paths() {
+        let app = router(test_state(db::connect_memory().await.unwrap()));
+        for uri in [
+            "/api/health",
+            "/api/config",
+            "/api/public/conversations/missing/avatar",
+            "/api/missing",
+        ] {
+            let response = app
+                .clone()
+                .oneshot(
+                    axum::http::Request::builder()
+                        .uri(uri)
+                        .header(header::ORIGIN, "https://openai.ntnl.io")
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(
+                response.headers()[header::ACCESS_CONTROL_ALLOW_ORIGIN],
+                "*",
+                "{uri} must be readable from any origin"
+            );
+            assert!(
+                response
+                    .headers()
+                    .get(header::ACCESS_CONTROL_ALLOW_CREDENTIALS)
+                    .is_none(),
+                "{uri} must not accept credentials"
+            );
+        }
 
         let response = app
             .oneshot(
                 axum::http::Request::builder()
                     .method("OPTIONS")
                     .uri("/api/setup")
-                    .header(header::ORIGIN, "https://1ex.ntnl.io")
+                    .header(header::ORIGIN, "https://openai.ntnl.io")
                     .header(header::ACCESS_CONTROL_REQUEST_METHOD, "GET")
+                    .header(header::ACCESS_CONTROL_REQUEST_HEADERS, "authorization")
                     .body(Body::empty())
                     .unwrap(),
             )
             .await
             .unwrap();
-        assert_eq!(response.status(), StatusCode::METHOD_NOT_ALLOWED);
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(response.headers()[header::ACCESS_CONTROL_ALLOW_ORIGIN], "*");
         assert!(
             response
                 .headers()
-                .get(header::ACCESS_CONTROL_ALLOW_ORIGIN)
+                .get(header::ACCESS_CONTROL_ALLOW_CREDENTIALS)
                 .is_none()
         );
     }
