@@ -111,7 +111,6 @@ export function LinkitMyInfo() {
     myUserId: userId,
     unreadMessageCount,
     refreshMyProfile,
-    refreshUnreadMessageCount,
     saveMyProfile,
     signOut: signOutFromLinkit,
     openLinkitInbox,
@@ -141,12 +140,6 @@ export function LinkitMyInfo() {
   useEffect(() => {
     void refreshMyProfile();
   }, [refreshMyProfile]);
-
-  useEffect(() => {
-    void refreshUnreadMessageCount();
-    const timer = window.setInterval(() => void refreshUnreadMessageCount(), 4_000);
-    return () => window.clearInterval(timer);
-  }, [refreshUnreadMessageCount]);
 
   useEffect(() => {
     setEditor(toEditor(profile));

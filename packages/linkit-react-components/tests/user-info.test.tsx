@@ -1,5 +1,5 @@
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi, type MockInstance } from "vitest";
 
 const auth = {
   isAuthenticated: true,
@@ -31,9 +31,29 @@ function json(value: unknown) {
   });
 }
 
+function eventStreamResponse() {
+  return new Response(new ReadableStream<Uint8Array>({ start() {} }), {
+    headers: { "Content-Type": "text/event-stream" },
+  });
+}
+
+function providerRequest(url: string) {
+  if (url.endsWith("/api/unread-count")) return Promise.resolve(json({ total: 0 }));
+  if (url.endsWith("/api/events")) return Promise.resolve(eventStreamResponse());
+  return undefined;
+}
+
+function batchRequestCount(
+  fetchMock: MockInstance<(input: URL | RequestInfo, init?: RequestInit) => Promise<Response>>,
+) {
+  return fetchMock.mock.calls.filter(([input]) => String(input).endsWith("/batch")).length;
+}
+
 function batchFetch(profiles: unknown[], notes: unknown[] = []) {
   return vi.spyOn(globalThis, "fetch").mockImplementation((input) => {
     const url = String(input);
+    const provider = providerRequest(url);
+    if (provider) return provider;
     if (url.endsWith("/api/public/profiles/batch")) return Promise.resolve(json(profiles));
     if (url.endsWith("/api/user-notes/batch")) return Promise.resolve(json(notes));
     throw new Error(`Unexpected Linkit request: ${url}`);
@@ -87,7 +107,7 @@ describe("LinkitUserInfo", () => {
       </LinkitProvider>,
     );
     await screen.findByRole("button", { name: /user information: bob/i });
-    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(batchRequestCount(fetchMock)).toBe(2);
     expect(fetchMock).toHaveBeenCalledWith(
       "https://linkit.example.test/api/public/profiles/batch",
       expect.objectContaining({
@@ -106,20 +126,23 @@ describe("LinkitUserInfo", () => {
 
   it("does not issue a second request for an ID while its batch is in flight", async () => {
     let resolveBatch: (response: Response) => void = () => undefined;
-    const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(
-      (input) => String(input).endsWith("/api/public/profiles/batch")
-        ? new Promise((resolve) => { resolveBatch = resolve; })
-        : Promise.resolve(json([])),
-    );
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation((input) => {
+      const url = String(input);
+      const provider = providerRequest(url);
+      if (provider) return provider;
+      if (url.endsWith("/api/public/profiles/batch"))
+        return new Promise((resolve) => { resolveBatch = resolve; });
+      return Promise.resolve(json([]));
+    });
     const subject = (duplicate = false) => <LinkitProvider linkitBaseUrl="https://linkit.example.test">
       <LinkitUserInfo userId={alice.user_id} />
       {duplicate ? <LinkitUserInfo compact userId={alice.user_id} /> : null}
     </LinkitProvider>;
     const rendered = render(subject());
-    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(batchRequestCount(fetchMock)).toBe(2));
     rendered.rerender(subject(true));
     await new Promise((resolve) => setTimeout(resolve, 60));
-    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(batchRequestCount(fetchMock)).toBe(2);
     resolveBatch(json([alice]));
     expect((await screen.findAllByRole("button", { name: /user information: alice/i })).length).toBe(2);
   });
@@ -130,6 +153,8 @@ describe("LinkitUserInfo", () => {
     vi.spyOn(globalThis, "fetch")
       .mockImplementation((input) => {
         const url = String(input);
+        const provider = providerRequest(url);
+        if (provider) return provider;
         if (url.endsWith("/api/public/profiles/batch")) return Promise.resolve(json([alice]));
         if (url.endsWith("/api/user-notes/batch")) return Promise.resolve(json([]));
         if (url.endsWith("/api/me")) return Promise.resolve(json({ id: "viewer", root: false, profile: null }));
@@ -148,6 +173,8 @@ describe("LinkitUserInfo", () => {
     vi.spyOn(globalThis, "fetch")
       .mockImplementation((input) => {
         const url = String(input);
+        const provider = providerRequest(url);
+        if (provider) return provider;
         if (url.endsWith("/api/public/profiles/batch")) return Promise.resolve(json([alice]));
         if (url.endsWith("/api/user-notes/batch")) return Promise.resolve(json([]));
         if (url.endsWith("/api/me")) return Promise.resolve(json({ id: alice.user_id, root: false, profile: null }));
@@ -165,6 +192,8 @@ describe("LinkitUserInfo", () => {
     const saved = { user_id: userId, name: "New fund investor", updated_at: 2 };
     const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation((input, init) => {
       const url = String(input);
+      const provider = providerRequest(url);
+      if (provider) return provider;
       if (url.endsWith("/api/public/profiles/batch")) return Promise.resolve(json([]));
       if (url.endsWith("/api/user-notes/batch")) return Promise.resolve(json([{ ...aliceNote, user_id: userId }]));
       if (url.endsWith(`/api/user-notes/${userId}`) && init?.method === "PUT") return Promise.resolve(json(saved));
