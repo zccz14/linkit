@@ -153,48 +153,6 @@ export async function api<T>(
   return readResponse<T>(response);
 }
 
-export function subscribeToEvents(
-  sdk: AuthMiniApi,
-  onEvent: (event: {
-    conversation_id: string;
-    sender_id: string;
-    message: Message;
-  }) => void,
-) {
-  const controller = new AbortController();
-  void authenticatedFetch(sdk, "/api/events", { signal: controller.signal })
-    .then(async (response) => {
-      if (!response.ok || !response.body)
-        throw new Error("Event stream is unavailable");
-      const reader = response.body.getReader();
-      const decoder = new TextDecoder();
-      let buffer = "";
-      while (!controller.signal.aborted) {
-        const next = await reader.read();
-        if (next.done) break;
-        buffer += decoder.decode(next.value, { stream: true });
-        const events = buffer.split("\n\n");
-        buffer = events.pop() ?? "";
-        for (const event of events) {
-          const data = event
-            .split("\n")
-            .find((line) => line.startsWith("data: "))
-            ?.slice(6);
-          if (data)
-            onEvent(
-              JSON.parse(data) as {
-                conversation_id: string;
-                sender_id: string;
-                message: Message;
-              },
-            );
-        }
-      }
-    })
-    .catch(() => undefined);
-  return () => controller.abort();
-}
-
 export async function upload(sdk: AuthMiniApi, file: File) {
   const form = new FormData();
   form.append("file", file);
