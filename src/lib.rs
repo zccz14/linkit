@@ -62,7 +62,7 @@ pub struct AppState {
     bark: bark::BarkGateway,
     database_path: Arc<PathBuf>,
     system_monitor: Arc<Mutex<SystemMonitor>>,
-    events: tokio::sync::broadcast::Sender<ConversationEvent>,
+    events: tokio::sync::broadcast::Sender<ServerEvent>,
 }
 
 impl AppState {
@@ -98,6 +98,7 @@ impl AppState {
 pub fn router(state: AppState) -> Router {
     let signed_in = Router::new()
         .route("/api/me", get(me))
+        .route("/api/unread-count", get(unread_count))
         .route("/api/admin/resources", get(system_overview))
         .route(
             "/api/admin/auth-mini-directory",
@@ -295,11 +296,51 @@ struct Health {
     status: &'static str,
 }
 
-#[derive(Clone, Serialize)]
-struct ConversationEvent {
-    conversation_id: String,
-    sender_id: String,
-    message: Message,
+#[derive(Serialize)]
+struct UnreadCount {
+    total: i64,
+}
+
+async fn unread_count(
+    State(state): State<AppState>,
+    axum::Extension(user): axum::Extension<UserIdentity>,
+) -> Result<axum::Json<UnreadCount>, AppError> {
+    Ok(axum::Json(UnreadCount {
+        total: unread_total(&state.db, &user.id).await?,
+    }))
+}
+
+#[derive(Clone)]
+struct ServerEvent {
+    recipients: Vec<String>,
+    kind: ServerEventKind,
+}
+
+#[derive(Clone)]
+enum ServerEventKind {
+    Message {
+        conversation_id: String,
+        sender_id: String,
+        message: Box<Message>,
+    },
+    Unread,
+    RefreshConversations,
+}
+
+impl ServerEvent {
+    fn unread(recipients: Vec<String>) -> Self {
+        Self {
+            recipients,
+            kind: ServerEventKind::Unread,
+        }
+    }
+
+    fn refresh_conversations(recipients: Vec<String>) -> Self {
+        Self {
+            recipients,
+            kind: ServerEventKind::RefreshConversations,
+        }
+    }
 }
 
 async fn events(
@@ -311,15 +352,36 @@ async fn events(
     let mut receiver = state.events.subscribe();
     let stream = async_stream::stream! {
         while let Ok(event) = receiver.recv().await {
-            let member: Option<i64> = sqlx::query_scalar("SELECT 1 FROM conversation_members WHERE conversation_id=? AND user_id=?")
-                .bind(&event.conversation_id)
-                .bind(&user.id)
-                .fetch_optional(&state.db)
-                .await
-                .unwrap_or(None);
-            if member.is_some() {
-                let payload = serde_json::to_string(&event).expect("event serializes");
-                yield Ok(axum::response::sse::Event::default().event("message").data(payload));
+            if !event.recipients.contains(&user.id) {
+                continue;
+            }
+            match event.kind {
+                ServerEventKind::Message {
+                    conversation_id,
+                    sender_id,
+                    message,
+                } => {
+                    let payload = json!({
+                        "conversation_id": conversation_id,
+                        "sender_id": sender_id,
+                        "message": message,
+                    })
+                    .to_string();
+                    yield Ok(axum::response::sse::Event::default().event("message").data(payload));
+                }
+                ServerEventKind::Unread => {
+                    // RECOVERY: a failed count query skips this frame; the next event or the client's reconnect reconcile refreshes the badge.
+                    if let Ok(total) = unread_total(&state.db, &user.id).await {
+                        yield Ok(axum::response::sse::Event::default()
+                            .event("unread")
+                            .data(json!({ "total": total }).to_string()));
+                    }
+                }
+                ServerEventKind::RefreshConversations => {
+                    yield Ok(axum::response::sse::Event::default()
+                        .event("refresh")
+                        .data(json!({ "conversations": true }).to_string()));
+                }
             }
         }
     };
@@ -1402,6 +1464,10 @@ async fn update_group_title(
             .execute(&state.db)
             .await?;
     }
+    let recipients = conversation_member_ids(&state.db, &id).await?;
+    let _ = state
+        .events
+        .send(ServerEvent::refresh_conversations(recipients));
     conversation(&state.db, &id, &user.id).await.map(axum::Json)
 }
 
@@ -1411,6 +1477,7 @@ async fn delete_group(
     Path(id): Path<String>,
 ) -> Result<StatusCode, AppError> {
     require_group_owner(&state.db, &id, &user.id).await?;
+    let members = conversation_member_ids(&state.db, &id).await?;
     let result = sqlx::query("DELETE FROM conversations WHERE id=? AND kind='group'")
         .bind(&id)
         .execute(&state.db)
@@ -1418,6 +1485,10 @@ async fn delete_group(
     if result.rows_affected() == 0 {
         return Err(AppError::not_found("conversation not found"));
     }
+    let _ = state
+        .events
+        .send(ServerEvent::refresh_conversations(members.clone()));
+    let _ = state.events.send(ServerEvent::unread(members));
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -1444,6 +1515,14 @@ async fn create_group(
         add_member_by_user_id(&mut tx, &id, &user.id, &member_id, now).await?;
     }
     tx.commit().await?;
+    let recipients: Vec<String> = conversation_member_ids(&state.db, &id)
+        .await?
+        .into_iter()
+        .filter(|member_id| member_id != &user.id)
+        .collect();
+    let _ = state
+        .events
+        .send(ServerEvent::refresh_conversations(recipients));
     conversation(&state.db, &id, &user.id).await.map(axum::Json)
 }
 
@@ -1471,6 +1550,9 @@ async fn open_direct(
         sqlx::query("INSERT INTO conversation_members(conversation_id,user_id,role,joined_at) VALUES(?,?,'member',?) ON CONFLICT DO NOTHING").bind(&actual_id).bind(member).bind(now).execute(&mut *tx).await?;
     }
     tx.commit().await?;
+    let _ = state
+        .events
+        .send(ServerEvent::refresh_conversations(vec![target.clone()]));
     conversation(&state.db, &actual_id, &user.id)
         .await
         .map(axum::Json)
@@ -1492,6 +1574,11 @@ async fn add_member(
     let mut tx = state.db.begin().await?;
     add_member_by_user_id(&mut tx, &id, &user.id, &input.user_id, now).await?;
     tx.commit().await?;
+    let member_id = input.user_id;
+    let _ = state
+        .events
+        .send(ServerEvent::refresh_conversations(vec![member_id.clone()]));
+    let _ = state.events.send(ServerEvent::unread(vec![member_id]));
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -1512,12 +1599,16 @@ async fn remove_member(
         "DELETE FROM conversation_members WHERE conversation_id=? AND user_id=? AND role='member'",
     )
     .bind(&id)
-    .bind(member_id)
+    .bind(&member_id)
     .execute(&state.db)
     .await?;
     if result.rows_affected() == 0 {
         return Err(AppError::not_found("group member not found"));
     }
+    let _ = state
+        .events
+        .send(ServerEvent::refresh_conversations(vec![member_id.clone()]));
+    let _ = state.events.send(ServerEvent::unread(vec![member_id]));
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -1606,11 +1697,20 @@ async fn send_message(
         },
     )
     .await?;
-    let _ = state.events.send(ConversationEvent {
-        conversation_id: id.clone(),
-        sender_id: user.id.clone(),
-        message: message.clone(),
+    let recipients: Vec<String> = conversation_member_ids(&state.db, &id)
+        .await?
+        .into_iter()
+        .filter(|member_id| member_id != &user.id)
+        .collect();
+    let _ = state.events.send(ServerEvent {
+        recipients: recipients.clone(),
+        kind: ServerEventKind::Message {
+            conversation_id: id.clone(),
+            sender_id: user.id.clone(),
+            message: Box::new(message.clone()),
+        },
     });
+    let _ = state.events.send(ServerEvent::unread(recipients));
     dispatch_bark_notifications(state, id, Some(user.id), message.clone());
     Ok(axum::Json(message))
 }
@@ -1626,12 +1726,13 @@ async fn mark_read(
     )
     .bind(now)
     .bind(id)
-    .bind(user.id)
+    .bind(&user.id)
     .execute(&state.db)
     .await?;
     if result.rows_affected() == 0 {
         return Err(AppError::not_found("conversation not found"));
     }
+    let _ = state.events.send(ServerEvent::unread(vec![user.id]));
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -2531,6 +2632,26 @@ async fn require_human(db: &SqlitePool, user_id: &str) -> Result<(), AppError> {
     Ok(())
 }
 
+async fn conversation_member_ids(
+    db: &SqlitePool,
+    conversation_id: &str,
+) -> Result<Vec<String>, sqlx::Error> {
+    sqlx::query_scalar("SELECT user_id FROM conversation_members WHERE conversation_id=?")
+        .bind(conversation_id)
+        .fetch_all(db)
+        .await
+}
+
+async fn unread_total(db: &SqlitePool, user_id: &str) -> Result<i64, sqlx::Error> {
+    sqlx::query_scalar(
+        "SELECT COUNT(*) FROM conversation_members cm JOIN messages m ON m.conversation_id=cm.conversation_id WHERE cm.user_id=? AND m.created_at>cm.last_read_at AND m.sender_id<>?",
+    )
+    .bind(user_id)
+    .bind(user_id)
+    .fetch_one(db)
+    .await
+}
+
 async fn sender_kind(db: &SqlitePool, user_id: &str) -> Result<String, AppError> {
     let user_type: String = sqlx::query_scalar("SELECT type FROM users WHERE id=?")
         .bind(user_id)
@@ -2794,7 +2915,7 @@ mod tests {
     }
 
     fn test_state_with_bark(db: SqlitePool, bark: bark::BarkGateway) -> AppState {
-        let (events, _) = tokio::sync::broadcast::channel(1);
+        let (events, _) = tokio::sync::broadcast::channel(256);
         AppState {
             db,
             directory_sync_lock: Arc::new(tokio::sync::Mutex::new(())),
@@ -4343,6 +4464,349 @@ mod tests {
             .await
             .unwrap();
         assert_eq!((groups, members), (0, 0));
+    }
+
+    async fn insert_test_users(pool: &SqlitePool, user_ids: &[&str]) {
+        for user_id in user_ids {
+            sqlx::query("INSERT INTO users(id,created_at) VALUES(?,0)")
+                .bind(user_id)
+                .execute(pool)
+                .await
+                .unwrap();
+        }
+    }
+
+    async fn insert_test_conversation(
+        pool: &SqlitePool,
+        conversation_id: &str,
+        kind: &str,
+        members: &[(&str, &str)],
+    ) {
+        sqlx::query(
+            "INSERT INTO conversations(id,kind,title,created_by,created_at) VALUES(?,?,?,?,0)",
+        )
+        .bind(conversation_id)
+        .bind(kind)
+        .bind(if kind == "group" { "Research" } else { "" })
+        .bind(members[0].0)
+        .execute(pool)
+        .await
+        .unwrap();
+        for (user_id, role) in members {
+            sqlx::query(
+                "INSERT INTO conversation_members(conversation_id,user_id,role,joined_at) VALUES(?,?,?,0)",
+            )
+            .bind(conversation_id)
+            .bind(user_id)
+            .bind(role)
+            .execute(pool)
+            .await
+            .unwrap();
+        }
+    }
+
+    fn sorted_ids(mut ids: Vec<String>) -> Vec<String> {
+        ids.sort();
+        ids
+    }
+
+    async fn read_sse_frame(body: &mut axum::body::Body) -> String {
+        let frame = tokio::time::timeout(std::time::Duration::from_secs(5), body.frame())
+            .await
+            .expect("an SSE frame arrives before the timeout")
+            .expect("the SSE body stays open")
+            .expect("the SSE frame carries data");
+        String::from_utf8(frame.into_data().expect("frames carry bytes").to_vec()).unwrap()
+    }
+
+    #[tokio::test]
+    async fn unread_count_endpoint_matches_the_conversation_list_sum() {
+        let pool = db::connect_memory().await.unwrap();
+        insert_test_users(&pool, &["alice", "bob", "carol"]).await;
+        insert_test_conversation(
+            &pool,
+            "direct",
+            "direct",
+            &[("alice", "member"), ("bob", "member")],
+        )
+        .await;
+        insert_test_conversation(
+            &pool,
+            "group",
+            "group",
+            &[("alice", "owner"), ("bob", "member"), ("carol", "member")],
+        )
+        .await;
+        for (index, (id, conversation_id, sender_id, created_at)) in [
+            ("m1", "direct", "bob", 100_i64),
+            ("m2", "direct", "bob", 200),
+            ("m3", "group", "bob", 100),
+            ("m4", "group", "carol", 200),
+            ("m5", "group", "alice", 300),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            sqlx::query(
+                "INSERT INTO messages(id,conversation_id,sender_kind,sender_id,body,created_at,sequence,urgent) VALUES(?,?,'user',?,'',?,?,0)",
+            )
+            .bind(id)
+            .bind(conversation_id)
+            .bind(sender_id)
+            .bind(created_at)
+            .bind(index as i64 + 1)
+            .execute(&pool)
+            .await
+            .unwrap();
+        }
+        sqlx::query(
+            "UPDATE conversation_members SET last_read_at=150 WHERE conversation_id='group' AND user_id='alice'",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let state = test_state(pool);
+        let axum::Json(count) = unread_count(
+            State(state.clone()),
+            axum::Extension(UserIdentity { id: "alice".into() }),
+        )
+        .await
+        .unwrap();
+        assert_eq!(count.total, 3);
+        let axum::Json(conversations) = list_conversations(
+            State(state),
+            axum::Extension(UserIdentity { id: "alice".into() }),
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            conversations
+                .iter()
+                .map(|conversation| conversation.unread_count)
+                .sum::<i64>(),
+            count.total,
+        );
+    }
+
+    #[tokio::test]
+    async fn send_message_notifies_peers_with_message_and_unread_events() {
+        let pool = db::connect_memory().await.unwrap();
+        insert_test_users(&pool, &["alice", "bob", "carol"]).await;
+        insert_test_conversation(
+            &pool,
+            "group",
+            "group",
+            &[("alice", "owner"), ("bob", "member"), ("carol", "member")],
+        )
+        .await;
+        let state = test_state(pool);
+        let mut events = state.events.subscribe();
+        let axum::Json(sent) = send_message(
+            State(state.clone()),
+            axum::Extension(UserIdentity { id: "alice".into() }),
+            Path("group".into()),
+            axum::Json(SendMessageInput {
+                body: "hello".into(),
+                attachment_ids: Vec::new(),
+                urgent: false,
+            }),
+        )
+        .await
+        .unwrap();
+        assert_eq!(sent.message.body, "hello");
+
+        let first = tokio::time::timeout(std::time::Duration::from_secs(5), events.recv())
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            sorted_ids(first.recipients.clone()),
+            vec!["bob".to_owned(), "carol".to_owned()],
+        );
+        let ServerEventKind::Message {
+            conversation_id,
+            sender_id,
+            message,
+        } = first.kind
+        else {
+            panic!("the first event for a sent message must be the message itself");
+        };
+        assert_eq!(conversation_id, "group");
+        assert_eq!(sender_id, "alice");
+        assert_eq!(message.message.body, "hello");
+
+        let second = tokio::time::timeout(std::time::Duration::from_secs(5), events.recv())
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            sorted_ids(second.recipients.clone()),
+            vec!["bob".to_owned(), "carol".to_owned()],
+        );
+        assert!(matches!(second.kind, ServerEventKind::Unread));
+    }
+
+    #[tokio::test]
+    async fn mark_read_notifies_the_reader_only() {
+        let pool = db::connect_memory().await.unwrap();
+        insert_test_users(&pool, &["alice", "bob"]).await;
+        insert_test_conversation(
+            &pool,
+            "direct",
+            "direct",
+            &[("alice", "member"), ("bob", "member")],
+        )
+        .await;
+        let state = test_state(pool);
+        let mut events = state.events.subscribe();
+        let status = mark_read(
+            State(state),
+            axum::Extension(UserIdentity { id: "alice".into() }),
+            Path("direct".into()),
+        )
+        .await
+        .unwrap();
+        assert_eq!(status, StatusCode::NO_CONTENT);
+        let event = tokio::time::timeout(std::time::Duration::from_secs(5), events.recv())
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(event.recipients, vec!["alice".to_owned()]);
+        assert!(matches!(event.kind, ServerEventKind::Unread));
+    }
+
+    #[tokio::test]
+    async fn events_stream_drops_other_recipients_and_renders_each_frame_kind() {
+        let pool = db::connect_memory().await.unwrap();
+        insert_test_users(&pool, &["alice", "bob"]).await;
+        insert_test_conversation(
+            &pool,
+            "direct",
+            "direct",
+            &[("alice", "member"), ("bob", "member")],
+        )
+        .await;
+        let state = test_state(pool.clone());
+        let for_bob = create_message(
+            &pool,
+            NewMessage {
+                conversation_id: "direct",
+                sender_kind: "user",
+                sender_id: "bob",
+                body: "for-bob".into(),
+                attachment_ids: Vec::new(),
+                urgent: false,
+                attachment_owner: None,
+                client_message_id: None,
+            },
+        )
+        .await
+        .unwrap();
+        let for_alice = create_message(
+            &pool,
+            NewMessage {
+                conversation_id: "direct",
+                sender_kind: "user",
+                sender_id: "bob",
+                body: "for-alice".into(),
+                attachment_ids: Vec::new(),
+                urgent: false,
+                attachment_owner: None,
+                client_message_id: None,
+            },
+        )
+        .await
+        .unwrap();
+
+        let response = events(
+            State(state.clone()),
+            axum::Extension(UserIdentity { id: "alice".into() }),
+        )
+        .await
+        .into_response();
+        let mut body = response.into_body();
+        let _ = state.events.send(ServerEvent {
+            recipients: vec!["bob".to_owned()],
+            kind: ServerEventKind::Message {
+                conversation_id: "direct".to_owned(),
+                sender_id: "bob".to_owned(),
+                message: Box::new(for_bob),
+            },
+        });
+        let _ = state.events.send(ServerEvent {
+            recipients: vec!["alice".to_owned()],
+            kind: ServerEventKind::Message {
+                conversation_id: "direct".to_owned(),
+                sender_id: "bob".to_owned(),
+                message: Box::new(for_alice),
+            },
+        });
+        let frame = read_sse_frame(&mut body).await;
+        assert!(frame.contains("event: message"), "{frame}");
+        assert!(frame.contains("for-alice"), "{frame}");
+        assert!(!frame.contains("for-bob"), "{frame}");
+
+        let _ = state
+            .events
+            .send(ServerEvent::unread(vec!["alice".to_owned()]));
+        let frame = read_sse_frame(&mut body).await;
+        assert!(frame.contains("event: unread"), "{frame}");
+        assert!(frame.contains("\"total\":2"), "{frame}");
+
+        let _ = state
+            .events
+            .send(ServerEvent::refresh_conversations(vec!["alice".to_owned()]));
+        let frame = read_sse_frame(&mut body).await;
+        assert!(frame.contains("event: refresh"), "{frame}");
+        assert!(frame.contains("\"conversations\":true"), "{frame}");
+    }
+
+    #[tokio::test]
+    async fn deleting_a_group_notifies_members_before_the_cascade() {
+        let pool = db::connect_memory().await.unwrap();
+        insert_test_users(&pool, &["alice", "bob"]).await;
+        insert_test_conversation(
+            &pool,
+            "group",
+            "group",
+            &[("alice", "owner"), ("bob", "member")],
+        )
+        .await;
+        let state = test_state(pool);
+        let mut events = state.events.subscribe();
+        let status = delete_group(
+            State(state.clone()),
+            axum::Extension(UserIdentity { id: "alice".into() }),
+            Path("group".into()),
+        )
+        .await
+        .unwrap();
+        assert_eq!(status, StatusCode::NO_CONTENT);
+
+        let refresh = tokio::time::timeout(std::time::Duration::from_secs(5), events.recv())
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            sorted_ids(refresh.recipients.clone()),
+            vec!["alice".to_owned(), "bob".to_owned()],
+        );
+        assert!(matches!(
+            refresh.kind,
+            ServerEventKind::RefreshConversations
+        ));
+
+        let unread = tokio::time::timeout(std::time::Duration::from_secs(5), events.recv())
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            sorted_ids(unread.recipients.clone()),
+            vec!["alice".to_owned(), "bob".to_owned()],
+        );
+        assert!(matches!(unread.kind, ServerEventKind::Unread));
+        assert_eq!(unread_total(&state.db, "alice").await.unwrap(), 0);
     }
 
     #[tokio::test]

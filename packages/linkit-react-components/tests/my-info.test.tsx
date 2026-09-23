@@ -3,6 +3,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 let publicAvatarVersion = 1;
 let publicProfileStatus = 200;
+let unreadTotal = 3;
+let eventStream: ReadableStreamDefaultController<Uint8Array> | undefined;
 
 const auth = {
   authMiniBaseUrl: "https://auth.example.test",
@@ -27,13 +29,16 @@ beforeEach(() => {
   auth.openPasskeyRegistrationPage.mockReset();
   publicAvatarVersion = 1;
   publicProfileStatus = 200;
+  unreadTotal = 3;
+  eventStream = undefined;
   vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const path = new URL(String(input)).pathname;
     if (path === "/api/me") return json({ id: "uid-1", root: false, profile: { user_id: "uid-1", username: "alice", intro: "Hello", avatar_attachment_id: "avatar-1" } });
     if (path === "/api/public/profiles/uid-1") return publicProfileStatus === 200
       ? json({ user_id: "uid-1", username: "alice", intro: "Hello", avatar_url: `https://cdn.example.test/alice.webp?v=${publicAvatarVersion}` })
       : new Response(JSON.stringify({ error: { message: "Public profile unavailable" } }), { status: publicProfileStatus, headers: { "content-type": "application/json" } });
-    if (path === "/api/conversations") return json([{ id: "conversation-1", kind: "direct", unread_count: 3 }]);
+    if (path === "/api/unread-count") return json({ total: unreadTotal });
+    if (path === "/api/events") return eventStreamResponse();
     if (path === "/api/profile" && init?.method === "PUT") { publicAvatarVersion = 2; return json({ user_id: "uid-1", username: "alice-next", intro: "Updated", avatar_attachment_id: "avatar-1" }); }
     return new Response("not found", { status: 404 });
   }));
@@ -41,6 +46,14 @@ beforeEach(() => {
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
 
 function json(body: unknown) { return new Response(JSON.stringify(body), { headers: { "content-type": "application/json" } }); }
+function eventStreamResponse() {
+  return new Response(new ReadableStream<Uint8Array>({
+    start(controller) { eventStream = controller; },
+  }), { headers: { "content-type": "text/event-stream" } });
+}
+function emitServerEvent(name: string, data: unknown) {
+  eventStream?.enqueue(new TextEncoder().encode(`event: ${name}\ndata: ${JSON.stringify(data)}\n\n`));
+}
 function subject(lang = "en") { return <LinkitProvider lang={lang} linkitBaseUrl="https://linkit.example.test"><LinkitMyInfo /></LinkitProvider>; }
 
 describe("LinkitMyInfo", () => {
@@ -91,14 +104,29 @@ describe("LinkitMyInfo", () => {
     expect(screen.getByRole("button", { name: "登录" })).toBeInTheDocument();
   });
 
-  it("shows the unread count and opens the Linkit inbox", async () => {
+  it("shows the unread count, follows pushed unread events, and opens the Linkit inbox", async () => {
     const open = vi.spyOn(window, "open").mockReturnValue(null);
     render(subject());
     const inbox = await screen.findByRole("button", { name: "Open Linkit messages (3 unread messages)" });
     expect(screen.getByText("3")).toBeInTheDocument();
+    emitServerEvent("unread", { total: 5 });
+    await waitFor(() => expect(screen.getByRole("button", { name: "Open Linkit messages (5 unread messages)" })).toBeInTheDocument());
+    expect(screen.getByText("5")).toBeInTheDocument();
+    expect((fetch as ReturnType<typeof vi.fn>).mock.calls.some(([input]) => String(input).includes("/api/conversations"))).toBe(false);
     fireEvent.click(inbox);
     expect(open).toHaveBeenCalledWith("https://linkit.example.test/#/", "_blank", "noopener,noreferrer");
     open.mockRestore();
+  });
+
+  it("reconciles the unread count after the event stream drops", async () => {
+    render(subject());
+    await screen.findByRole("button", { name: "Open Linkit messages (3 unread messages)" });
+    unreadTotal = 9;
+    eventStream?.close();
+    await waitFor(
+      () => expect(screen.getByRole("button", { name: "Open Linkit messages (9 unread messages)" })).toBeInTheDocument(),
+      { timeout: 4_000 },
+    );
   });
 
   it("organizes Auth Mini security actions inside its own dialog and signs out", async () => {

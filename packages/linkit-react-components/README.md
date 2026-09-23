@@ -16,12 +16,12 @@
 
 ## API
 
-- `LinkitProvider` supplies authenticated Linkit requests, identity/profile methods, uploads, message/conversation reads and writes, member-authorized event subscriptions, and attachment downloads. It owns Auth Mini bearer use, the single refresh retry, and the debounced in-memory batch cache used by `LinkitUserInfo`; consuming applications never receive or persist a token.
+- `LinkitProvider` supplies authenticated Linkit requests, identity/profile methods, uploads, message/conversation reads and writes, member-authorized event subscriptions, and attachment downloads. It owns Auth Mini bearer use, the single refresh retry, the one shared Linkit event stream, and the debounced in-memory batch cache used by `LinkitUserInfo`; consuming applications never receive or persist a token.
 - `useLinkit` reads that provider context.
 - `LinkitAvatar` renders a fixed-size profile avatar from its public, versioned `avatar_url` through a native `<img src>`; the browser reuses that URL through its normal HTTP cache, and a same-size initial fallback appears if the image fails.
 - `LinkitUserDisplay` renders a profile `username`; when the profile is unavailable it renders the localized unknown-user label and the complete source `user_id`.
 - `LinkitConversationDisplay` renders a group or direct conversation identity.
-- `LinkitMyInfo` renders the package-owned application-header account trigger, Linkit inbox action with unread-message badge, and Base UI dialog for username, intro, avatar upload, UID copy, passkey registration, sign-in-method settings, and sign out. It accepts no props: language, profile state, unread count, navigation, save, and sign-out behavior are owned by `LinkitProvider` and available through `useLinkit`.
+- `LinkitMyInfo` renders the package-owned application-header account trigger, Linkit inbox action with unread-message badge, and Base UI dialog for username, intro, avatar upload, UID copy, passkey registration, sign-in-method settings, and sign out. It accepts no props: language, profile state, unread count, navigation, save, and sign-out behavior are owned by `LinkitProvider` and available through `useLinkit`. The unread badge follows the provider's event stream and dedicated unread endpoint; the component itself performs no polling.
 - `LinkitUserPicker` searches username prefixes and UUID-character `user_id` prefixes, then writes the chosen `user_id` in controlled or uncontrolled form usage.
 - `LinkitUserInfo` accepts only `userId` and optional `compact`. Its inline avatar, username, complete `user_id`, localized fixed copy, cached public profile lookup, private note, and Linkit direct-message action are owned by `LinkitProvider`. Multiple uncached IDs are deduplicated and fetched through debounced profile and private-note batches; a direct-message action always opens the corresponding Linkit conversation in a new window. A private note belongs only to the authenticated viewer, overrides the inline display name, remains available when the target has not initialized a Linkit profile, and is never included in public profile data.
 - `LinkitEmbeddedConversation` mounts a complete member-authorized direct or group conversation for a specific `conversationId`: it loads history, supports earlier-message paging, receives new message events with a bounded polling fallback, renders attachments, and includes file upload, urgent-message and accessible message-compose controls. The component never accepts a token, user ID, or membership flag from its consumer.
@@ -38,6 +38,10 @@ Use `LinkitEmbeddedConversation` when an authenticated host application needs to
 ```
 
 The component supports message history, earlier-message paging, event-driven updates with a five-second authenticated cursor fallback, file attachments, urgent messages, Enter-to-send, Shift+Enter line breaks, loading, empty, error, retry, and mobile layout states. It calls Linkit APIs only through the provider; do not proxy membership or send access tokens through component props. Import `linkit-react-components/styles.css` as usual.
+
+## Events and unread state
+
+While the outer Auth Mini session is authenticated, `LinkitProvider` keeps exactly one `GET /api/events` SSE connection per page and fans its events out to `subscribeToEvents(listener)` consumers. The stream carries three event kinds: `message` (a conversation message, also used by `subscribeToConversationMessages` and `LinkitEmbeddedConversation`), `unread` (the viewer's authoritative total unread count), and `refresh` (conversation list metadata such as group rename, deletion, or membership changes). The provider reconnects with bounded backoff, and it reconciles the unread total through `GET /api/unread-count` after every (re)connect and whenever the page becomes visible again; between reconciliations it trusts the last confirmed count or the latest `unread` event. Consumers therefore never poll `GET /api/conversations` to keep a badge current.
 
 ## Username and profile semantics
 

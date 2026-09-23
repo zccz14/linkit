@@ -60,11 +60,13 @@ const profileBatchDelayMs = 40;
 const profileBatchSize = 100;
 const userNoteBatchSize = 100;
 
-type LinkitMessageEvent = {
-  conversation_id: string;
-  sender_id: string;
-  message: LinkitMessage;
-};
+export type LinkitServerEvent =
+  | { type: "message"; conversationId: string; message: LinkitMessage }
+  | { type: "unread"; total: number }
+  | { type: "refresh" }
+  | { type: "sync" };
+
+type UnreadTotal = { total: number };
 
 export type LinkitContextValue = {
   lang: string;
@@ -100,6 +102,7 @@ export type LinkitContextValue = {
     input: { body: string; attachmentIds?: string[]; urgent?: boolean },
   ) => Promise<LinkitMessage>;
   markConversationRead: (conversationId: string) => Promise<void>;
+  subscribeToEvents: (listener: (event: LinkitServerEvent) => void) => () => void;
   subscribeToConversationMessages: (
     conversationId: string,
     onMessage: (message: LinkitMessage) => void,
@@ -126,6 +129,7 @@ export function LinkitProvider({
   const [myProfileLoading, setMyProfileLoading] = useState(false);
   const [myUserId, setMyUserId] = useState<string | null>(null);
   const [unreadMessageCount, setUnreadMessageCount] = useState(0);
+  const eventListenersRef = useRef(new Set<(event: LinkitServerEvent) => void>());
   const [profiles, setProfiles] = useState<Map<string, LinkitProfile | null>>(
     () => new Map(),
   );
@@ -425,15 +429,66 @@ export function LinkitProvider({
       return;
     }
     try {
-      const conversations = await request<LinkitConversation[]>("/api/conversations");
-      setUnreadMessageCount(conversations.reduce(
-        (total, conversation) => total + Math.max(0, conversation.unread_count ?? 0),
-        0,
-      ));
+      const { total } = await request<UnreadTotal>("/api/unread-count");
+      setUnreadMessageCount(total);
     } catch {
-      // RECOVERY: Retain the most recently confirmed count; the component's bounded refresh retries.
+      // RECOVERY: Retain the most recently confirmed count; the event stream's next frame or reconcile retries.
     }
   }, [auth.isAuthenticated, request]);
+  const dispatchServerEvent = useCallback((event: LinkitServerEvent) => {
+    if (event.type === "unread") setUnreadMessageCount(event.total);
+    for (const listener of eventListenersRef.current) listener(event);
+  }, []);
+  const subscribeToEvents = useCallback(
+    (listener: (event: LinkitServerEvent) => void) => {
+      eventListenersRef.current.add(listener);
+      return () => {
+        eventListenersRef.current.delete(listener);
+      };
+    },
+    [],
+  );
+  useEffect(() => {
+    if (!auth.isAuthenticated) return;
+    const controller = new AbortController();
+    let disposed = false;
+    const run = async () => {
+      let failures = 0;
+      while (!disposed) {
+        try {
+          const response = await requestRaw("/api/events", {
+            signal: controller.signal,
+          });
+          if (!response.body)
+            throw new Error("Linkit event stream is unavailable.");
+          failures = 0;
+          void refreshUnreadMessageCount();
+          dispatchServerEvent({ type: "sync" });
+          await readServerEvents(response.body, dispatchServerEvent);
+        } catch {
+          // RECOVERY: Reconnect with bounded backoff below; aborting the controller exits through `disposed`.
+          if (disposed) return;
+          void refreshUnreadMessageCount();
+        }
+        failures += 1;
+        await sleep(reconnectDelay(failures));
+      }
+    };
+    void run();
+    return () => {
+      disposed = true;
+      controller.abort();
+    };
+  }, [auth.isAuthenticated, dispatchServerEvent, refreshUnreadMessageCount, requestRaw]);
+  useEffect(() => {
+    if (!auth.isAuthenticated) return;
+    const reconcile = () => {
+      if (document.visibilityState === "visible")
+        void refreshUnreadMessageCount();
+    };
+    document.addEventListener("visibilitychange", reconcile);
+    return () => document.removeEventListener("visibilitychange", reconcile);
+  }, [auth.isAuthenticated, refreshUnreadMessageCount]);
   const saveMyProfile = useCallback(
     async (profile: LinkitProfileUpdate) => {
       setMyProfileError(null);
@@ -562,6 +617,7 @@ export function LinkitProvider({
           `/api/conversations/${encodeURIComponent(conversationId)}/read`,
           { method: "POST" },
         ),
+      subscribeToEvents,
       upload: (file) => {
         const form = new FormData();
         form.append("file", file);
@@ -577,7 +633,10 @@ export function LinkitProvider({
           )
         ).blob(),
       subscribeToConversationMessages: (conversationId, onMessage) =>
-        subscribeToEvents(requestRaw, conversationId, onMessage),
+        subscribeToEvents((event) => {
+          if (event.type === "message" && event.conversationId === conversationId)
+            onMessage(event.message);
+        }),
     }),
     [
       baseUrl,
@@ -594,6 +653,7 @@ export function LinkitProvider({
       requestRaw,
       saveMyProfile,
       signOut,
+      subscribeToEvents,
       unreadMessageCount,
     ],
   );
@@ -753,37 +813,58 @@ function message(cause: unknown): string {
   return cause instanceof Error ? cause.message : String(cause);
 }
 
-function subscribeToEvents(
-  requestRaw: (path: string, init?: RequestInit) => Promise<Response>,
-  conversationId: string,
-  onMessage: (message: LinkitMessage) => void,
+const reconnectBaseDelayMs = 1_000;
+const reconnectMaxDelayMs = 30_000;
+
+function reconnectDelay(failures: number) {
+  return Math.min(reconnectMaxDelayMs, reconnectBaseDelayMs * 2 ** (failures - 1));
+}
+
+function sleep(milliseconds: number) {
+  return new Promise<void>((resolve) => setTimeout(resolve, milliseconds));
+}
+
+function toServerEvent(frame: string): LinkitServerEvent | null {
+  let name = "";
+  let data: string | undefined;
+  for (const line of frame.split("\n")) {
+    if (line.startsWith("event: ")) name = line.slice(7);
+    else if (line.startsWith("data: ")) data = line.slice(6);
+  }
+  if (!data) return null;
+  if (name === "message") {
+    const payload = JSON.parse(data) as {
+      conversation_id: string;
+      message: LinkitMessage;
+    };
+    return {
+      type: "message",
+      conversationId: payload.conversation_id,
+      message: payload.message,
+    };
+  }
+  if (name === "unread")
+    return { type: "unread", total: (JSON.parse(data) as UnreadTotal).total };
+  if (name === "refresh") return { type: "refresh" };
+  return null;
+}
+
+async function readServerEvents(
+  body: ReadableStream<Uint8Array>,
+  onEvent: (event: LinkitServerEvent) => void,
 ) {
-  const controller = new AbortController();
-  void requestRaw("/api/events", { signal: controller.signal })
-    .then(async (response) => {
-      if (!response.body)
-        throw new Error("Linkit event stream is unavailable.");
-      const reader = response.body.getReader();
-      const decoder = new TextDecoder();
-      let buffer = "";
-      while (!controller.signal.aborted) {
-        const next = await reader.read();
-        if (next.done) break;
-        buffer += decoder.decode(next.value, { stream: true });
-        const events = buffer.split("\n\n");
-        buffer = events.pop() ?? "";
-        for (const event of events) {
-          const data = event
-            .split("\n")
-            .find((line) => line.startsWith("data: "))
-            ?.slice(6);
-          if (!data) continue;
-          const payload = JSON.parse(data) as LinkitMessageEvent;
-          if (payload.conversation_id === conversationId)
-            onMessage(payload.message);
-        }
-      }
-    })
-    .catch(() => undefined);
-  return () => controller.abort();
+  const reader = body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  while (true) {
+    const next = await reader.read();
+    if (next.done) return;
+    buffer += decoder.decode(next.value, { stream: true });
+    const frames = buffer.split("\n\n");
+    buffer = frames.pop() ?? "";
+    for (const frame of frames) {
+      const event = toServerEvent(frame);
+      if (event) onEvent(event);
+    }
+  }
 }

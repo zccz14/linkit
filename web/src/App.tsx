@@ -47,6 +47,7 @@ import {
   LinkitProvider,
   LinkitMyInfo,
   LinkitUserPicker,
+  useLinkit,
   useLinkitUserInfo,
 } from "linkit-react-components";
 import { QRCodeSVG } from "qrcode.react";
@@ -158,7 +159,6 @@ import {
   avatarObjectUrl,
   openPagePath,
   publicApi,
-  subscribeToEvents,
   upload,
   type Attachment,
   type BarkNotificationSettings,
@@ -424,23 +424,40 @@ function AuthedApp() {
 }
 
 function Shell({ me, sdk }: { me: Me; sdk: AuthMiniApi }) {
+  const { subscribeToEvents } = useLinkit();
   const queryClient = useQueryClient();
   const conversations = useQuery({
     queryKey: ["conversations"],
     queryFn: () => api<Conversation[]>(sdk, "/api/conversations"),
-    refetchInterval: 4_000,
   });
-  useEffect(
-    () =>
-      subscribeToEvents(sdk, (event) => {
+  useEffect(() => {
+    let invalidationTimer: ReturnType<typeof setTimeout> | undefined;
+    const invalidateConversations = () => {
+      if (invalidationTimer) return;
+      invalidationTimer = setTimeout(() => {
+        invalidationTimer = undefined;
         void queryClient.invalidateQueries({ queryKey: ["conversations"] });
+      }, 250);
+    };
+    const unsubscribe = subscribeToEvents((event) => {
+      if (event.type === "message") {
+        invalidateConversations();
         queryClient.setQueryData<InfiniteData<MessagePage>>(
-          ["messages", event.conversation_id],
+          ["messages", event.conversationId],
           (data) => appendMessage(data, event.message),
         );
-      }),
-    [queryClient, sdk],
-  );
+      } else if (event.type === "sync") {
+        invalidateConversations();
+        void queryClient.invalidateQueries({ queryKey: ["messages"] });
+      } else {
+        invalidateConversations();
+      }
+    });
+    return () => {
+      unsubscribe();
+      if (invalidationTimer) clearTimeout(invalidationTimer);
+    };
+  }, [queryClient, subscribeToEvents]);
 
   return (
     <TooltipProvider>

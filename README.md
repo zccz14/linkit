@@ -10,7 +10,7 @@ notifications, and native Bot API tokens.
 - **Profiles and people directory** — username, avatar, intro, and
   search.
 - **Messaging** — direct and group conversations, image/file attachments, read
-  state, cursor-paged history, and immediate SSE refresh.
+  state, cursor-paged history, and immediate SSE message and unread refresh.
 - **Open-page links** — external apps may open `/?open=profile` to edit the
   profile or `/?open=message&username=alice` to begin a direct message.
 - **Direct Bark notifications** — an iPhone running Bark binds directly to its Linkit user and receives APNs notifications without Linkit exposing a public Bark push API.
