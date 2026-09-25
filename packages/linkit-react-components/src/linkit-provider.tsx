@@ -69,7 +69,10 @@ export type LinkitServerEvent =
 type UnreadTotal = { total: number };
 
 export type LinkitContextValue = {
+  /** Copy language: the viewer's stored preference wins over the `lang` prop fallback. */
   lang: string;
+  /** The viewer's stored language priority list, for example ["zh-CN", "en-US"]; empty when unset. */
+  languages: readonly string[];
   linkitBaseUrl: string;
   myProfile: LinkitProfile | null;
   myProfileError: string | null;
@@ -536,7 +539,12 @@ export function LinkitProvider({
   const openLinkitInbox = useCallback(() => {
     window.open(linkitInboxUrl(baseUrl), "_blank", "noopener,noreferrer");
   }, [baseUrl]);
-  const userInfoCopy = useMemo(() => userInfoLabels(lang), [lang]);
+  const languages = useMemo(() => parseLanguages(myProfile?.lang), [myProfile?.lang]);
+  const effectiveLang = useMemo(
+    () => firstSupportedLanguage(languages) ?? lang,
+    [languages, lang],
+  );
+  const userInfoCopy = useMemo(() => userInfoLabels(effectiveLang), [effectiveLang]);
   const openUserDirectConversation = useCallback(
     async (userId: string, username: string) => {
       if (!auth.isAuthenticated) throw new Error(userInfoCopy.signInToMessage);
@@ -560,7 +568,8 @@ export function LinkitProvider({
   );
   const value = useMemo<LinkitContextValue>(
     () => ({
-      lang,
+      lang: effectiveLang,
+      languages,
       linkitBaseUrl: baseUrl,
       myProfile,
       myProfileError,
@@ -640,8 +649,9 @@ export function LinkitProvider({
     }),
     [
       baseUrl,
+      effectiveLang,
       getProfile,
-      lang,
+      languages,
       myProfile,
       myProfileError,
       myProfileLoading,
@@ -742,6 +752,26 @@ async function publicRequest<T>(
   if (!response.ok)
     throw await requestError(response, "Linkit public request failed");
   return (await response.json()) as T;
+}
+
+function parseLanguages(value: string | null | undefined): string[] {
+  if (!value) return [];
+  return value
+    .split(",")
+    .map((language) => language.trim())
+    .filter((language) => language.length > 0);
+}
+
+function firstSupportedLanguage(languages: readonly string[]): string | undefined {
+  return languages.find(
+    (language) =>
+      matchesLanguage(language, "zh") || matchesLanguage(language, "en"),
+  );
+}
+
+function matchesLanguage(value: string, language: "zh" | "en") {
+  const normalized = value.toLowerCase();
+  return normalized === language || normalized.startsWith(`${language}-`);
 }
 
 function userInfoLabels(value: string): LinkitUserInfoCopy {

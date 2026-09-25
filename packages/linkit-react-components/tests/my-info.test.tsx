@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 let publicAvatarVersion = 1;
 let publicProfileStatus = 200;
 let unreadTotal = 3;
+let myLang = "";
 let eventStream: ReadableStreamDefaultController<Uint8Array> | undefined;
 
 const auth = {
@@ -19,7 +20,7 @@ const auth = {
 
 vi.mock("auth-mini-react-components", () => ({ useAuthMini: () => auth }));
 
-import { LinkitMyInfo, LinkitProvider } from "../src/index.js";
+import { LinkitMyInfo, LinkitProvider, useLinkit } from "../src/index.js";
 
 beforeEach(() => {
   auth.isReady = true;
@@ -30,16 +31,21 @@ beforeEach(() => {
   publicAvatarVersion = 1;
   publicProfileStatus = 200;
   unreadTotal = 3;
+  myLang = "";
   eventStream = undefined;
   vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const path = new URL(String(input)).pathname;
-    if (path === "/api/me") return json({ id: "uid-1", root: false, profile: { user_id: "uid-1", username: "alice", intro: "Hello", avatar_attachment_id: "avatar-1" } });
+    if (path === "/api/me") return json({ id: "uid-1", root: false, profile: { user_id: "uid-1", username: "alice", intro: "Hello", lang: myLang, avatar_attachment_id: "avatar-1" } });
     if (path === "/api/public/profiles/uid-1") return publicProfileStatus === 200
       ? json({ user_id: "uid-1", username: "alice", intro: "Hello", avatar_url: `https://cdn.example.test/alice.webp?v=${publicAvatarVersion}` })
       : new Response(JSON.stringify({ error: { message: "Public profile unavailable" } }), { status: publicProfileStatus, headers: { "content-type": "application/json" } });
     if (path === "/api/unread-count") return json({ total: unreadTotal });
     if (path === "/api/events") return eventStreamResponse();
-    if (path === "/api/profile" && init?.method === "PUT") { publicAvatarVersion = 2; return json({ user_id: "uid-1", username: "alice-next", intro: "Updated", avatar_attachment_id: "avatar-1" }); }
+    if (path === "/api/profile" && init?.method === "PUT") {
+      publicAvatarVersion = 2;
+      const body = JSON.parse(String(init.body)) as { lang?: string };
+      return json({ user_id: "uid-1", username: "alice-next", intro: "Updated", lang: body.lang ?? "", avatar_attachment_id: "avatar-1" });
+    }
     return new Response("not found", { status: 404 });
   }));
 });
@@ -55,6 +61,14 @@ function emitServerEvent(name: string, data: unknown) {
   eventStream?.enqueue(new TextEncoder().encode(`event: ${name}\ndata: ${JSON.stringify(data)}\n\n`));
 }
 function subject(lang = "en") { return <LinkitProvider lang={lang} linkitBaseUrl="https://linkit.example.test"><LinkitMyInfo /></LinkitProvider>; }
+function LanguageProbe() {
+  const { lang, languages } = useLinkit();
+  return <span data-testid="language-probe">{`${lang}|${languages.join(",")}`}</span>;
+}
+function saveBody() {
+  const call = (fetch as ReturnType<typeof vi.fn>).mock.calls.find(([input, init]) => String(input).includes("/api/profile") && (init as RequestInit | undefined)?.method === "PUT");
+  return JSON.parse(String((call?.[1] as RequestInit | undefined)?.body));
+}
 
 describe("LinkitMyInfo", () => {
   it("shows the signed-in avatar/name and saves the profile in its dialog", async () => {
@@ -102,6 +116,31 @@ describe("LinkitMyInfo", () => {
     auth.isAuthenticated = false;
     render(subject("zh-CN"));
     expect(screen.getByRole("button", { name: "登录" })).toBeInTheDocument();
+  });
+
+  it("exposes the stored language priority list and prefers it for its own copy", async () => {
+    myLang = "zh-CN,en-US";
+    render(<LinkitProvider lang="en" linkitBaseUrl="https://linkit.example.test"><LanguageProbe /><LinkitMyInfo /></LinkitProvider>);
+    await waitFor(() => expect(screen.getByTestId("language-probe")).toHaveTextContent("zh-CN|zh-CN,en-US"));
+    fireEvent.click(await screen.findByRole("button", { name: /alice/ }));
+    expect(screen.getByText("账户")).toBeInTheDocument();
+    expect(screen.getByRole("combobox", { name: "语言" })).toHaveTextContent("中文");
+  });
+
+  it("saves the language chosen in the profile dialog", async () => {
+    myLang = "en";
+    render(subject());
+    fireEvent.click(await screen.findByRole("button", { name: /alice/ }));
+    const select = screen.getByRole("combobox", { name: "Language" });
+    expect(select).toHaveTextContent("English");
+    fireEvent.click(select);
+    const chinese = await screen.findByRole("option", { name: "中文" });
+    fireEvent.pointerDown(chinese, { pointerType: "mouse" });
+    fireEvent.click(chinese);
+    fireEvent.click(screen.getByRole("button", { name: "Save profile" }));
+    await waitFor(() => expect(screen.getByText("Profile saved.")).toBeInTheDocument());
+    expect(saveBody().lang).toBe("zh-CN");
+    expect(select).toHaveTextContent("中文");
   });
 
   it("shows the unread count, follows pushed unread events, and opens the Linkit inbox", async () => {

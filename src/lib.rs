@@ -604,17 +604,18 @@ async fn setup(
     }))
 }
 
-#[derive(Clone, Serialize, FromRow)]
+#[derive(Clone, Debug, Serialize, FromRow)]
 struct Profile {
     user_id: String,
     username: String,
     intro: String,
+    lang: String,
     avatar_attachment_id: Option<String>,
     updated_at: i64,
 }
 
 async fn profile_for_user(db: &SqlitePool, user_id: &str) -> Result<Option<Profile>, AppError> {
-    Ok(sqlx::query_as("SELECT user_id,username,intro,avatar_attachment_id,updated_at FROM profiles WHERE user_id=?").bind(user_id).fetch_optional(db).await?)
+    Ok(sqlx::query_as("SELECT user_id,username,intro,lang,avatar_attachment_id,updated_at FROM profiles WHERE user_id=?").bind(user_id).fetch_optional(db).await?)
 }
 
 #[derive(Debug, Serialize)]
@@ -1192,6 +1193,13 @@ struct ProfileInput {
     username: String,
     intro: String,
     avatar_attachment_id: Option<String>,
+    // COMPATIBILITY: linkit-react-components <0.4.0 saves profiles without
+    // `lang`; a missing value keeps the stored preference instead of clearing
+    // it. Remove this field default and make `lang` required once every
+    // consumer (Linkit web, HIT, 1Exchange, OpenAI-LB, Midas, cybion) depends
+    // on >=0.4.0.
+    #[serde(default)]
+    lang: Option<String>,
 }
 
 async fn update_profile(
@@ -1201,6 +1209,17 @@ async fn update_profile(
 ) -> Result<axum::Json<Profile>, AppError> {
     let username = valid_username(&input.username)?;
     let intro = bounded(&input.intro, "intro", 280)?;
+    let lang = match &input.lang {
+        Some(value) => language_list(value)?,
+        None => {
+            let stored: Option<String> =
+                sqlx::query_scalar("SELECT lang FROM profiles WHERE user_id=?")
+                    .bind(&user.id)
+                    .fetch_optional(&state.db)
+                    .await?;
+            stored.unwrap_or_default()
+        }
+    };
     if let Some(attachment_id) = &input.avatar_attachment_id {
         normalize_avatar_attachment(&state, attachment_id, &user.id).await?;
         let allowed: Option<String> = sqlx::query_scalar("SELECT id FROM attachments WHERE id=? AND owner_user_id=? AND media_type LIKE 'image/%'").bind(attachment_id).bind(&user.id).fetch_optional(&state.db).await?;
@@ -1211,8 +1230,8 @@ async fn update_profile(
         }
     }
     let now = chrono::Utc::now().timestamp();
-    let result = sqlx::query("INSERT INTO profiles(user_id,username,intro,avatar_attachment_id,updated_at) VALUES(?,?,?,?,?) ON CONFLICT(user_id) DO UPDATE SET username=excluded.username,intro=excluded.intro,avatar_attachment_id=excluded.avatar_attachment_id,updated_at=excluded.updated_at")
-        .bind(&user.id).bind(username).bind(intro).bind(input.avatar_attachment_id).bind(now).execute(&state.db).await;
+    let result = sqlx::query("INSERT INTO profiles(user_id,username,intro,lang,avatar_attachment_id,updated_at) VALUES(?,?,?,?,?,?) ON CONFLICT(user_id) DO UPDATE SET username=excluded.username,intro=excluded.intro,lang=excluded.lang,avatar_attachment_id=excluded.avatar_attachment_id,updated_at=excluded.updated_at")
+        .bind(&user.id).bind(username).bind(intro).bind(lang).bind(input.avatar_attachment_id).bind(now).execute(&state.db).await;
     if let Err(error) = result {
         if matches!(error, sqlx::Error::Database(ref database) if database.is_unique_violation()) {
             return Err(AppError::conflict("username is already taken"));
@@ -1237,7 +1256,7 @@ async fn list_users(
 ) -> Result<axum::Json<Vec<Profile>>, AppError> {
     let query = query.query.unwrap_or_default().trim().to_owned();
     let pattern = format!("%{}%", escape_like(&query));
-    let rows = sqlx::query_as("SELECT user_id,username,intro,avatar_attachment_id,updated_at FROM profiles WHERE username LIKE ? ESCAPE '\\\' COLLATE NOCASE ORDER BY username COLLATE NOCASE LIMIT 50")
+    let rows = sqlx::query_as("SELECT user_id,username,intro,lang,avatar_attachment_id,updated_at FROM profiles WHERE username LIKE ? ESCAPE '\\\' COLLATE NOCASE ORDER BY username COLLATE NOCASE LIMIT 50")
         .bind(pattern)
         .fetch_all(&state.db)
         .await?;
@@ -1345,7 +1364,7 @@ async fn read_user(
     State(state): State<AppState>,
     Path(username): Path<String>,
 ) -> Result<axum::Json<Profile>, AppError> {
-    sqlx::query_as("SELECT user_id,username,intro,avatar_attachment_id,updated_at FROM profiles WHERE username=? COLLATE NOCASE").bind(username).fetch_optional(&state.db).await?.map(axum::Json).ok_or_else(|| AppError::not_found("user not found"))
+    sqlx::query_as("SELECT user_id,username,intro,lang,avatar_attachment_id,updated_at FROM profiles WHERE username=? COLLATE NOCASE").bind(username).fetch_optional(&state.db).await?.map(axum::Json).ok_or_else(|| AppError::not_found("user not found"))
 }
 
 #[derive(Clone, Serialize, FromRow)]
@@ -2793,6 +2812,35 @@ fn bounded(value: &str, field: &str, max: usize) -> Result<String, AppError> {
         )));
     }
     Ok(value.trim().to_owned())
+}
+
+fn language_list(value: &str) -> Result<String, AppError> {
+    let value = bounded(value, "lang", 128)?;
+    let mut languages = Vec::new();
+    for tag in value.split(',') {
+        let tag = tag.trim();
+        if tag.is_empty() {
+            continue;
+        }
+        if !valid_language_tag(tag) {
+            return Err(AppError::bad_request(
+                "lang must be a comma-separated priority list of language tags such as zh-CN,en-US",
+            ));
+        }
+        languages.push(tag);
+    }
+    Ok(languages.join(","))
+}
+
+fn valid_language_tag(tag: &str) -> bool {
+    let mut subtags = tag.split('-');
+    let language = subtags.next().unwrap_or_default();
+    (2..=8).contains(&language.len())
+        && language.bytes().all(|byte| byte.is_ascii_alphabetic())
+        && subtags.all(|subtag| {
+            (1..=8).contains(&subtag.len())
+                && subtag.bytes().all(|byte| byte.is_ascii_alphanumeric())
+        })
 }
 
 fn valid_origin(value: &str, label: &str) -> Result<String, AppError> {
@@ -5202,6 +5250,15 @@ mod tests {
             "avatar_attachment_id": null,
         }));
         assert!(accepted.is_ok());
+        assert_eq!(accepted.unwrap().lang, None);
+
+        let with_lang = serde_json::from_value::<ProfileInput>(serde_json::json!({
+            "username": "alice",
+            "intro": "Current introduction",
+            "avatar_attachment_id": null,
+            "lang": "zh-CN,en-US",
+        }));
+        assert_eq!(with_lang.unwrap().lang.as_deref(), Some("zh-CN,en-US"));
 
         let rejected = serde_json::from_value::<ProfileInput>(serde_json::json!({
             "username": "alice",
@@ -5209,6 +5266,64 @@ mod tests {
             "avatar_attachment_id": null,
         }));
         assert!(rejected.is_err());
+    }
+
+    #[tokio::test]
+    async fn profile_lang_round_trips_normalizes_and_keeps_legacy_saves() {
+        let pool = db::connect_memory().await.unwrap();
+        sqlx::query("INSERT INTO users(id,created_at) VALUES('alice',0)")
+            .execute(&pool)
+            .await
+            .unwrap();
+        let state = test_state(pool.clone());
+
+        let save = |lang: Option<&str>| {
+            let state = state.clone();
+            let lang = lang.map(str::to_owned);
+            async move {
+                update_profile(
+                    State(state),
+                    axum::Extension(UserIdentity { id: "alice".into() }),
+                    axum::Json(ProfileInput {
+                        username: "alice".into(),
+                        intro: "hello".into(),
+                        avatar_attachment_id: None,
+                        lang,
+                    }),
+                )
+                .await
+            }
+        };
+
+        let saved = save(Some(" zh-CN , en-US ")).await.unwrap().0;
+        assert_eq!(saved.lang, "zh-CN,en-US");
+
+        let axum::Json(me) = me(
+            State(state.clone()),
+            axum::Extension(UserIdentity { id: "alice".into() }),
+        )
+        .await
+        .unwrap();
+        assert_eq!(me.profile.unwrap().lang, "zh-CN,en-US");
+
+        // COMPATIBILITY: saves without `lang` keep the stored preference.
+        let saved = save(None).await.unwrap().0;
+        assert_eq!(saved.lang, "zh-CN,en-US");
+
+        let saved = save(Some("")).await.unwrap().0;
+        assert_eq!(saved.lang, "");
+
+        let error = save(Some("zh CN")).await.unwrap_err();
+        assert_eq!(error.status, StatusCode::BAD_REQUEST);
+        assert!(error.message.contains("lang must be"));
+        assert_eq!(
+            profile_for_user(&pool, "alice")
+                .await
+                .unwrap()
+                .unwrap()
+                .lang,
+            ""
+        );
     }
 
     #[test]

@@ -173,7 +173,7 @@ import {
   type Profile,
   type SystemOverview,
 } from "@/lib/api";
-import type { TranslationKey } from "@/lib/locale";
+import { negotiateLocale, type TranslationKey } from "@/lib/locale";
 
 const profileRoute = (username: string) =>
   `/people/${encodeURIComponent(username)}`;
@@ -233,10 +233,23 @@ export default function App() {
         lang={locale}
         linkitBaseUrl={config.data.public_origin ?? window.location.origin}
       >
+        <LinkitLocaleSync />
         <AuthedApp />
       </LinkitProvider>
     </AuthMiniProvider>
   );
+}
+
+// The signed-in Linkit profile owns the language preference; follow it instead of
+// rendering a separate switcher in the application header.
+function LinkitLocaleSync() {
+  const { languages } = useLinkit();
+  const { setLocale } = useI18n();
+  useEffect(() => {
+    const next = negotiateLocale(languages);
+    if (next) setLocale(next);
+  }, [languages, setLocale]);
+  return null;
 }
 
 function callbackUrl() {
@@ -590,7 +603,6 @@ function LinkitShell({
               {t("navigation.newGroup")}
             </Button>
           ) : null}
-          <LanguageMenu />
           <LinkitMyInfo />
         </header>
         <div className="min-h-0 flex-1 overflow-auto">
