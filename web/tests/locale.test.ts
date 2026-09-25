@@ -3,6 +3,7 @@ import test from "node:test";
 
 import {
   initialLocale,
+  negotiateLocale,
   supportedLocales,
   translate,
   translations,
@@ -20,6 +21,16 @@ test("locale selection uses a valid saved preference before browser language", (
   assert.equal(initialLocale("en-US", "zh-CN"), "zh-CN");
   assert.equal(initialLocale("zh-TW", null), "zh-CN");
   assert.equal(initialLocale("fr-FR", null), "en");
+});
+
+test("profile language preferences negotiate against the supported locales", () => {
+  assert.equal(negotiateLocale(["zh-CN", "en-US"]), "zh-CN");
+  assert.equal(negotiateLocale(["en-US", "zh-CN"]), "en");
+  assert.equal(negotiateLocale(["zh"]), "zh-CN");
+  assert.equal(negotiateLocale(["en"]), "en");
+  assert.equal(negotiateLocale(["ja", "zh-CN"]), "zh-CN");
+  assert.equal(negotiateLocale(["ja"]), undefined);
+  assert.equal(negotiateLocale([]), undefined);
 });
 
 test("translations interpolate named values", () => {

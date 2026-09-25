@@ -450,6 +450,20 @@ export function initialLocale(
   return language.toLowerCase().startsWith("zh") ? "zh-CN" : "en";
 }
 
+export function negotiateLocale(
+  languages: readonly string[],
+  supported: readonly Locale[] = supportedLocales,
+): Locale | undefined {
+  for (const language of languages) {
+    const base = language.toLowerCase().split("-")[0];
+    const match = supported.find(
+      (locale) => locale.toLowerCase().split("-")[0] === base,
+    );
+    if (match) return match;
+  }
+  return undefined;
+}
+
 export function translate(
   locale: Locale,
   key: TranslationKey,

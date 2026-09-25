@@ -2,8 +2,9 @@ import { useAuthMini } from "auth-mini-react-components";
 import { Avatar as AvatarPrimitive } from "@base-ui/react/avatar";
 import { Button as ButtonPrimitive } from "@base-ui/react/button";
 import { Dialog as DialogPrimitive } from "@base-ui/react/dialog";
+import { Select as SelectPrimitive } from "@base-ui/react/select";
 import { Separator as SeparatorPrimitive } from "@base-ui/react/separator";
-import { CheckIcon, CopyIcon, KeyRoundIcon, LoaderCircleIcon, LogOutIcon, MessageCircleIcon, SettingsIcon, UploadIcon, XIcon } from "lucide-react";
+import { CheckIcon, ChevronDownIcon, CopyIcon, KeyRoundIcon, LoaderCircleIcon, LogOutIcon, MessageCircleIcon, SettingsIcon, UploadIcon, XIcon } from "lucide-react";
 import { useEffect, useId, useRef, useState, type ChangeEvent, type FormEvent } from "react";
 import { useLinkit } from "./linkit-provider.js";
 import type { LinkitProfile } from "./types.js";
@@ -21,6 +22,8 @@ type LinkitMyInfoLabels = {
   uploadAvatar: string;
   username: string;
   intro: string;
+  language: string;
+  languageAuto: string;
   uid: string;
   copyUid: string;
   copied: string;
@@ -52,6 +55,8 @@ const labelsByLanguage: Record<"en" | "zh", LinkitMyInfoLabels> = {
     uploadAvatar: "Upload image",
     username: "Username",
     intro: "Introduction",
+    language: "Language",
+    languageAuto: "Automatic (follow browser)",
     uid: "UID",
     copyUid: "Copy UID",
     copied: "UID copied.",
@@ -81,6 +86,8 @@ const labelsByLanguage: Record<"en" | "zh", LinkitMyInfoLabels> = {
     uploadAvatar: "上传图片",
     username: "用户名",
     intro: "个人介绍",
+    language: "语言",
+    languageAuto: "自动（跟随浏览器）",
     uid: "UID",
     copyUid: "复制 UID",
     copied: "UID 已复制。",
@@ -99,7 +106,7 @@ const labelsByLanguage: Record<"en" | "zh", LinkitMyInfoLabels> = {
   },
 };
 
-type Editor = { username: string; intro: string; avatarAttachmentId: string };
+type Editor = { username: string; intro: string; lang: string; avatarAttachmentId: string };
 
 export function LinkitMyInfo() {
   const auth = useAuthMini();
@@ -150,9 +157,10 @@ export function LinkitMyInfo() {
   }, [avatarPreview]);
 
   const dirty = !profile
-    ? Boolean(editor.username || editor.intro || editor.avatarAttachmentId)
+    ? Boolean(editor.username || editor.intro || editor.lang || editor.avatarAttachmentId)
     : editor.username !== profile.username
       || editor.intro !== (profile.intro ?? "")
+      || editor.lang !== (profile.lang ?? "")
       || editor.avatarAttachmentId !== (profile.avatar_attachment_id ?? "");
 
   async function chooseAvatar(event: ChangeEvent<HTMLInputElement>) {
@@ -184,6 +192,7 @@ export function LinkitMyInfo() {
       const saved = await saveMyProfile({
         username: editor.username.trim(),
         intro: editor.intro.trim(),
+        lang: editor.lang,
         avatar_attachment_id: editor.avatarAttachmentId || undefined,
       });
       setEditor(toEditor(saved));
@@ -272,6 +281,7 @@ export function LinkitMyInfo() {
               </div>
               <label className="linkit-my-info__field" htmlFor={`${titleId}-username`}><span>{labels.username}</span><input autoComplete="username" id={`${titleId}-username`} maxLength={80} required value={editor.username} onChange={(event) => setEditor((current) => ({ ...current, username: event.target.value }))} /></label>
               <label className="linkit-my-info__field" htmlFor={`${titleId}-intro`}><span>{labels.intro}</span><textarea id={`${titleId}-intro`} maxLength={280} rows={3} value={editor.intro} onChange={(event) => setEditor((current) => ({ ...current, intro: event.target.value }))} /></label>
+              <LanguageSelect autoLabel={labels.languageAuto} id={`${titleId}-language`} label={labels.language} onChange={(lang) => setEditor((current) => ({ ...current, lang }))} value={editor.lang} />
             </div>
           </section>
           <SeparatorPrimitive className="linkit-my-info__separator" />
@@ -310,8 +320,41 @@ function Alert({ children, variant = "default" }: { children: React.ReactNode; v
   return <div className="linkit-my-info__alert" data-variant={variant} role={variant === "destructive" ? "alert" : "status"}>{children}</div>;
 }
 
-function emptyEditor(): Editor { return { username: "", intro: "", avatarAttachmentId: "" }; }
-function toEditor(profile: LinkitProfile | null): Editor { return { username: profile?.username ?? "", intro: profile?.intro ?? "", avatarAttachmentId: profile?.avatar_attachment_id ?? "" }; }
+const languageNames: Record<string, string> = { "zh-CN": "中文", en: "English" };
+
+function LanguageSelect({ id, label, autoLabel, value, onChange }: { id: string; label: string; autoLabel: string; value: string; onChange: (lang: string) => void }) {
+  const selected = firstLanguageTag(value);
+  const custom = selected && !(selected in languageNames) ? selected : "";
+  const items: Record<string, string> = { "": autoLabel, ...languageNames };
+  if (custom) items[custom] = custom;
+  return <div className="linkit-my-info__field">
+    <span id={`${id}-label`}>{label}</span>
+    <SelectPrimitive.Root items={items} onValueChange={(next) => onChange(next ?? "")} value={selected}>
+      <SelectPrimitive.Trigger aria-labelledby={`${id}-label`} className="linkit-my-info__select" id={id}>
+        <SelectPrimitive.Value />
+        <SelectPrimitive.Icon className="linkit-my-info__select-icon"><ChevronDownIcon /></SelectPrimitive.Icon>
+      </SelectPrimitive.Trigger>
+      <SelectPrimitive.Portal>
+        <SelectPrimitive.Positioner className="linkit-my-info__select-positioner" sideOffset={4}>
+          <SelectPrimitive.Popup className="linkit-my-info__select-popup">
+            {Object.entries(items).map(([option, text]) => <SelectPrimitive.Item className="linkit-my-info__select-item" key={option} value={option}>
+              <SelectPrimitive.ItemText>{text}</SelectPrimitive.ItemText>
+              <SelectPrimitive.ItemIndicator className="linkit-my-info__select-indicator"><CheckIcon /></SelectPrimitive.ItemIndicator>
+            </SelectPrimitive.Item>)}
+          </SelectPrimitive.Popup>
+        </SelectPrimitive.Positioner>
+      </SelectPrimitive.Portal>
+    </SelectPrimitive.Root>
+  </div>;
+}
+
+function firstLanguageTag(value: string): string {
+  const [tag] = value.split(",").map((part) => part.trim()).filter((part) => part.length > 0);
+  return tag ?? "";
+}
+
+function emptyEditor(): Editor { return { username: "", intro: "", lang: "", avatarAttachmentId: "" }; }
+function toEditor(profile: LinkitProfile | null): Editor { return { username: profile?.username ?? "", intro: profile?.intro ?? "", lang: profile?.lang ?? "", avatarAttachmentId: profile?.avatar_attachment_id ?? "" }; }
 function languageKey(lang: string): "en" | "zh" { const normalized = lang.toLowerCase(); return normalized === "zh" || normalized.startsWith("zh-") ? "zh" : "en"; }
 function authMiniSecurityUrl(authMiniBaseUrl: string) { const url = new URL("/web/", authMiniBaseUrl); url.hash = "/"; return url.toString(); }
 function message(cause: unknown): string { return cause instanceof Error ? cause.message : String(cause); }

@@ -55,6 +55,17 @@
 @keyframes linkit-my-info-pulse { 50% { opacity: .55; } }
 @media (max-width: 34rem) { .linkit-my-info__dialog { width: calc(100vw - 1rem); max-height: calc(100vh - 1rem); } .linkit-my-info__footer > * { flex: 1 1 auto; } .linkit-my-info__uid { grid-template-columns: minmax(0, 1fr) auto; } .linkit-my-info__uid > span { grid-column: 1 / -1; } }
 @media (prefers-reduced-motion: reduce) { .linkit-my-info__dialog, .linkit-my-info__skeletons span, .linkit-my-info__spinner { animation: none; } }
+.linkit-my-info__select { box-sizing: border-box; display: flex; width: 100%; min-height: 2rem; align-items: center; justify-content: space-between; gap: .5rem; padding: .45rem .65rem; font: inherit; color: inherit; text-align: left; cursor: pointer; background: var(--background, transparent); border: 1px solid var(--input, var(--border, #cbd5e1)); border-radius: .5rem; outline: none; }
+.linkit-my-info__select:focus-visible { border-color: var(--ring, #2563eb); box-shadow: 0 0 0 3px color-mix(in srgb, var(--ring, #2563eb) 45%, transparent); }
+.linkit-my-info__select-icon { display: inline-flex; flex: none; color: var(--muted-foreground, #64748b); }
+.linkit-my-info__select-icon svg { width: 1rem; height: 1rem; }
+.linkit-my-info__select-positioner { z-index: 60; }
+.linkit-my-info__select-popup { display: grid; min-width: var(--anchor-width, auto); max-height: var(--available-height, auto); gap: .125rem; overflow: auto; padding: .25rem; color: var(--popover-foreground, var(--foreground, #0f172a)); background: var(--popover, var(--background, #fff)); border: 1px solid var(--border, #e2e8f0); border-radius: .5rem; box-shadow: 0 .5rem 1rem rgb(15 23 42 / .12); outline: none; }
+.linkit-my-info__select-item { display: flex; align-items: center; justify-content: space-between; gap: .5rem; padding: .4rem .5rem; font-size: .875rem; border-radius: .35rem; cursor: pointer; }
+.linkit-my-info__select-item[data-highlighted] { background: var(--muted, #f1f5f9); }
+.linkit-my-info__select-item[data-selected] { font-weight: 600; }
+.linkit-my-info__select-indicator { display: inline-flex; flex: none; color: var(--ring, #2563eb); }
+.linkit-my-info__select-indicator svg { width: 1rem; height: 1rem; }
 
 
 /* Inline user identity and Base UI popover. */

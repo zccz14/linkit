@@ -16,12 +16,12 @@
 
 ## API
 
-- `LinkitProvider` supplies authenticated Linkit requests, identity/profile methods, uploads, message/conversation reads and writes, member-authorized event subscriptions, and attachment downloads. It owns Auth Mini bearer use, the single refresh retry, the one shared Linkit event stream, and the debounced in-memory batch cache used by `LinkitUserInfo`; consuming applications never receive or persist a token.
+- `LinkitProvider` supplies authenticated Linkit requests, identity/profile methods, uploads, message/conversation reads and writes, member-authorized event subscriptions, and attachment downloads. It owns Auth Mini bearer use, the single refresh retry, the one shared Linkit event stream, and the debounced in-memory batch cache used by `LinkitUserInfo`; consuming applications never receive or persist a token. It also publishes the signed-in viewer's language preference through `useLinkit()`: `languages` is the stored priority list and `lang` is the effective copy language (see [Language preference](#language-preference)).
 - `useLinkit` reads that provider context.
 - `LinkitAvatar` renders a fixed-size profile avatar from its public, versioned `avatar_url` through a native `<img src>`; the browser reuses that URL through its normal HTTP cache, and a same-size initial fallback appears if the image fails.
 - `LinkitUserDisplay` renders a profile `username`; when the profile is unavailable it renders the localized unknown-user label and the complete source `user_id`.
 - `LinkitConversationDisplay` renders a group or direct conversation identity.
-- `LinkitMyInfo` renders the package-owned application-header account trigger, Linkit inbox action with unread-message badge, and Base UI dialog for username, intro, avatar upload, UID copy, passkey registration, sign-in-method settings, and sign out. It accepts no props: language, profile state, unread count, navigation, save, and sign-out behavior are owned by `LinkitProvider` and available through `useLinkit`. The unread badge follows the provider's event stream and dedicated unread endpoint; the component itself performs no polling.
+- `LinkitMyInfo` renders the package-owned application-header account trigger, Linkit inbox action with unread-message badge, and Base UI dialog for username, intro, language preference, avatar upload, UID copy, passkey registration, sign-in-method settings, and sign out. It accepts no props: language, profile state, unread count, navigation, save, and sign-out behavior are owned by `LinkitProvider` and available through `useLinkit`. The unread badge follows the provider's event stream and dedicated unread endpoint; the component itself performs no polling.
 - `LinkitUserPicker` searches username prefixes and UUID-character `user_id` prefixes, then writes the chosen `user_id` in controlled or uncontrolled form usage.
 - `LinkitUserInfo` accepts only `userId` and optional `compact`. Its inline avatar, username, complete `user_id`, localized fixed copy, cached public profile lookup, private note, and Linkit direct-message action are owned by `LinkitProvider`. Multiple uncached IDs are deduplicated and fetched through debounced profile and private-note batches; a direct-message action always opens the corresponding Linkit conversation in a new window. A private note belongs only to the authenticated viewer, overrides the inline display name, remains available when the target has not initialized a Linkit profile, and is never included in public profile data.
 - `LinkitEmbeddedConversation` mounts a complete member-authorized direct or group conversation for a specific `conversationId`: it loads history, supports earlier-message paging, receives new message events with a bounded polling fallback, renders attachments, and includes file upload, urgent-message and accessible message-compose controls. The component never accepts a token, user ID, or membership flag from its consumer.
@@ -47,9 +47,28 @@ While the outer Auth Mini session is authenticated, `LinkitProvider` keeps exact
 
 A Linkit username is the sole human-readable user identity. Linkit trims it before persistence, keeps SQLite `NOCASE` uniqueness semantics, permits Unicode and punctuation, and rejects empty, control-character, and over-80-character values. Consumers must render it as text and URL-encode it when it appears in a path or query.
 
-`LinkitProfile` contains `user_id`, `username`, optional `avatar_url`, optional `intro`, optional `avatar_attachment_id`, and optional `updated_at`. There is no nickname or `display_name` field.
+`LinkitProfile` contains `user_id`, `username`, optional `avatar_url`, optional `intro`, optional `lang`, optional `avatar_attachment_id`, and optional `updated_at`. There is no nickname or `display_name` field. `lang` is a comma-separated language priority list such as `zh-CN,en-US`; an empty string means the viewer has not set a preference. It is private personalization: only the authenticated profile (`GET /api/me`, `PUT /api/profile`) carries it, and public profile data never includes it.
 
 `LinkitUserNote` contains the target `user_id`, the viewer-owned `name`, and `updated_at`. It is read and written only by `LinkitProvider`'s authenticated user-info flow; applications must not proxy or persist another user's note data.
+
+## Language preference
+
+The signed-in Linkit profile owns the language preference, so applications that embed the package do not need to render their own language switch. `LinkitMyInfo` edits the preference inside the profile dialog (automatic / 中文 / English) and saves it with the rest of the profile through `PUT /api/profile`.
+
+- `useLinkit().languages` is the stored priority list, already split and trimmed, for example `["zh-CN", "en-US"]`; it is empty when the viewer is signed out or has not set a preference.
+- `useLinkit().lang` is the effective copy language of the Linkit components themselves. A stored preference that starts with `zh` or `en` wins over the `lang` prop; otherwise the prop stays the fallback.
+
+Consuming applications should react to `languages` and negotiate their own locale from it instead of rendering a separate language switch:
+
+```tsx
+const { languages } = useLinkit();
+useEffect(() => {
+  const next = negotiate(languages, supportedLocales); // undefined keeps the current locale
+  if (next) setLocale(next);
+}, [languages]);
+```
+
+Saves that omit `lang` keep the stored preference (older package versions do not send it); an explicit empty string clears it back to automatic. Once every consumer depends on `>=0.4.0`, the server can make `lang` a required field.
 
 ## Public data and CORS
 
