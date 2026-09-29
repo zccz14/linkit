@@ -22,7 +22,7 @@ Bot 可以更新自己的 Profile、上传自己的附件、建立私信、创�
 ## 2. 创建、维护和发消息到群聊
 
 群聊创建时，Bot 自动成为 Owner。`user_ids` 使用成员 UUID；后续成员增删使用成员
-的公开 `username`，与普通群聊 API 一致。
+的 `user_id`，与普通群聊 API 一致。
 
 ```bash
 curl --fail-with-body https://linkit.ntnl.io/api/conversations \
@@ -33,7 +33,7 @@ curl --fail-with-body https://linkit.ntnl.io/api/conversations \
 curl --fail-with-body https://linkit.ntnl.io/api/conversations/CONVERSATION_ID/members \
   -H 'Authorization: Bearer sk-REPLACE_WITH_THE_BOT_TOKEN' \
   -H 'Content-Type: application/json' \
-  -d '{"username":"investor"}'
+  -d '{"user_id":"investor-user-uuid"}'
 
 curl --fail-with-body https://linkit.ntnl.io/api/conversations/CONVERSATION_ID/messages \
   -H 'Authorization: Bearer sk-REPLACE_WITH_THE_BOT_TOKEN' \
@@ -42,7 +42,7 @@ curl --fail-with-body https://linkit.ntnl.io/api/conversations/CONVERSATION_ID/m
 ```
 
 `GET /api/conversations/{id}` 返回 Bot 可见的会话和成员。`PATCH` 同一路径可改群名；
-`DELETE /api/conversations/{id}/members` 配合 `{ "username": "…" }` 可移除普通成员。
+`DELETE /api/conversations/{id}/members` 配合 `{ "user_id": "…" }` 可移除普通成员。
 
 ## 3. 私信与控制面边界
 
