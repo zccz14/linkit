@@ -141,7 +141,7 @@ pub fn router(state: AppState) -> Router {
                 .patch(update_group_title)
                 .delete(delete_group),
         )
-        .route("/api/conversations/direct/{username}", post(open_direct))
+        .route("/api/conversations/direct/{identifier}", post(open_direct))
         .route(
             "/api/conversations/{id}/members",
             post(add_member).delete(remove_member),
@@ -1548,9 +1548,9 @@ async fn create_group(
 async fn open_direct(
     State(state): State<AppState>,
     axum::Extension(user): axum::Extension<UserIdentity>,
-    Path(username): Path<String>,
+    Path(identifier): Path<String>,
 ) -> Result<axum::Json<Conversation>, AppError> {
-    let target = user_id_from_username(&state.db, &username).await?;
+    let target = user_id_from_identifier(&state.db, &identifier).await?;
     if target == user.id {
         return Err(AppError::bad_request(
             "cannot open a direct conversation with yourself",
@@ -2742,9 +2742,19 @@ async fn add_member_by_user_id(
     Ok(())
 }
 
-async fn user_id_from_username(db: &SqlitePool, username: &str) -> Result<String, AppError> {
+async fn user_id_from_identifier(db: &SqlitePool, identifier: &str) -> Result<String, AppError> {
+    let identifier = identifier.trim();
+    // A stable user ID always wins over a username that collides with it.
+    let user_id: Option<String> =
+        sqlx::query_scalar("SELECT id FROM users WHERE id=? COLLATE NOCASE")
+            .bind(identifier)
+            .fetch_optional(db)
+            .await?;
+    if let Some(user_id) = user_id {
+        return Ok(user_id);
+    }
     sqlx::query_scalar("SELECT user_id FROM profiles WHERE username=?")
-        .bind(username.trim())
+        .bind(identifier)
         .fetch_optional(db)
         .await?
         .ok_or_else(|| AppError::not_found("user not found"))
@@ -5353,7 +5363,7 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(
-            user_id_from_username(&pool, "  # ? / % 😀  ")
+            user_id_from_identifier(&pool, "  # ? / % 😀  ")
                 .await
                 .unwrap(),
             "special"
@@ -5372,6 +5382,116 @@ mod tests {
         assert!(
             matches!(duplicate, Err(sqlx::Error::Database(error)) if error.is_unique_violation())
         );
+    }
+
+    #[tokio::test]
+    async fn direct_identifier_resolves_user_ids_and_usernames_without_requiring_a_profile() {
+        let pool = db::connect_memory().await.unwrap();
+        for (id, username) in [
+            ("a1b2c3d4-0000-0000-0000-000000000001", Some("alice")),
+            ("a1b2c3d4-0000-0000-0000-000000000002", None),
+            (
+                "b0b0b0b0-0000-0000-0000-000000000003",
+                Some("a1b2c3d4-0000-0000-0000-000000000001"),
+            ),
+        ] {
+            sqlx::query("INSERT INTO users(id,created_at) VALUES(?,0)")
+                .bind(id)
+                .execute(&pool)
+                .await
+                .unwrap();
+            if let Some(username) = username {
+                sqlx::query(
+                    "INSERT INTO profiles(user_id,username,intro,updated_at) VALUES(?,?,'',0)",
+                )
+                .bind(id)
+                .bind(username)
+                .execute(&pool)
+                .await
+                .unwrap();
+            }
+        }
+        assert_eq!(
+            user_id_from_identifier(&pool, "  A1B2C3D4-0000-0000-0000-000000000001  ")
+                .await
+                .unwrap(),
+            "a1b2c3d4-0000-0000-0000-000000000001"
+        );
+        assert_eq!(
+            user_id_from_identifier(&pool, "alice").await.unwrap(),
+            "a1b2c3d4-0000-0000-0000-000000000001"
+        );
+        assert_eq!(
+            user_id_from_identifier(&pool, "a1b2c3d4-0000-0000-0000-000000000002")
+                .await
+                .unwrap(),
+            "a1b2c3d4-0000-0000-0000-000000000002"
+        );
+        // The stable user ID wins even when another user claimed it as a username.
+        assert_eq!(
+            user_id_from_identifier(&pool, "a1b2c3d4-0000-0000-0000-000000000001")
+                .await
+                .unwrap(),
+            "a1b2c3d4-0000-0000-0000-000000000001"
+        );
+        let missing = user_id_from_identifier(&pool, "nobody")
+            .await
+            .err()
+            .unwrap();
+        assert_eq!(missing.status, StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn open_direct_accepts_user_ids_for_users_without_profiles() {
+        let pool = db::connect_memory().await.unwrap();
+        sqlx::query("INSERT INTO users(id,type,created_at) VALUES('viewer','human',0)")
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query(
+            "INSERT INTO profiles(user_id,username,intro,updated_at) VALUES('viewer','viewer','',0)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO users(id,type,created_at) VALUES('550e8400-e29b-41d4-a716-446655440000','bot',0)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let axum::Json(first) = open_direct(
+            State(test_state(pool.clone())),
+            axum::Extension(UserIdentity {
+                id: "viewer".into(),
+            }),
+            Path("550e8400-e29b-41d4-a716-446655440000".to_owned()),
+        )
+        .await
+        .unwrap();
+        assert_eq!(first.kind, "direct");
+        assert_eq!(
+            first.counterpart_user_id.as_deref(),
+            Some("550e8400-e29b-41d4-a716-446655440000")
+        );
+        let axum::Json(second) = open_direct(
+            State(test_state(pool.clone())),
+            axum::Extension(UserIdentity {
+                id: "viewer".into(),
+            }),
+            Path("550e8400-e29b-41d4-a716-446655440000".to_owned()),
+        )
+        .await
+        .unwrap();
+        assert_eq!(second.id, first.id);
+        let members: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM conversation_members WHERE conversation_id=?")
+                .bind(&first.id)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(members, 2);
     }
 
     #[test]
