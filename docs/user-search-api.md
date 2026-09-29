@@ -19,4 +19,4 @@
 
 若某个条目仍未设置 profile（例如 Bot），搜索结果的 `username` 使用 UUID，
 `avatar_url` 为 null。该显示值不会创建个人资料，也不会占用对应用户名。
-添加群成员等操作应使用 `user_id`。
+添加群成员、发起私信等操作应使用 `user_id`。

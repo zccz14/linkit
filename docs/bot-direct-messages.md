@@ -22,7 +22,7 @@ Bot 可以更新自己的 Profile、上传自己的附件、建立私信、创�
 ## 2. 创建、维护和发消息到群聊
 
 群聊创建时，Bot 自动成为 Owner。`user_ids` 使用成员 UUID；后续成员增删使用成员
-的公开 `username`，与普通群聊 API 一致。
+的 `user_id`，与普通群聊 API 一致。
 
 ```bash
 curl --fail-with-body https://linkit.ntnl.io/api/conversations \
@@ -33,7 +33,7 @@ curl --fail-with-body https://linkit.ntnl.io/api/conversations \
 curl --fail-with-body https://linkit.ntnl.io/api/conversations/CONVERSATION_ID/members \
   -H 'Authorization: Bearer sk-REPLACE_WITH_THE_BOT_TOKEN' \
   -H 'Content-Type: application/json' \
-  -d '{"username":"investor"}'
+  -d '{"user_id":"investor-user-uuid"}'
 
 curl --fail-with-body https://linkit.ntnl.io/api/conversations/CONVERSATION_ID/messages \
   -H 'Authorization: Bearer sk-REPLACE_WITH_THE_BOT_TOKEN' \
@@ -42,13 +42,19 @@ curl --fail-with-body https://linkit.ntnl.io/api/conversations/CONVERSATION_ID/m
 ```
 
 `GET /api/conversations/{id}` 返回 Bot 可见的会话和成员。`PATCH` 同一路径可改群名；
-`DELETE /api/conversations/{id}/members` 配合 `{ "username": "…" }` 可移除普通成员。
+`DELETE /api/conversations/{id}/members` 配合 `{ "user_id": "…" }` 可移除普通成员。
 
 ## 3. 私信与控制面边界
 
-Bot 与用户建立私信使用 `POST /api/conversations/direct/{username}`，然后在
-`POST /api/conversations/{id}/messages` 发消息。所有正常会话授权都由 Bot 本人的成员资格
-决定。
+Bot 与用户建立私信使用 `POST /api/conversations/direct/{username-or-uuid}`：路径参数可以是
+用户的公开 `username`，也可以是稳定的用户 UUID（`users.id`）；按 UUID 查找不要求对方已
+设置 Profile。建立私信后，通过 `POST /api/conversations/{id}/messages` 发消息。所有正常
+会话授权都由 Bot 本人的成员资格决定。
+
+```bash
+curl --fail-with-body -X POST https://linkit.ntnl.io/api/conversations/direct/user-uuid \
+  -H 'Authorization: Bearer sk-REPLACE_WITH_THE_BOT_TOKEN'
+```
 
 只有 `/api/bots` 是人类 Owner 的控制面：创建、轮换 Token、改名、转让和删除 Bot 都要求
 `users.type="human"`。删除 Bot 会撤销 Token 和主体的资料/会话成员资格；它已经发送的
