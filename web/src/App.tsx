@@ -54,6 +54,7 @@ import { QRCodeSVG } from "qrcode.react";
 
 import { AuthMiniDirectory } from "@/components/admin/auth-mini-directory";
 import { LanguageMenu } from "@/components/language-menu";
+import { LinkitMark } from "@/components/linkit-mark";
 import { useI18n } from "@/components/use-i18n";
 import {
   AlertDialog,
@@ -558,12 +559,7 @@ function LinkitShell({
             to="/conversations"
             onClick={() => isMobile && setOpenMobile(false)}
           >
-            <img
-              alt=""
-              aria-hidden="true"
-              className="size-7 shrink-0"
-              src="/linkit-logo.png"
-            />
+            <LinkitMark className="size-7 shrink-0" />
             <span className="group-data-[collapsible=icon]:hidden">Linkit</span>
           </Link>
         </SidebarHeader>

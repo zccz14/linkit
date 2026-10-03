@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="Linkit">
+  <style>
+    rect { stroke: #000; }
+    @media (prefers-color-scheme: dark) {
+      rect { stroke: #fff; }
+    }
+  </style>
+  <rect x="13.5" y="13.5" width="37" height="37" fill="none" stroke-width="9" stroke-linejoin="round" />
+</svg>
