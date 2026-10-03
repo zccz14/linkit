@@ -199,6 +199,10 @@ function appendMessage(
   };
 }
 
+const AUTH_AUDIENCES = Array.from(
+  new Set(["linkit.ntnl.io", window.location.hostname]),
+);
+
 export default function App() {
   const { locale, t } = useI18n();
   const config = useQuery({
@@ -227,6 +231,7 @@ export default function App() {
     <AuthMiniProvider
       autoRedirectToLogin={true}
       authMiniBaseUrl={config.data.auth_issuer}
+      audiences={AUTH_AUDIENCES}
       callbackUrl={callbackUrl}
       onAuthError={(error) => toast.error(error.message)}
     >
