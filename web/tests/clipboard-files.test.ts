@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { clipboardFiles, isGifMediaType } from "../src/lib/clipboard-files.ts";
+import { clipboardFiles } from "../src/lib/clipboard-files.ts";
 
 const file = (name: string) => ({ name }) as File;
 
@@ -31,10 +31,4 @@ test("clipboard files fall back to file items", () => {
     }),
     [image, document],
   );
-});
-
-test("GIF media types use the animated image presentation", () => {
-  assert.equal(isGifMediaType("image/gif"), true);
-  assert.equal(isGifMediaType("IMAGE/GIF; charset=binary"), true);
-  assert.equal(isGifMediaType("image/png"), false);
 });
