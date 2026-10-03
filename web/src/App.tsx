@@ -53,6 +53,7 @@ import {
 import { QRCodeSVG } from "qrcode.react";
 
 import { AuthMiniDirectory } from "@/components/admin/auth-mini-directory";
+import { ImagePreview } from "@/components/image-preview";
 import { LanguageMenu } from "@/components/language-menu";
 import { LinkitMark } from "@/components/linkit-mark";
 import { useI18n } from "@/components/use-i18n";
@@ -151,7 +152,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { useIsMobile } from "@/hooks/use-mobile";
 import { updatedConversationDetail } from "@/lib/conversation";
-import { clipboardFiles, isGifMediaType } from "@/lib/clipboard-files";
+import { clipboardFiles } from "@/lib/clipboard-files";
 import { MessageMarkdown } from "@/lib/message-markdown";
 import { shouldSendMessageOnEnter } from "@/lib/message";
 import {
@@ -1770,7 +1771,6 @@ function AttachmentView({
   const { t } = useI18n();
   const [url, setUrl] = useState("");
   const image = attachment.media_type.startsWith("image/");
-  const gif = isGifMediaType(attachment.media_type);
   useEffect(() => {
     let active = true;
     let objectUrl = "";
@@ -1786,26 +1786,12 @@ function AttachmentView({
       if (objectUrl) URL.revokeObjectURL(objectUrl);
     };
   }, [attachment.id, sdk]);
-  if (gif && url)
-    return (
-      <a href={url} target="_blank" rel="noreferrer">
-        <img
-          src={url}
-          alt={attachment.file_name}
-          className="max-h-80 max-w-full rounded-md object-contain"
-        />
-      </a>
-    );
+  if (image && url)
+    return <ImagePreview src={url} name={attachment.file_name} />;
   return (
     <MessageAttachment size="sm" state={url ? "done" : "processing"}>
       <AttachmentMedia variant={image ? "image" : "icon"}>
-        {image && url ? (
-          <img src={url} alt={attachment.file_name} />
-        ) : image ? (
-          <ImageIcon />
-        ) : (
-          <FileIcon />
-        )}
+        {image ? <ImageIcon /> : <FileIcon />}
       </AttachmentMedia>
       <AttachmentContent>
         <AttachmentTitle>{attachment.file_name}</AttachmentTitle>
@@ -1818,14 +1804,7 @@ function AttachmentView({
       {url ? (
         <AttachmentTrigger
           aria-label={attachment.file_name}
-          render={
-            <a
-              href={url}
-              target={image ? "_blank" : undefined}
-              rel={image ? "noreferrer" : undefined}
-              download={image ? undefined : attachment.file_name}
-            />
-          }
+          render={<a href={url} download={attachment.file_name} />}
         />
       ) : null}
     </MessageAttachment>

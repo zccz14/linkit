@@ -13,7 +13,3 @@ export function clipboardFiles(data: ClipboardFileData) {
     return file ? [file] : [];
   });
 }
-
-export function isGifMediaType(mediaType: string) {
-  return mediaType.toLowerCase().startsWith("image/gif");
-}
