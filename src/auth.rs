@@ -3,10 +3,12 @@ use std::sync::Arc;
 use auth_mini_axum::{AuthMiniError, AuthMiniLayer, AuthMiniPrincipal, JwksCachePolicy};
 use axum::{
     extract::{Request, State},
+    http::Method,
     middleware::Next,
     response::{IntoResponse, Response},
 };
 use sha2::{Digest, Sha256};
+use sqlx::SqlitePool;
 use tokio::sync::RwLock;
 
 use crate::{AppError, AppState};
@@ -68,7 +70,7 @@ pub async fn authenticate(
         Some(token) => token,
         None => return AppError::unauthorized("invalid or expired bearer token").into_response(),
     };
-    if token.starts_with("sk-") {
+    let identity = if token.starts_with("sk-") {
         let bot_id = sqlx::query_scalar(
             "SELECT b.id FROM bots b JOIN users u ON u.id=b.id WHERE b.token_hash=? AND u.type='bot'",
         )
@@ -82,40 +84,83 @@ pub async fn authenticate(
         let Some(id) = bot_id else {
             return AppError::unauthorized("invalid or expired bearer token").into_response();
         };
-        request.extensions_mut().insert(UserIdentity { id });
-        return next.run(request).await;
-    }
-    let layers = match state.auth.layers().await {
-        Ok(layers) => layers,
-        Err(error) => return error.into_response(),
-    };
-    let mut jwks_unavailable = false;
-    let mut principal = None;
-    for layer in layers {
-        match layer.verifier().verify(token).await {
-            Ok(value) => {
-                principal = Some(value);
-                break;
+        UserIdentity { id }
+    } else {
+        let layers = match state.auth.layers().await {
+            Ok(layers) => layers,
+            Err(error) => return error.into_response(),
+        };
+        let mut jwks_unavailable = false;
+        let mut principal = None;
+        for layer in layers {
+            match layer.verifier().verify(token).await {
+                Ok(value) => {
+                    principal = Some(value);
+                    break;
+                }
+                Err(AuthMiniError::JwksUnavailable) => jwks_unavailable = true,
+                Err(AuthMiniError::InvalidIssuer | AuthMiniError::InvalidToken) => {}
             }
-            Err(AuthMiniError::JwksUnavailable) => jwks_unavailable = true,
-            Err(AuthMiniError::InvalidIssuer | AuthMiniError::InvalidToken) => {}
         }
-    }
-    let principal: AuthMiniPrincipal = match principal {
-        Some(value) => value,
-        None if jwks_unavailable => {
-            return AppError::unavailable("Auth Mini JWKS is unavailable").into_response();
+        let principal: AuthMiniPrincipal = match principal {
+            Some(value) => value,
+            None if jwks_unavailable => {
+                return AppError::unavailable("Auth Mini JWKS is unavailable").into_response();
+            }
+            None => {
+                return AppError::unauthorized("invalid or expired bearer token").into_response();
+            }
+        };
+        let identity = UserIdentity {
+            id: principal.subject,
+        };
+        if let Err(error) = crate::accounts::ensure(&state.db, &identity.id).await {
+            return error.into_response();
         }
-        None => return AppError::unauthorized("invalid or expired bearer token").into_response(),
+        identity
     };
-    let identity = UserIdentity {
-        id: principal.subject,
-    };
-    if let Err(error) = crate::accounts::ensure(&state.db, &identity.id).await {
-        return error.into_response();
-    }
+    let identity =
+        match resolve_act_as(&state.db, identity, request.method(), request.uri().query()).await {
+            Ok(identity) => identity,
+            Err(error) => return error.into_response(),
+        };
     request.extensions_mut().insert(identity);
     next.run(request).await
+}
+
+// A Bot owner reads the Bot's conversations with their own credentials by naming
+// the Bot in `act_as`; the read authorization is exactly the Bot's own membership.
+// Writes stay Bot-token only, so a switched identity never mutates Bot data.
+async fn resolve_act_as(
+    db: &SqlitePool,
+    identity: UserIdentity,
+    method: &Method,
+    query: Option<&str>,
+) -> Result<UserIdentity, AppError> {
+    let Some(bot_id) = url::form_urlencoded::parse(query.unwrap_or_default().as_bytes())
+        .find(|(key, _)| key == "act_as")
+        .map(|(_, value)| value.into_owned())
+    else {
+        return Ok(identity);
+    };
+    if method != Method::GET {
+        return Err(AppError::forbidden(
+            "act_as is only available for read-only requests",
+        ));
+    }
+    let owned: Option<i64> = sqlx::query_scalar(
+        "SELECT 1 FROM bots b JOIN users u ON u.id=b.id WHERE b.id=? AND b.owner_user_id=? AND u.type='bot'",
+    )
+    .bind(&bot_id)
+    .bind(&identity.id)
+    .fetch_optional(db)
+    .await?;
+    if owned.is_none() {
+        return Err(AppError::forbidden(
+            "act_as must name a bot owned by the authenticated user",
+        ));
+    }
+    Ok(UserIdentity { id: bot_id })
 }
 
 pub(crate) fn token_hash(token: &str) -> String {
@@ -144,6 +189,7 @@ mod tests {
     use ring::signature::{Ed25519KeyPair, KeyPair};
     use serde_json::{Value, json};
     use tower::ServiceExt;
+    use uuid::Uuid;
 
     use super::*;
 
@@ -345,5 +391,151 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(count, 0);
+    }
+
+    #[tokio::test]
+    async fn act_as_lets_a_bot_owner_read_the_bots_conversations_and_attachments() {
+        let (mut state, key, issuer) = issuer_fixture().await;
+        let owner = "550e8400-e29b-41d4-a716-446655440000";
+        let jwt = token(&key, claims(&issuer, owner));
+        sqlx::query(
+            "INSERT INTO users(id,type,created_at) VALUES(?,'human',0),('bot','bot',0),('investor','human',0)",
+        )
+        .bind(owner)
+        .execute(&state.db)
+        .await
+        .unwrap();
+        sqlx::query("INSERT INTO bots(id,owner_user_id,name,token_prefix,token_hash,created_at,updated_at) VALUES('bot',?,'Fund Bot','sk-fund','',0,0)")
+            .bind(owner)
+            .execute(&state.db)
+            .await
+            .unwrap();
+        sqlx::query("INSERT INTO conversations(id,kind,title,created_by,created_at) VALUES('group','group','Fund investors','bot',0)")
+            .execute(&state.db)
+            .await
+            .unwrap();
+        sqlx::query("INSERT INTO conversation_members(conversation_id,user_id,role,joined_at) VALUES('group','bot','owner',0),('group','investor','member',0)")
+            .execute(&state.db)
+            .await
+            .unwrap();
+        sqlx::query("INSERT INTO messages(id,conversation_id,sender_kind,sender_id,body,created_at,sequence,urgent) VALUES('m1','group','bot','bot','Welcome',1,1,0)")
+            .execute(&state.db)
+            .await
+            .unwrap();
+        let uploads = std::env::temp_dir().join(Uuid::new_v4().to_string());
+        std::fs::create_dir(&uploads).unwrap();
+        std::fs::write(uploads.join("investor-file"), [5_u8]).unwrap();
+        sqlx::query("INSERT INTO attachments(id,owner_user_id,message_id,file_name,media_type,byte_size,storage_name,created_at) VALUES('a1','investor','m1','chart.png','image/png',1,'investor-file',0)")
+            .execute(&state.db)
+            .await
+            .unwrap();
+        state.uploads = Arc::new(uploads.clone());
+
+        // The owner is not a member, so their own conversation view stays empty.
+        let own = call(state.clone(), "/api/conversations", &jwt).await;
+        assert_eq!(own.status(), StatusCode::OK);
+        assert_eq!(json_body(own).await.as_array().unwrap().len(), 0);
+
+        // act_as reads the Bot's conversation list, detail and messages.
+        let listed = call(state.clone(), "/api/conversations?act_as=bot", &jwt).await;
+        assert_eq!(listed.status(), StatusCode::OK);
+        let listed = json_body(listed).await;
+        assert_eq!(listed[0]["id"], "group");
+        assert_eq!(listed[0]["title"], "Fund investors");
+
+        let detail = call(state.clone(), "/api/conversations/group?act_as=bot", &jwt).await;
+        assert_eq!(detail.status(), StatusCode::OK);
+        assert_eq!(
+            json_body(detail).await["members"].as_array().unwrap().len(),
+            2
+        );
+
+        let messages = call(
+            state.clone(),
+            "/api/conversations/group/messages?act_as=bot",
+            &jwt,
+        )
+        .await;
+        assert_eq!(messages.status(), StatusCode::OK);
+        let messages = json_body(messages).await;
+        assert_eq!(messages["messages"][0]["body"], "Welcome");
+        assert_eq!(messages["messages"][0]["sender_kind"], "bot");
+
+        // Attachments inside the Bot's conversations stay readable through act_as.
+        let denied = call(state.clone(), "/api/attachments/a1/content", &jwt).await;
+        assert_eq!(denied.status(), StatusCode::NOT_FOUND);
+        let allowed = call(
+            state.clone(),
+            "/api/attachments/a1/content?act_as=bot",
+            &jwt,
+        )
+        .await;
+        assert_eq!(allowed.status(), StatusCode::OK);
+        assert_eq!(
+            allowed
+                .into_body()
+                .collect()
+                .await
+                .unwrap()
+                .to_bytes()
+                .as_ref(),
+            [5_u8]
+        );
+
+        std::fs::remove_dir_all(uploads).unwrap();
+    }
+
+    #[tokio::test]
+    async fn act_as_rejects_bots_the_caller_does_not_own_and_write_requests() {
+        let (state, key, issuer) = issuer_fixture().await;
+        let owner = "owner";
+        let jwt = token(&key, claims(&issuer, owner));
+        sqlx::query("INSERT INTO users(id,type,created_at) VALUES('bot','bot',0),('peer','human',0),('own-bot','bot',0),(?,'human',0)")
+            .bind(owner)
+            .execute(&state.db)
+            .await
+            .unwrap();
+        sqlx::query("INSERT INTO bots(id,owner_user_id,name,token_prefix,token_hash,created_at,updated_at) VALUES('bot','peer','Foreign Bot','sk-x','hash-bot',0,0),('own-bot',?,'Own Bot','sk-y','hash-own-bot',0,0)")
+            .bind(owner)
+            .execute(&state.db)
+            .await
+            .unwrap();
+
+        let unowned = call(state.clone(), "/api/conversations?act_as=bot", &jwt).await;
+        assert_eq!(unowned.status(), StatusCode::FORBIDDEN);
+        let human = call(state.clone(), "/api/conversations?act_as=owner", &jwt).await;
+        assert_eq!(human.status(), StatusCode::FORBIDDEN);
+        let missing = call(state.clone(), "/api/conversations?act_as=missing", &jwt).await;
+        assert_eq!(missing.status(), StatusCode::FORBIDDEN);
+
+        // The switch is read-only: even an owned Bot rejects writes.
+        let response = crate::router(state.clone())
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/conversations?act_as=own-bot")
+                    .header(axum::http::header::AUTHORIZATION, format!("Bearer {jwt}"))
+                    .header(axum::http::header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(r#"{"title":"Group","user_ids":[]}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+        let conversations: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM conversations")
+            .fetch_one(&state.db)
+            .await
+            .unwrap();
+        assert_eq!(conversations, 0);
+
+        // A Bot token cannot switch into another Bot's view either.
+        let bot_token = "sk-own-bot-token";
+        sqlx::query("UPDATE bots SET token_hash=? WHERE id='own-bot'")
+            .bind(token_hash(bot_token))
+            .execute(&state.db)
+            .await
+            .unwrap();
+        let switched = call(state.clone(), "/api/conversations?act_as=bot", bot_token).await;
+        assert_eq!(switched.status(), StatusCode::FORBIDDEN);
     }
 }

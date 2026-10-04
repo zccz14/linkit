@@ -144,12 +144,23 @@ export async function publicApi<T>(
   return readResponse<T>(response);
 }
 
+// A Bot view keeps the signed-in user's token; the Bot's user ID travels on the request.
+export function actAsPath(path: string, actAs?: string) {
+  if (!actAs) return path;
+  return `${path}${path.includes("?") ? "&" : "?"}act_as=${encodeURIComponent(actAs)}`;
+}
+
 export async function api<T>(
   sdk: AuthMiniApi,
   path: string,
   init: RequestInit = {},
+  actAs?: string,
 ): Promise<T> {
-  const response = await authenticatedFetch(sdk, path, requestInit(init));
+  const response = await authenticatedFetch(
+    sdk,
+    actAsPath(path, actAs),
+    requestInit(init),
+  );
   return readResponse<T>(response);
 }
 
@@ -162,19 +173,27 @@ export async function upload(sdk: AuthMiniApi, file: File) {
   });
 }
 
-export async function attachmentObjectUrl(sdk: AuthMiniApi, id: string) {
+export async function attachmentObjectUrl(
+  sdk: AuthMiniApi,
+  id: string,
+  actAs?: string,
+) {
   const response = await authenticatedFetch(
     sdk,
-    `/api/attachments/${id}/content`,
+    actAsPath(`/api/attachments/${id}/content`, actAs),
   );
   if (!response.ok) throw new Error("Could not download attachment");
   return URL.createObjectURL(await response.blob());
 }
 
-export async function avatarObjectUrl(sdk: AuthMiniApi, id: string) {
+export async function avatarObjectUrl(
+  sdk: AuthMiniApi,
+  id: string,
+  actAs?: string,
+) {
   const response = await authenticatedFetch(
     sdk,
-    `/api/attachments/${id}/avatar`,
+    actAsPath(`/api/attachments/${id}/avatar`, actAs),
   );
   if (!response.ok) throw new Error("Could not download avatar");
   return URL.createObjectURL(await response.blob());

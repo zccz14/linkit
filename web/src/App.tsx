@@ -629,6 +629,14 @@ function LinkitShell({
             <Route path="/groups/new" element={<GroupCreator sdk={sdk} />} />
             <Route path="/bots" element={<Bots sdk={sdk} />} />
             <Route
+              path="/bots/:botId/conversations"
+              element={<BotViewConversations sdk={sdk} />}
+            />
+            <Route
+              path="/bots/:botId/conversations/:conversationId"
+              element={<BotViewConversation sdk={sdk} />}
+            />
+            <Route
               path="/settings/notifications"
               element={<BarkNotifications sdk={sdk} />}
             />
@@ -729,11 +737,13 @@ function ConversationIndex({
 }
 
 function ConversationList({
+  actAs,
   conversations,
   currentPath,
   sdk,
   onOpen,
 }: {
+  actAs?: string;
   conversations: Conversation[];
   currentPath: string;
   sdk: AuthMiniApi;
@@ -743,6 +753,7 @@ function ConversationList({
     <div className="flex flex-col gap-1">
       {conversations.map((conversation) => (
         <ConversationListItem
+          actAs={actAs}
           key={conversation.id}
           conversation={conversation}
           currentPath={currentPath}
@@ -755,11 +766,13 @@ function ConversationList({
 }
 
 function ConversationListItem({
+  actAs,
   conversation,
   currentPath,
   sdk,
   onOpen,
 }: {
+  actAs?: string;
   conversation: Conversation;
   currentPath: string;
   sdk: AuthMiniApi;
@@ -785,7 +798,7 @@ function ConversationListItem({
       className="h-auto justify-start gap-3 px-2 py-2 text-left"
       onClick={() => onOpen(conversation)}
     >
-      <ConversationAvatar conversation={conversation} sdk={sdk} />
+      <ConversationAvatar actAs={actAs} conversation={conversation} sdk={sdk} />
       <span className="min-w-0 flex-1">
         <span className="block truncate font-medium">{label}</span>
         {showCounterpartName ? (
@@ -847,9 +860,11 @@ function ConversationListPage({
 }
 
 function ConversationAvatar({
+  actAs,
   conversation,
   sdk,
 }: {
+  actAs?: string;
   conversation: Conversation;
   sdk: AuthMiniApi;
 }) {
@@ -857,6 +872,7 @@ function ConversationAvatar({
   if (conversation.kind === "group")
     return (
       <ProfileAvatar
+        actAs={actAs}
         sdk={sdk}
         profile={{
           username: conversation.title || t("group.title"),
@@ -866,6 +882,7 @@ function ConversationAvatar({
     );
   return (
     <ProfileAvatar
+      actAs={actAs}
       sdk={sdk}
       profile={{
         username: conversation.counterpart_name,
@@ -1696,10 +1713,12 @@ function GroupMemberRow({
 }
 
 function MessageRow({
+  actAs,
   message,
   mine,
   sdk,
 }: {
+  actAs?: string;
   message: Message;
   mine: boolean;
   sdk: AuthMiniApi;
@@ -1748,6 +1767,7 @@ function MessageRow({
               ) : null}
               {message.attachments.map((attachment) => (
                 <AttachmentView
+                  actAs={actAs}
                   key={attachment.id}
                   attachment={attachment}
                   sdk={sdk}
@@ -1762,9 +1782,11 @@ function MessageRow({
 }
 
 function AttachmentView({
+  actAs,
   attachment,
   sdk,
 }: {
+  actAs?: string;
   attachment: Attachment;
   sdk: AuthMiniApi;
 }) {
@@ -1774,7 +1796,7 @@ function AttachmentView({
   useEffect(() => {
     let active = true;
     let objectUrl = "";
-    void attachmentObjectUrl(sdk, attachment.id)
+    void attachmentObjectUrl(sdk, attachment.id, actAs)
       .then((next) => {
         objectUrl = next;
         if (active) setUrl(next);
@@ -1785,7 +1807,7 @@ function AttachmentView({
       active = false;
       if (objectUrl) URL.revokeObjectURL(objectUrl);
     };
-  }, [attachment.id, sdk]);
+  }, [attachment.id, sdk, actAs]);
   if (image && url)
     return <ImagePreview src={url} name={attachment.file_name} />;
   return (
@@ -1968,6 +1990,7 @@ function GroupCreator({ sdk }: { sdk: AuthMiniApi }) {
 
 function Bots({ sdk }: { sdk: AuthMiniApi }) {
   const { t } = useI18n();
+  const navigate = useNavigate();
   const queryClient = useQueryClient();
   const bots = useQuery({
     queryKey: ["bots"],
@@ -2048,19 +2071,29 @@ function Bots({ sdk }: { sdk: AuthMiniApi }) {
             </CardHeader>
             <CardContent className="flex items-center justify-between">
               <Badge variant="secondary">{bot.token_prefix}…</Badge>
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => {
-                  setSelected(bot);
-                  setOwnerUsername("");
-                  setToken("");
-                  setName(bot.name);
-                  setDialog(true);
-                }}
-              >
-                {t("bots.manage")}
-              </Button>
+              <div className="flex items-center gap-2">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => navigate(`/bots/${bot.id}/conversations`)}
+                >
+                  <MessageCircleIcon data-icon="inline-start" />
+                  {t("bots.viewConversations")}
+                </Button>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => {
+                    setSelected(bot);
+                    setOwnerUsername("");
+                    setToken("");
+                    setName(bot.name);
+                    setDialog(true);
+                  }}
+                >
+                  {t("bots.manage")}
+                </Button>
+              </div>
             </CardContent>
           </Card>
         ))}
@@ -2200,6 +2233,210 @@ function Bots({ sdk }: { sdk: AuthMiniApi }) {
         </AlertDialogContent>
       </AlertDialog>
     </Page>
+  );
+}
+
+function useBotView(sdk: AuthMiniApi) {
+  const { botId = "" } = useParams();
+  const bots = useQuery({
+    queryKey: ["bots"],
+    queryFn: () => api<Bot[]>(sdk, "/api/bots"),
+  });
+  return {
+    bots,
+    botId,
+    bot: bots.data?.find((candidate) => candidate.id === botId),
+  };
+}
+
+function BotViewUnavailable() {
+  const { t } = useI18n();
+  const navigate = useNavigate();
+  return (
+    <Page title={t("bots.title")} description={t("botView.unavailable")}>
+      <Button variant="outline" onClick={() => navigate("/bots")}>
+        <ChevronLeftIcon data-icon="inline-start" />
+        {t("botView.backToBots")}
+      </Button>
+    </Page>
+  );
+}
+
+function BotViewBanner({ bot, onExit }: { bot: Bot; onExit: () => void }) {
+  const { t } = useI18n();
+  return (
+    <div className="flex items-center gap-2 border-b bg-muted/50 px-4 py-2">
+      <BotIcon className="size-4 shrink-0" />
+      <span className="min-w-0 flex-1 truncate text-sm font-medium">
+        {t("botView.viewingAs", { name: bot.name })}
+      </span>
+      <Badge variant="secondary">{t("botView.readOnly")}</Badge>
+      <Button variant="outline" size="sm" onClick={onExit}>
+        {t("botView.exit")}
+      </Button>
+    </div>
+  );
+}
+
+function BotViewConversations({ sdk }: { sdk: AuthMiniApi }) {
+  const { t } = useI18n();
+  const navigate = useNavigate();
+  const location = useLocation();
+  const { bots, bot, botId } = useBotView(sdk);
+  const conversations = useQuery({
+    queryKey: ["bot-conversations", botId],
+    queryFn: () => api<Conversation[]>(sdk, "/api/conversations", {}, botId),
+    enabled: Boolean(bot),
+  });
+  if (bots.isPending)
+    return <LoadingScreen>{t("profile.loading")}</LoadingScreen>;
+  if (bots.isError) return <LoadingScreen>{bots.error.message}</LoadingScreen>;
+  if (!bot) return <BotViewUnavailable />;
+  if (conversations.isPending)
+    return <LoadingScreen>{t("profile.loading")}</LoadingScreen>;
+  if (conversations.isError)
+    return <LoadingScreen>{conversations.error.message}</LoadingScreen>;
+  return (
+    <div className="flex h-full min-h-0 flex-col">
+      <BotViewBanner bot={bot} onExit={() => navigate("/bots")} />
+      <div className="min-h-0 flex-1 overflow-auto">
+        <div className="mx-auto flex min-h-full w-full max-w-3xl flex-col p-4 md:p-6">
+          {conversations.data.length ? (
+            <ConversationList
+              actAs={botId}
+              conversations={conversations.data}
+              currentPath={location.pathname}
+              sdk={sdk}
+              onOpen={(conversation) =>
+                navigate(`/bots/${botId}/conversations/${conversation.id}`)
+              }
+            />
+          ) : (
+            <div className="grid min-h-72 flex-1 place-items-center">
+              <Empty>
+                <EmptyHeader>
+                  <EmptyMedia variant="icon">
+                    <BotIcon />
+                  </EmptyMedia>
+                  <EmptyTitle>{t("botView.emptyTitle")}</EmptyTitle>
+                  <EmptyDescription>
+                    {t("botView.emptyDescription")}
+                  </EmptyDescription>
+                </EmptyHeader>
+              </Empty>
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function BotViewConversation({ sdk }: { sdk: AuthMiniApi }) {
+  const { t } = useI18n();
+  const navigate = useNavigate();
+  const { conversationId = "" } = useParams();
+  const { bots, bot, botId } = useBotView(sdk);
+  const enabled = Boolean(bot);
+  const messages = useInfiniteQuery({
+    queryKey: ["bot-messages", botId, conversationId],
+    initialPageParam: "",
+    queryFn: ({ pageParam }) =>
+      api<MessagePage>(
+        sdk,
+        `/api/conversations/${conversationId}/messages${pageParam}`,
+        {},
+        botId,
+      ),
+    getPreviousPageParam: (page) =>
+      page.older_cursor
+        ? `?before_cursor=${encodeURIComponent(page.older_cursor)}`
+        : undefined,
+    getNextPageParam: (page) =>
+      page.newer_cursor
+        ? `?after_cursor=${encodeURIComponent(page.newer_cursor)}`
+        : undefined,
+    enabled,
+  });
+  const detail = useQuery({
+    queryKey: ["bot-conversation", botId, conversationId],
+    queryFn: () =>
+      api<ConversationDetail>(
+        sdk,
+        `/api/conversations/${conversationId}`,
+        {},
+        botId,
+      ),
+    enabled,
+  });
+  if (bots.isPending)
+    return <LoadingScreen>{t("profile.loading")}</LoadingScreen>;
+  if (bots.isError) return <LoadingScreen>{bots.error.message}</LoadingScreen>;
+  if (!bot) return <BotViewUnavailable />;
+  if (messages.isPending || detail.isPending)
+    return <LoadingScreen>{t("profile.loading")}</LoadingScreen>;
+  if (detail.isError)
+    return <LoadingScreen>{detail.error.message}</LoadingScreen>;
+  if (messages.isError)
+    return <LoadingScreen>{messages.error.message}</LoadingScreen>;
+  const title =
+    detail.data.title ||
+    detail.data.counterpart_name ||
+    t("conversation.direct");
+  return (
+    <div className="flex h-full min-h-0 flex-col bg-background">
+      <BotViewBanner bot={bot} onExit={() => navigate("/bots")} />
+      <ConversationSubheader
+        title={title}
+        onBack={() => navigate(`/bots/${botId}/conversations`)}
+      />
+      <MessageScrollerProvider autoScroll defaultScrollPosition="end">
+        <MessageScroller className="h-auto flex-1">
+          <MessageScrollerViewport className="p-4 md:p-6" aria-label={title}>
+            <MessageScrollerContent className="gap-4">
+              {messages.hasPreviousPage ? (
+                <MessageScrollerItem messageId="load-earlier-messages">
+                  <Button
+                    className="self-center"
+                    variant="ghost"
+                    size="sm"
+                    disabled={messages.isFetchingPreviousPage}
+                    onClick={() => void messages.fetchPreviousPage()}
+                  >
+                    {messages.isFetchingPreviousPage
+                      ? t("conversation.loadingOlder")
+                      : t("conversation.loadOlder")}
+                  </Button>
+                </MessageScrollerItem>
+              ) : null}
+              {messages.data?.pages
+                .flatMap((page) => page.messages)
+                .map((message) => {
+                  const mine = message.sender_id === botId;
+                  return (
+                    <MessageScrollerItem
+                      key={message.id}
+                      messageId={message.id}
+                      scrollAnchor={mine}
+                    >
+                      <MessageRow
+                        actAs={botId}
+                        message={message}
+                        mine={mine}
+                        sdk={sdk}
+                      />
+                    </MessageScrollerItem>
+                  );
+                })}
+            </MessageScrollerContent>
+          </MessageScrollerViewport>
+          <MessageScrollerButton>
+            <ArrowDownIcon data-icon="inline-start" />
+            <span className="sr-only">{t("conversation.scrollToLatest")}</span>
+          </MessageScrollerButton>
+        </MessageScroller>
+      </MessageScrollerProvider>
+    </div>
   );
 }
 
@@ -2482,9 +2719,11 @@ function ProfileCard({ profile, sdk }: { profile: Profile; sdk: AuthMiniApi }) {
 }
 
 function ProfileAvatar({
+  actAs,
   profile,
   sdk,
 }: {
+  actAs?: string;
   profile?: Partial<Profile>;
   sdk: AuthMiniApi;
 }) {
@@ -2498,7 +2737,7 @@ function ProfileAvatar({
     }
     let active = true;
     let objectUrl = "";
-    void avatarObjectUrl(sdk, id)
+    void avatarObjectUrl(sdk, id, actAs)
       .then((next) => {
         objectUrl = next;
         if (active) setUrl(next);
@@ -2509,7 +2748,7 @@ function ProfileAvatar({
       active = false;
       if (objectUrl) URL.revokeObjectURL(objectUrl);
     };
-  }, [profile?.avatar_attachment_id, sdk]);
+  }, [profile?.avatar_attachment_id, sdk, actAs]);
   return (
     <Avatar>
       <AvatarImage src={url || undefined} alt={profile?.username ?? ""} />
