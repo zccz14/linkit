@@ -2,7 +2,8 @@
 
 每个 Bot 都有独立 UUID，对应 `users.id` 且 `type="bot"`。它使用 `sk-…` Token
 认证，但调用的始终是与普通用户相同的 `/api` 路由。`bots.owner_user_id` 只决定哪位
-人类可在控制面管理该 Bot，不授予该 Owner 对 Bot 所在群聊的权限。
+人类可在控制面管理该 Bot；Owner 不会因此成为 Bot 所在群聊的成员，只能像第 4 节
+那样以只读视角查看这些会话。
 
 ## 1. 创建和配置 Profile
 
@@ -59,3 +60,18 @@ curl --fail-with-body -X POST https://linkit.ntnl.io/api/conversations/direct/us
 只有 `/api/bots` 是人类 Owner 的控制面：创建、轮换 Token、改名、转让和删除 Bot 都要求
 `users.type="human"`。删除 Bot 会撤销 Token 和主体的资料/会话成员资格；它已经发送的
 历史消息保留，并显示为「该机器人已被删除」。
+
+## 4. Owner 只读视角（act_as）
+
+在「机器人」页面点击「查看对话」即可进入 Bot 视角，页面 URL 形如
+`#/bots/{bot_id}/conversations`。该视角下的所有读取请求沿用 Owner 自己的 JWT，并附加
+Bot 的 user_id：
+
+```bash
+curl --fail-with-body "https://linkit.ntnl.io/api/conversations?act_as=BOT_UUID" \
+  -H 'Authorization: Bearer OWNER_JWT'
+```
+
+- `act_as` 仅对 `GET` 请求生效，且只接受当前认证用户名下的 Bot；否则返回 `403`。
+- 读取授权完全由 Bot 本人的会话成员资格决定，与 Bot 使用自己的 Token 调用时一致。
+- 该视角是只读的：不会标记已读，也不会以 Bot 身份发送消息或修改任何数据。

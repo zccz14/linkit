@@ -18,7 +18,8 @@ notifications, and native Bot API tokens.
   picker and browser-language default on first visit.
 - **Native Bots** — each Bot is a `users` principal with a durable UUID, one
   human control owner, an `sk-…` bearer token, owner transfer, and token
-  rotation. A Bot uses the same profile and conversation APIs as a user.
+  rotation. A Bot uses the same profile and conversation APIs as a user, and
+  its owner can open a read-only view of the Bot's conversations.
 - **Auth Mini** — setup verifies its `root_user_id` against an Auth Mini JWT;
   authenticated requests validate JWTs against the configured issuer and audience,
   then silently ensure the user's account and default profile exist. No separate
@@ -72,6 +73,11 @@ A Bot can create and own groups, add or remove their members, update its own
 profile, open direct conversations, and send messages through the corresponding
 normal user routes. Only `/api/bots` remains a human-only control plane: Bots
 cannot create, rotate, transfer, or delete Bots.
+
+The Bots page also opens a read-only perspective of a Bot's conversations. The
+browser keeps the owner's Auth Mini session and adds the Bot's user ID to read
+requests as `?act_as=<bot_user_id>`; Linkit accepts `act_as` only on GET
+requests and only for a Bot owned by the authenticated user.
 
 See [the Bot direct-message guide](docs/bot-direct-messages.md) for the full
 creation flow, token handling, response contract, and error handling.
