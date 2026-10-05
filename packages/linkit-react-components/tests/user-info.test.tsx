@@ -10,7 +10,7 @@ vi.mock("auth-mini-react-components", () => ({
   useAuthMini: () => auth,
 }));
 
-import { LinkitProvider, LinkitUserInfo } from "../src/index.js";
+import { LinkitProvider, LinkitUserInfo, useLinkitUserNotes } from "../src/index.js";
 
 const alice = {
   user_id: "550e8400-e29b-41d4-a716-446655440000",
@@ -241,6 +241,41 @@ describe("LinkitUserInfo", () => {
     expect(fetchMock).not.toHaveBeenCalledWith(
       expect.stringContaining(`/api/user-notes/${alice.user_id}`),
       expect.objectContaining({ method: "PUT" }),
+    );
+  });
+});
+
+describe("useLinkitUserNotes", () => {
+  it("shares the private-note batch with consumer hooks", async () => {
+    const bobId = "660e8400-e29b-41d4-a716-446655440077";
+    const fetchMock = batchFetch([], [aliceNote]);
+
+    function NotesConsumer() {
+      const notes = useLinkitUserNotes([alice.user_id, bobId]);
+      return (
+        <span data-testid="notes">
+          {Array.from(notes.entries())
+            .map(([userId, note]) => `${userId}:${note?.name ?? "none"}`)
+            .join("|")}
+        </span>
+      );
+    }
+
+    render(
+      <LinkitProvider linkitBaseUrl="https://linkit.example.test">
+        <NotesConsumer />
+      </LinkitProvider>,
+    );
+
+    expect(
+      await screen.findByText(`${alice.user_id}:Fund investor|${bobId}:none`),
+    ).toBeInTheDocument();
+    expect(fetchMock).toHaveBeenCalledWith(
+      "https://linkit.example.test/api/user-notes/batch",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({ user_ids: [alice.user_id, bobId] }),
+      }),
     );
   });
 });

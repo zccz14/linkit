@@ -13,8 +13,9 @@ speak as a human user.
 - **Messaging** — direct and group conversations, @ mentions, image/file
   attachments, read state, cursor-paged history, and immediate SSE message and
   unread refresh.
-- **@ mentions** — type `@` in the composer to pick a conversation member;
-  every candidate shows its avatar, your private note, and the username.
+- **@ mentions** — type `@` in the composer to pick a conversation member or
+  bot; the picker fuzzy-matches usernames, bot names, and your private note
+  names, and every candidate shows its avatar, name, and your private note.
   Messages store mentions as `<@user_id>` tokens, clients render them as
   `@username`, and a mentioned member's Bark notification says they were
   mentioned.

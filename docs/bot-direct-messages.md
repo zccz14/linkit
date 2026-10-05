@@ -72,7 +72,7 @@ curl --fail-with-body -X POST https://linkit.ntnl.io/api/conversations/direct/us
 
 提及在消息正文里用 `<@用户ID>` 表示（用户 ID 即 `users.id`，UUID 形式）。服务端只解析这
 种 token：只有该会话的成员算提及，其他 `<@…>` 文本原样保留，`@用户名` 之类的纯文本不会
-被解析。解析结果随消息返回：
+被解析。群里的机器人同为成员，照常可以被提及，展示名称是机器人名。解析结果随消息返回：
 
 ```json
 {"mentions": [{"user_id": "被提及者的 UUID", "username": "展示用户名"}]}

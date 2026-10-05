@@ -18,6 +18,7 @@ const customId = "550e8400-e29b-41d4-a716-446655440002";
 const xiaomingId = "550e8400-e29b-41d4-a716-446655440003";
 const bobId = "550e8400-e29b-41d4-a716-446655440004";
 const bobbyId = "550e8400-e29b-41d4-a716-446655440005";
+const fundBotId = "550e8400-e29b-41d4-a716-446655440006";
 
 const members = [
   {
@@ -52,6 +53,13 @@ const members = [
   },
 ];
 
+const fundBot = {
+  user_id: fundBotId,
+  username: "Fund Bot",
+  user_type: "bot" as const,
+  has_profile: false,
+};
+
 test("the composer tracks the mention token around the caret", () => {
   assert.deepEqual(activeMentionToken("hello @bo", 9), {
     start: 6,
@@ -65,7 +73,7 @@ test("the composer tracks the mention token around the caret", () => {
   assert.equal(activeMentionToken(`@${"a".repeat(81)}`, 82), null);
 });
 
-test("mention candidates are members with profiles other than the sender", () => {
+test("mention candidates include profiled members and bots, excluding the sender", () => {
   const candidates = [
     ...members,
     {
@@ -74,30 +82,75 @@ test("mention candidates are members with profiles other than the sender", () =>
       user_type: "human" as const,
       has_profile: false,
     },
+    fundBot,
   ];
   assert.deepEqual(
-    mentionCandidates(candidates, "", aliceId).map((member) => member.user_id),
-    [customId, xiaomingId, bobId, bobbyId],
+    mentionCandidates(candidates, "", aliceId, new Map()).map(
+      (member) => member.user_id,
+    ),
+    [customId, xiaomingId, bobId, bobbyId, fundBotId],
   );
   assert.deepEqual(
-    mentionCandidates(candidates, "ALI", aliceId).map(
+    mentionCandidates(candidates, "ALI", aliceId, new Map()).map(
       (member) => member.user_id,
     ),
     [],
     "the sender is never suggested",
   );
   assert.deepEqual(
-    mentionCandidates(candidates, "BO", aliceId).map(
-      (member) => member.user_id,
-    ),
-    [bobId, bobbyId],
-  );
-  assert.deepEqual(
-    mentionCandidates(candidates, "li", aliceId).map(
+    mentionCandidates(candidates, "qui", aliceId, new Map()).map(
       (member) => member.user_id,
     ),
     [],
-    "candidates filter by username prefix",
+    "profile-less humans are not suggested",
+  );
+});
+
+test("mention candidates fuzzy-match usernames, bot names and note names", () => {
+  const candidates = [...members, fundBot];
+  assert.deepEqual(
+    mentionCandidates(candidates, "ob", aliceId, new Map()).map(
+      (member) => member.user_id,
+    ),
+    [bobId, bobbyId],
+    "usernames match mid-string",
+  );
+  assert.deepEqual(
+    mentionCandidates(candidates, "bby", aliceId, new Map()).map(
+      (member) => member.user_id,
+    ),
+    [bobbyId],
+  );
+  assert.deepEqual(
+    mentionCandidates(candidates, "BOT", aliceId, new Map()).map(
+      (member) => member.user_id,
+    ),
+    [fundBotId],
+    "bot names are searchable case-insensitively",
+  );
+  const noteNames = new Map([
+    [bobId, "老王"],
+    [customId, "fund investor"],
+  ]);
+  assert.deepEqual(
+    mentionCandidates(candidates, "王", aliceId, noteNames).map(
+      (member) => member.user_id,
+    ),
+    [bobId],
+    "note names are searchable",
+  );
+  assert.deepEqual(
+    mentionCandidates(candidates, "investor", aliceId, noteNames).map(
+      (member) => member.user_id,
+    ),
+    [customId],
+  );
+  assert.deepEqual(
+    mentionCandidates(candidates, " 王 ", aliceId, noteNames).map(
+      (member) => member.user_id,
+    ),
+    [bobId],
+    "queries are trimmed",
   );
 });
 
@@ -141,6 +194,12 @@ test("sending replaces typed mentions with user ID tokens", () => {
   );
   assert.equal(tokenizeMentions("@bobby!", members), `<@${bobbyId}>!`);
   assert.equal(tokenizeMentions("@bobcat", members), "@bobcat");
+  const withBot = [...members, fundBot];
+  assert.equal(
+    tokenizeMentions("ping @Fund Bot now", withBot),
+    `ping <@${fundBotId}> now`,
+  );
+  assert.equal(tokenizeMentions("@Fund please", withBot), "@Fund please");
 });
 
 test("message text splits into plain and mention segments by token", () => {
@@ -186,9 +245,13 @@ test("mention candidates show the avatar, private note and username", () => {
   );
   assert.match(option, /profile\?\.avatar_url/);
   assert.match(option, /@\{member\.username\}/);
+  assert.match(option, /<BotIcon \/>/);
 });
 
 test("the conversation composer sends tokenized mentions", () => {
   assert.match(app, /tokenizeMentions\(body, mentionableMembers\)/);
   assert.match(app, /const mentionableMembers = useMemo\(/);
+  assert.match(app, /const memberNotes = useLinkitUserNotes\(memberIds\)/);
+  assert.match(app, /const noteNames = useMemo\(/);
+  assert.match(app, /mentionCandidates\([\s\S]*?me\.id,\s*noteNames,\s*\)/);
 });

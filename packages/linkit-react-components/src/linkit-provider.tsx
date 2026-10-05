@@ -726,6 +726,18 @@ export function useLinkitUserInfo(userId: string) {
   };
 }
 
+/// Requests the private notes for a stable list of user IDs and returns the shared
+/// provider cache, so callers can search or filter by the viewer's note names.
+export function useLinkitUserNotes(userIds: readonly string[]) {
+  const value = useContext(LinkitUserInfoContext);
+  if (!value)
+    throw new Error("useLinkitUserNotes must be used within LinkitProvider.");
+  useEffect(() => {
+    value.requestNotes(userIds);
+  }, [value, userIds]);
+  return value.notes;
+}
+
 function normalizeBaseUrl(value: string) {
   const url = new URL(value);
   if (url.protocol !== "https:" && url.protocol !== "http:")

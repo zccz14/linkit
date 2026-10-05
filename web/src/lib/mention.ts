@@ -50,19 +50,23 @@ export function applyMention(
   };
 }
 
-/// Members the composer can suggest for the current token: members with a profile,
-/// other than the sender, whose username starts with what was typed so far.
+/// Members the composer can suggest for the current token: profiled members and bots,
+/// other than the sender. The query fuzzy-matches the username and the viewer's note
+/// name (case-insensitive substring).
 export function mentionCandidates(
   members: MentionCandidate[],
   query: string,
   selfId: string,
+  noteNames: ReadonlyMap<string, string>,
 ): MentionCandidate[] {
-  const prefix = asciiLowercase(query);
+  const needle = asciiLowercase(query.trim());
   return members.filter(
     (member) =>
-      member.has_profile &&
+      (member.has_profile || member.user_type === "bot") &&
       member.user_id !== selfId &&
-      asciiLowercase(member.username).startsWith(prefix),
+      [member.username, noteNames.get(member.user_id) ?? ""].some((name) =>
+        asciiLowercase(name).includes(needle),
+      ),
   );
 }
 

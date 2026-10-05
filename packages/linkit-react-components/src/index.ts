@@ -2,6 +2,7 @@ export {
   LinkitProvider,
   useLinkit,
   useLinkitUserInfo,
+  useLinkitUserNotes,
 } from "./linkit-provider.js";
 export type {
   LinkitContextValue,
