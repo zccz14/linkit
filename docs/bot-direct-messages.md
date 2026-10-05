@@ -63,23 +63,26 @@ curl --fail-with-body -X POST https://linkit.ntnl.io/api/conversations/direct/us
 
 ## 4. 提及成员
 
-消息正文中的 `@用户名` 会在发送时解析为提及：只匹配会话内已设置 Profile 的成员的用户名，
-不区分 ASCII 大小写，取最长的用户名；用户名后必须是空格、标点或正文结尾，`@` 前若是邮箱式的
-ASCII 字符（如 `bob@alice`）则不算提及。解析结果随消息返回：
+提及在消息正文里用 `<@用户ID>` 表示（用户 ID 即 `users.id`，UUID 形式）。服务端只解析这
+种 token：只有该会话的成员算提及，其他 `<@…>` 文本原样保留，`@用户名` 之类的纯文本不会
+被解析。解析结果随消息返回：
 
 ```json
-{"mentions": [{"user_id": "被提及者的 UUID", "username": "被提及的用户名"}]}
+{"mentions": [{"user_id": "被提及者的 UUID", "username": "展示用户名"}]}
 ```
 
-被提及的成员在消息中高亮显示；如果该成员绑定了 Bark，其通知标题会带上
+客户端把 token 渲染为 `@用户名`；被提及的成员如果绑定了 Bark，其通知标题会带上
 `mentioned you`，从而在群聊刷屏时也能被直接触达。
 
 ```bash
 curl --fail-with-body https://linkit.ntnl.io/api/conversations/CONVERSATION_ID/messages \
   -H 'Authorization: Bearer sk-REPLACE_WITH_THE_BOT_TOKEN' \
   -H 'Content-Type: application/json' \
-  -d '{"body":"@user_0f3a1c2b9d4e 请复查最新的净值报告","attachment_ids":[],"urgent":false}'
+  -d '{"body":"<@550e8400-e29b-41d4-a716-446655440000> 请复查最新的净值报告","attachment_ids":[],"urgent":false}'
 ```
+
+Linkit Web 的输入框照常输入 `@` 提及，发送时会自动转换为 token；Bot 与第三方客户端请直接
+写入 token。
 
 ## 5. Owner 只读视角（act_as）
 

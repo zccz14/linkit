@@ -100,19 +100,21 @@ test("renaming a group updates the loaded conversation cache without changing me
   );
 });
 
-test("message Markdown highlights only resolved mentions outside code", () => {
+test("message Markdown renders mention tokens and keeps unresolved ones literal", () => {
+  const bob = "550e8400-e29b-41d4-a716-446655440004";
+  const other = "550e8400-e29b-41d4-a716-446655440009";
   const html = renderToStaticMarkup(
     createElement(MessageMarkdown, {
-      children: "ping @bob and @bobby, not @bobcat or `@bob`",
-      mentions: ["bob", "bobby"],
+      children: `ping <@${bob}> and <@${other}> in \`<@${bob}>\``,
+      mentions: [{ user_id: bob, username: "bob" }],
     }),
   );
   assert.match(html, /data-mention="bob">@bob</);
-  assert.match(html, /data-mention="bobby">@bobby</);
-  assert.doesNotMatch(html, /data-mention="bob">@bobcat</);
+  assert.match(html, /&lt;@550e8400-e29b-41d4-a716-446655440009&gt;/);
   assert.match(html, /<code>@bob<\/code>/);
   const plain = renderToStaticMarkup(
-    createElement(MessageMarkdown, { children: "ping @bob" }),
+    createElement(MessageMarkdown, { children: `ping <@${bob}>` }),
   );
   assert.doesNotMatch(plain, /data-mention/);
+  assert.match(plain, /&lt;@550e8400-e29b-41d4-a716-446655440004&gt;/);
 });

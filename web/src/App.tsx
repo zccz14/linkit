@@ -166,6 +166,7 @@ import {
   activeMentionToken,
   applyMention,
   mentionCandidates,
+  tokenizeMentions,
   type MentionCandidate,
   type MentionToken,
 } from "@/lib/mention";
@@ -1219,6 +1220,10 @@ function ConversationPage({ me, sdk }: { me: Me; sdk: AuthMiniApi }) {
       ),
     [detail.data?.members, me.id, mention?.query],
   );
+  const mentionableMembers = useMemo(
+    () => mentionCandidates(detail.data?.members ?? [], "", me.id),
+    [detail.data?.members, me.id],
+  );
   const mentionOpen = mention !== null && mentionOptions.length > 0;
   const activeMentionIndex = Math.min(mentionIndex, mentionOptions.length - 1);
   const send = useMutation({
@@ -1226,7 +1231,7 @@ function ConversationPage({ me, sdk }: { me: Me; sdk: AuthMiniApi }) {
       api<Message>(sdk, `/api/conversations/${id}/messages`, {
         method: "POST",
         body: JSON.stringify({
-          body,
+          body: tokenizeMentions(body, mentionableMembers),
           attachment_ids: attachments.map((attachment) => attachment.id),
           urgent,
         }),
@@ -1919,9 +1924,7 @@ function MessageRow({
           <BubbleContent>
             <div className="flex flex-col gap-3">
               {message.body ? (
-                <MessageMarkdown
-                  mentions={message.mentions.map((mention) => mention.username)}
-                >
+                <MessageMarkdown mentions={message.mentions}>
                   {message.body}
                 </MessageMarkdown>
               ) : null}

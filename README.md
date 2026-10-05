@@ -14,8 +14,9 @@ notifications, and native Bot API tokens.
   unread refresh.
 - **@ mentions** — type `@` in the composer to pick a conversation member;
   every candidate shows its avatar, your private note, and the username.
-  Mentioned members are highlighted in the message, and their Bark
-  notification says they were mentioned.
+  Messages store mentions as `<@user_id>` tokens, clients render them as
+  `@username`, and a mentioned member's Bark notification says they were
+  mentioned.
 - **Open-page links** — external apps may open `/?open=profile` to edit the
   profile or `/?open=message&username=alice` to begin a direct message.
 - **Direct Bark notifications** — an iPhone running Bark binds directly to its Linkit user and receives APNs notifications without Linkit exposing a public Bark push API.

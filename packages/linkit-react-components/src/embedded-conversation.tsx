@@ -440,6 +440,38 @@ export function LinkitEmbeddedConversation({
   );
 }
 
+type MessageSegment = {
+  text: string;
+  username: string | null;
+};
+
+/// Splits a message body into plain and mention segments: `<@user_id>` tokens that the
+/// message resolved become `@username`, everything else stays as written.
+function messageSegments(
+  body: string,
+  mentions: Array<{ user_id: string; username: string }>,
+): MessageSegment[] {
+  const segments: MessageSegment[] = [];
+  let copied = 0;
+  for (const match of body.matchAll(
+    /<@([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})>/g,
+  )) {
+    const id = match[1].toLowerCase();
+    const mention = mentions.find(
+      (candidate) => candidate.user_id.toLowerCase() === id,
+    );
+    if (!mention) continue;
+    const index = match.index ?? 0;
+    if (index > copied)
+      segments.push({ text: body.slice(copied, index), username: null });
+    segments.push({ text: `@${mention.username}`, username: mention.username });
+    copied = index + match[0].length;
+  }
+  if (copied < body.length)
+    segments.push({ text: body.slice(copied), username: null });
+  return segments;
+}
+
 function MessageBubble({
   message: entry,
   mine,
@@ -473,7 +505,26 @@ function MessageBubble({
         </time>
       </header>
       <div className="linkit-embedded-conversation__bubble">
-        {entry.body ? <p>{entry.body}</p> : null}
+        {entry.body ? (
+          <p>
+            {messageSegments(
+              entry.body,
+              // COMPATIBILITY: servers before mentions do not send them.
+              entry.mentions ?? [],
+            ).map((segment, index) =>
+              segment.username === null ? (
+                segment.text
+              ) : (
+                <span
+                  key={index}
+                  className="linkit-embedded-conversation__mention"
+                >
+                  @{segment.username}
+                </span>
+              ),
+            )}
+          </p>
+        ) : null}
         {entry.attachments.map((attachment) => (
           <AttachmentLink
             key={attachment.id}

@@ -50,8 +50,8 @@ const BARK_NOTIFICATION_BODY_MAX_BYTES: usize = 3_000;
 const MESSAGE_PAGE_SIZE: i64 = 50;
 const PUBLIC_PROFILE_BATCH_SIZE: usize = 100;
 const USER_NOTE_BATCH_SIZE: usize = 100;
-const LIST_CONVERSATIONS_QUERY: &str = "SELECT c.id,c.kind,c.title,c.created_by,c.created_at,CASE WHEN c.kind='group' THEN c.avatar_attachment_id END avatar_attachment_id,CASE WHEN c.kind='direct' THEN (SELECT cm_peer.user_id FROM conversation_members cm_peer WHERE cm_peer.conversation_id=c.id AND cm_peer.user_id<>? LIMIT 1) END counterpart_user_id,CASE WHEN c.kind='direct' THEN COALESCE((SELECT p.username FROM conversation_members cm_peer JOIN profiles p ON p.user_id=cm_peer.user_id WHERE cm_peer.conversation_id=c.id AND cm_peer.user_id<>? LIMIT 1),(SELECT b.name FROM conversation_members cm_peer JOIN bots b ON b.id=cm_peer.user_id WHERE cm_peer.conversation_id=c.id AND cm_peer.user_id<>? LIMIT 1)) END counterpart_name,CASE WHEN c.kind='direct' THEN (SELECT p.avatar_attachment_id FROM conversation_members cm_peer JOIN profiles p ON p.user_id=cm_peer.user_id WHERE cm_peer.conversation_id=c.id AND cm_peer.user_id<>? LIMIT 1) END counterpart_avatar_attachment_id,(SELECT body FROM messages WHERE conversation_id=c.id ORDER BY created_at DESC LIMIT 1) latest_body,(SELECT created_at FROM messages WHERE conversation_id=c.id ORDER BY created_at DESC LIMIT 1) latest_at,(SELECT COUNT(*) FROM messages WHERE conversation_id=c.id AND created_at>cm.last_read_at AND sender_id<>?) unread_count FROM conversations c JOIN conversation_members cm ON cm.conversation_id=c.id WHERE cm.user_id=? ORDER BY COALESCE(latest_at,c.created_at) DESC";
-const CONVERSATION_QUERY: &str = "SELECT c.id,c.kind,c.title,c.created_by,c.created_at,CASE WHEN c.kind='group' THEN c.avatar_attachment_id END avatar_attachment_id,CASE WHEN c.kind='direct' THEN (SELECT cm_peer.user_id FROM conversation_members cm_peer WHERE cm_peer.conversation_id=c.id AND cm_peer.user_id<>? LIMIT 1) END counterpart_user_id,CASE WHEN c.kind='direct' THEN COALESCE((SELECT p.username FROM conversation_members cm_peer JOIN profiles p ON p.user_id=cm_peer.user_id WHERE cm_peer.conversation_id=c.id AND cm_peer.user_id<>? LIMIT 1),(SELECT b.name FROM conversation_members cm_peer JOIN bots b ON b.id=cm_peer.user_id WHERE cm_peer.conversation_id=c.id AND cm_peer.user_id<>? LIMIT 1)) END counterpart_name,CASE WHEN c.kind='direct' THEN (SELECT p.avatar_attachment_id FROM conversation_members cm_peer JOIN profiles p ON p.user_id=cm_peer.user_id WHERE cm_peer.conversation_id=c.id AND cm_peer.user_id<>? LIMIT 1) END counterpart_avatar_attachment_id,(SELECT body FROM messages WHERE conversation_id=c.id ORDER BY created_at DESC LIMIT 1) latest_body,(SELECT created_at FROM messages WHERE conversation_id=c.id ORDER BY created_at DESC LIMIT 1) latest_at,(SELECT COUNT(*) FROM messages WHERE conversation_id=c.id AND created_at>cm.last_read_at AND sender_id<>?) unread_count FROM conversations c JOIN conversation_members cm ON cm.conversation_id=c.id WHERE c.id=? AND cm.user_id=?";
+const LIST_CONVERSATIONS_QUERY: &str = "SELECT c.id,c.kind,c.title,c.created_by,c.created_at,CASE WHEN c.kind='group' THEN c.avatar_attachment_id END avatar_attachment_id,CASE WHEN c.kind='direct' THEN (SELECT cm_peer.user_id FROM conversation_members cm_peer WHERE cm_peer.conversation_id=c.id AND cm_peer.user_id<>? LIMIT 1) END counterpart_user_id,CASE WHEN c.kind='direct' THEN COALESCE((SELECT p.username FROM conversation_members cm_peer JOIN profiles p ON p.user_id=cm_peer.user_id WHERE cm_peer.conversation_id=c.id AND cm_peer.user_id<>? LIMIT 1),(SELECT b.name FROM conversation_members cm_peer JOIN bots b ON b.id=cm_peer.user_id WHERE cm_peer.conversation_id=c.id AND cm_peer.user_id<>? LIMIT 1)) END counterpart_name,CASE WHEN c.kind='direct' THEN (SELECT p.avatar_attachment_id FROM conversation_members cm_peer JOIN profiles p ON p.user_id=cm_peer.user_id WHERE cm_peer.conversation_id=c.id AND cm_peer.user_id<>? LIMIT 1) END counterpart_avatar_attachment_id,(SELECT body FROM messages WHERE conversation_id=c.id ORDER BY created_at DESC LIMIT 1) latest_body,(SELECT created_at FROM messages WHERE conversation_id=c.id ORDER BY created_at DESC LIMIT 1) latest_at,(SELECT id FROM messages WHERE conversation_id=c.id ORDER BY created_at DESC LIMIT 1) latest_message_id,(SELECT COUNT(*) FROM messages WHERE conversation_id=c.id AND created_at>cm.last_read_at AND sender_id<>?) unread_count FROM conversations c JOIN conversation_members cm ON cm.conversation_id=c.id WHERE cm.user_id=? ORDER BY COALESCE(latest_at,c.created_at) DESC";
+const CONVERSATION_QUERY: &str = "SELECT c.id,c.kind,c.title,c.created_by,c.created_at,CASE WHEN c.kind='group' THEN c.avatar_attachment_id END avatar_attachment_id,CASE WHEN c.kind='direct' THEN (SELECT cm_peer.user_id FROM conversation_members cm_peer WHERE cm_peer.conversation_id=c.id AND cm_peer.user_id<>? LIMIT 1) END counterpart_user_id,CASE WHEN c.kind='direct' THEN COALESCE((SELECT p.username FROM conversation_members cm_peer JOIN profiles p ON p.user_id=cm_peer.user_id WHERE cm_peer.conversation_id=c.id AND cm_peer.user_id<>? LIMIT 1),(SELECT b.name FROM conversation_members cm_peer JOIN bots b ON b.id=cm_peer.user_id WHERE cm_peer.conversation_id=c.id AND cm_peer.user_id<>? LIMIT 1)) END counterpart_name,CASE WHEN c.kind='direct' THEN (SELECT p.avatar_attachment_id FROM conversation_members cm_peer JOIN profiles p ON p.user_id=cm_peer.user_id WHERE cm_peer.conversation_id=c.id AND cm_peer.user_id<>? LIMIT 1) END counterpart_avatar_attachment_id,(SELECT body FROM messages WHERE conversation_id=c.id ORDER BY created_at DESC LIMIT 1) latest_body,(SELECT created_at FROM messages WHERE conversation_id=c.id ORDER BY created_at DESC LIMIT 1) latest_at,(SELECT id FROM messages WHERE conversation_id=c.id ORDER BY created_at DESC LIMIT 1) latest_message_id,(SELECT COUNT(*) FROM messages WHERE conversation_id=c.id AND created_at>cm.last_read_at AND sender_id<>?) unread_count FROM conversations c JOIN conversation_members cm ON cm.conversation_id=c.id WHERE c.id=? AND cm.user_id=?";
 
 #[derive(Clone)]
 pub struct AppState {
@@ -1380,6 +1380,8 @@ struct Conversation {
     counterpart_avatar_attachment_id: Option<String>,
     latest_body: Option<String>,
     latest_at: Option<i64>,
+    #[serde(skip_serializing)]
+    latest_message_id: Option<String>,
     unread_count: i64,
 }
 
@@ -1387,7 +1389,7 @@ async fn list_conversations(
     State(state): State<AppState>,
     axum::Extension(user): axum::Extension<UserIdentity>,
 ) -> Result<axum::Json<Vec<Conversation>>, AppError> {
-    let rows = sqlx::query_as(LIST_CONVERSATIONS_QUERY)
+    let mut conversations = sqlx::query_as(LIST_CONVERSATIONS_QUERY)
         .bind(&user.id)
         .bind(&user.id)
         .bind(&user.id)
@@ -1396,7 +1398,10 @@ async fn list_conversations(
         .bind(&user.id)
         .fetch_all(&state.db)
         .await?;
-    Ok(axum::Json(rows))
+    for conversation in &mut conversations {
+        resolve_latest_body(&state.db, conversation).await?;
+    }
+    Ok(axum::Json(conversations))
 }
 
 #[derive(Clone, Serialize, FromRow)]
@@ -2277,7 +2282,7 @@ async fn deliver_bark_notifications(
     let body = if message.message.body.is_empty() {
         "Sent an attachment".to_owned()
     } else {
-        bark_notification_body(&message.message.body)
+        bark_notification_body(&display_text(&message.message.body, &message.mentions))
     };
     let public_origin = match meta(&state.db, "public_origin").await {
         Ok(origin) if !origin.is_empty() => origin,
@@ -2510,9 +2515,8 @@ async fn create_message(db: &SqlitePool, input: NewMessage<'_>) -> Result<Messag
     message(db, &id).await
 }
 
-/// Mentions are written as `@username` in the message body. Only conversation members
-/// with a profile can be mentioned; usernames match case-insensitively, and the longest
-/// member username wins, so `@bobby` does not mention `bob`.
+/// Mentions are written as `<@user_id>` tokens in the message body. Only conversation
+/// members count as mentions; every other token-shaped text stays plain.
 async fn resolve_mentions<'e, E>(
     executor: E,
     conversation_id: &str,
@@ -2521,75 +2525,85 @@ async fn resolve_mentions<'e, E>(
 where
     E: sqlx::Executor<'e, Database = sqlx::Sqlite>,
 {
+    let ids = mentioned_ids(body);
+    if ids.is_empty() {
+        return Ok(Vec::new());
+    }
     let members: Vec<(String, String)> = sqlx::query_as(
-        "SELECT cm.user_id,p.username FROM conversation_members cm JOIN profiles p ON p.user_id=cm.user_id WHERE cm.conversation_id=?",
+        "SELECT cm.user_id,COALESCE(p.username,cm.user_id) FROM conversation_members cm LEFT JOIN profiles p ON p.user_id=cm.user_id WHERE cm.conversation_id=?",
     )
     .bind(conversation_id)
     .fetch_all(executor)
     .await?;
-    Ok(mentioned_members(body, &members))
-}
-
-/// ASSUMPTION: the text around an `@` approximates whom the sender addresses. An `@`
-/// glued to an ASCII handle (`bob@alice`) and a username that continues into more
-/// letters, digits, `_` or `-` (`@alice2`, `@小明你好`) stay plain text. A wrong guess
-/// either misses a highlight or highlights an unintended name; it cannot change
-/// authorization or delivery.
-fn mentioned_members(body: &str, members: &[(String, String)]) -> Vec<MessageMention> {
-    let text: Vec<char> = body.chars().collect();
-    let mut mentions: Vec<MessageMention> = Vec::new();
-    let mut index = 0;
-    while index < text.len() {
-        if text[index] != '@' || (index > 0 && is_mention_prefix(text[index - 1])) {
-            index += 1;
-            continue;
+    let mut mentions = Vec::new();
+    for id in ids {
+        if let Some((_, username)) = members.iter().find(|(user_id, _)| user_id == &id) {
+            mentions.push(MessageMention {
+                user_id: id,
+                username: username.clone(),
+            });
         }
-        let start = index + 1;
-        let matched = members
-            .iter()
-            .filter(|(_, username)| matches_username(&text, start, username))
-            .max_by_key(|(_, username)| username.chars().count());
-        index = match matched {
-            Some((user_id, username)) => {
-                if !mentions.iter().any(|mention| &mention.user_id == user_id) {
-                    mentions.push(MessageMention {
-                        user_id: user_id.clone(),
-                        username: username.clone(),
-                    });
-                }
-                start + username.chars().count()
-            }
-            None => index + 1,
+    }
+    Ok(mentions)
+}
+
+/// The user IDs the body references as mention tokens, in order of first appearance.
+fn mentioned_ids(body: &str) -> Vec<String> {
+    let mut ids: Vec<String> = Vec::new();
+    let mut search = 0;
+    while let Some(offset) = body[search..].find("<@") {
+        let start = search + offset;
+        let Some(end_offset) = body[start + 2..].find('>') else {
+            break;
         };
+        let end = start + 2 + end_offset;
+        if let Some(id) = parse_mention_token(&body[start + 2..end])
+            && !ids.contains(&id)
+        {
+            ids.push(id);
+        }
+        search = start + 2;
     }
-    mentions
+    ids
 }
 
-fn matches_username(text: &[char], start: usize, username: &str) -> bool {
-    let username: Vec<char> = username.chars().collect();
-    if start + username.len() > text.len() {
-        return false;
-    }
-    if !text[start..start + username.len()]
-        .iter()
-        .zip(&username)
-        .all(|(text, username)| text.eq_ignore_ascii_case(username))
-    {
-        return false;
-    }
-    text.get(start + username.len())
-        .is_none_or(|next| !is_mention_continuation(*next))
+/// A mention token is `<@` followed by a hyphenated user ID and `>`; other shapes of IDs
+/// and any other `<@…>` text stay plain.
+fn parse_mention_token(content: &str) -> Option<String> {
+    let id = Uuid::parse_str(content).ok()?;
+    let canonical = id.to_string();
+    content
+        .eq_ignore_ascii_case(&canonical)
+        .then_some(canonical)
 }
 
-/// A username must end the handle: more letters, digits, `_` or `-` keep it open.
-fn is_mention_continuation(character: char) -> bool {
-    character.is_alphanumeric() || character == '_' || character == '-'
-}
-
-/// Only an ASCII handle glued to `@` (an email address) blocks a mention; other scripts
-/// may precede `@` directly, as in `你好@小明`.
-fn is_mention_prefix(character: char) -> bool {
-    character.is_ascii_alphanumeric() || character == '_' || character == '-'
+/// The text readers get: mention tokens become `@username`, everything else stays
+/// unchanged. Tokens without a mention (non-members, older plain text) stay as-is.
+fn display_text(body: &str, mentions: &[MessageMention]) -> String {
+    let mut text = String::with_capacity(body.len());
+    let mut copied = 0;
+    let mut search = 0;
+    while let Some(offset) = body[search..].find("<@") {
+        let start = search + offset;
+        let Some(end_offset) = body[start + 2..].find('>') else {
+            break;
+        };
+        let end = start + 2 + end_offset;
+        let mention = parse_mention_token(&body[start + 2..end])
+            .and_then(|id| mentions.iter().find(|mention| mention.user_id == id));
+        match mention {
+            Some(mention) => {
+                text.push_str(&body[copied..start]);
+                text.push('@');
+                text.push_str(&mention.username);
+                copied = end + 1;
+                search = end + 1;
+            }
+            None => search = start + 2,
+        }
+    }
+    text.push_str(&body[copied..]);
+    text
 }
 
 fn message_cursor(created_at: i64, sequence: i64) -> String {
@@ -2708,8 +2722,27 @@ async fn mentions_for(db: &SqlitePool, message_id: &str) -> Result<Vec<MessageMe
     Ok(sqlx::query_as("SELECT user_id,username FROM message_mentions WHERE message_id=? ORDER BY username COLLATE NOCASE").bind(message_id).fetch_all(db).await?)
 }
 
+/// Conversation previews are the text readers see in the app, with mentions resolved.
+async fn resolve_latest_body(
+    db: &SqlitePool,
+    conversation: &mut Conversation,
+) -> Result<(), AppError> {
+    let Some(body) = conversation.latest_body.clone() else {
+        return Ok(());
+    };
+    if !body.contains("<@") {
+        return Ok(());
+    }
+    let Some(message_id) = conversation.latest_message_id.clone() else {
+        return Ok(());
+    };
+    let mentions = mentions_for(db, &message_id).await?;
+    conversation.latest_body = Some(display_text(&body, &mentions));
+    Ok(())
+}
+
 async fn conversation(db: &SqlitePool, id: &str, user_id: &str) -> Result<Conversation, AppError> {
-    sqlx::query_as(CONVERSATION_QUERY)
+    let mut conversation: Conversation = sqlx::query_as(CONVERSATION_QUERY)
         .bind(user_id)
         .bind(user_id)
         .bind(user_id)
@@ -2719,7 +2752,9 @@ async fn conversation(db: &SqlitePool, id: &str, user_id: &str) -> Result<Conver
         .bind(user_id)
         .fetch_optional(db)
         .await?
-        .ok_or_else(|| AppError::not_found("conversation not found"))
+        .ok_or_else(|| AppError::not_found("conversation not found"))?;
+    resolve_latest_body(db, &mut conversation).await?;
+    Ok(conversation)
 }
 
 async fn require_member(
@@ -4822,34 +4857,45 @@ mod tests {
     }
 
     #[test]
-    fn mention_matching_follows_usernames_with_boundaries() {
-        let members = vec![
-            ("alice".to_owned(), "Alice".to_owned()),
-            ("custom".to_owned(), "Custom Name".to_owned()),
-            ("xiaoming".to_owned(), "小明".to_owned()),
-            ("bob".to_owned(), "bob".to_owned()),
-            ("bobby".to_owned(), "bobby".to_owned()),
-        ];
-        let ids = |body: &str| {
-            mentioned_members(body, &members)
-                .into_iter()
-                .map(|mention| mention.user_id)
-                .collect::<Vec<_>>()
-        };
-        assert_eq!(ids("hello @Alice, ping @ALICE again"), vec!["alice"]);
-        assert_eq!(ids("@alice2"), Vec::<String>::new());
-        assert_eq!(ids("mail bob@alice.com"), Vec::<String>::new());
-        assert_eq!(ids("@Custom Name please"), vec!["custom"]);
-        assert_eq!(ids("@Custom Named"), Vec::<String>::new());
-        assert_eq!(ids("的@小明 你好"), vec!["xiaoming"]);
-        assert_eq!(ids("@小明你好"), Vec::<String>::new());
-        assert_eq!(ids("thanks @bob."), vec!["bob"]);
-        assert_eq!(ids("@bobby!"), vec!["bobby"]);
-        assert_eq!(ids("@bobcat"), Vec::<String>::new());
+    fn mention_tokens_parse_hyphenated_user_ids() {
+        let id = "550e8400-e29b-41d4-a716-446655440000";
+        let other = "550e8400-e29b-41d4-a716-446655440001";
+        assert_eq!(mentioned_ids(&format!("ping <@{id}>")), vec![id]);
         assert_eq!(
-            ids("ping @Custom Name then @Alice"),
-            vec!["custom", "alice"]
+            mentioned_ids(&format!("<@{}>", id.to_uppercase())),
+            vec![id],
+            "mention tokens are case-insensitive"
         );
+        assert_eq!(
+            mentioned_ids("<@550e8400e29b41d4a716446655440000>"),
+            Vec::<String>::new(),
+            "other user ID shapes stay plain text"
+        );
+        assert_eq!(mentioned_ids("<@bob> <@nope>"), Vec::<String>::new());
+        assert_eq!(
+            mentioned_ids(&format!("<@{id}> x <@{other}> and <@{id}>")),
+            vec![id, other],
+            "tokens are deduplicated in order of first appearance"
+        );
+    }
+
+    #[test]
+    fn display_text_replaces_only_resolved_mention_tokens() {
+        let id = "550e8400-e29b-41d4-a716-446655440000";
+        let other = "550e8400-e29b-41d4-a716-446655440001";
+        let mentions = vec![MessageMention {
+            user_id: id.to_owned(),
+            username: "bob".to_owned(),
+        }];
+        assert_eq!(
+            display_text(&format!("ping <@{id}> and <@{other}>"), &mentions),
+            format!("ping @bob and <@{other}>")
+        );
+        assert_eq!(
+            display_text(&format!("<@{id}> <@{id}>"), &mentions),
+            "@bob @bob"
+        );
+        assert_eq!(display_text("no tokens", &mentions), "no tokens");
     }
 
     #[test]
@@ -4885,17 +4931,22 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn create_message_resolves_mentions_for_members_with_profiles() {
+    async fn create_message_stores_member_mentions_from_tokens() {
         let pool = db::connect_memory().await.unwrap();
-        insert_test_users(&pool, &["alice", "bob", "quiet"]).await;
+        let alice = "550e8400-e29b-41d4-a716-446655440000";
+        let bob = "550e8400-e29b-41d4-a716-446655440001";
+        let quiet = "550e8400-e29b-41d4-a716-446655440002";
+        let stranger = "550e8400-e29b-41d4-a716-446655440003";
+        insert_test_users(&pool, &[alice, bob, quiet]).await;
         insert_test_conversation(
             &pool,
             "group",
             "group",
-            &[("alice", "owner"), ("bob", "member"), ("quiet", "member")],
+            &[(alice, "owner"), (bob, "member"), (quiet, "member")],
         )
         .await;
-        sqlx::query("INSERT INTO profiles(user_id,username,intro,updated_at) VALUES('alice','alice','',0),('bob','bob','',0)")
+        sqlx::query("INSERT INTO profiles(user_id,username,intro,updated_at) VALUES(?,'bob','',0)")
+            .bind(bob)
             .execute(&pool)
             .await
             .unwrap();
@@ -4904,8 +4955,8 @@ mod tests {
             NewMessage {
                 conversation_id: "group",
                 sender_kind: "user",
-                sender_id: "alice",
-                body: "ping @bob and @quiet".into(),
+                sender_id: alice,
+                body: format!("ping <@{bob}> and <@{quiet}> but not <@{stranger}>"),
                 attachment_ids: Vec::new(),
                 urgent: false,
                 attachment_owner: None,
@@ -4914,21 +4965,34 @@ mod tests {
         )
         .await
         .unwrap();
+        let mut mentions = message
+            .mentions
+            .iter()
+            .map(|mention| (mention.user_id.clone(), mention.username.clone()))
+            .collect::<Vec<_>>();
+        mentions.sort();
         assert_eq!(
-            message
-                .mentions
-                .iter()
-                .map(|mention| (mention.user_id.as_str(), mention.username.as_str()))
-                .collect::<Vec<_>>(),
-            vec![("bob", "bob")]
+            mentions,
+            vec![
+                (bob.to_owned(), "bob".to_owned()),
+                (quiet.to_owned(), quiet.to_owned()),
+            ],
+            "members are mentioned with their profile username or user ID; non-members stay plain text"
         );
-        let stored: Vec<(String, String)> =
-            sqlx::query_as("SELECT user_id,username FROM message_mentions WHERE message_id=?")
-                .bind(&message.message.id)
-                .fetch_all(&pool)
-                .await
-                .unwrap();
-        assert_eq!(stored, vec![("bob".to_owned(), "bob".to_owned())]);
+        let stored: Vec<(String, String)> = sqlx::query_as(
+            "SELECT user_id,username FROM message_mentions WHERE message_id=? ORDER BY user_id",
+        )
+        .bind(&message.message.id)
+        .fetch_all(&pool)
+        .await
+        .unwrap();
+        assert_eq!(
+            stored,
+            vec![
+                (bob.to_owned(), "bob".to_owned()),
+                (quiet.to_owned(), quiet.to_owned()),
+            ]
+        );
         let page = messages_for(
             &pool,
             "group",
@@ -4940,8 +5004,61 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(page.messages.len(), 1);
-        assert_eq!(page.messages[0].mentions.len(), 1);
-        assert_eq!(page.messages[0].mentions[0].user_id, "bob");
+        assert_eq!(page.messages[0].mentions.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn conversation_previews_resolve_mention_tokens() {
+        let pool = db::connect_memory().await.unwrap();
+        let alice = "550e8400-e29b-41d4-a716-446655440000";
+        let bob = "550e8400-e29b-41d4-a716-446655440001";
+        insert_test_users(&pool, &[alice, bob]).await;
+        insert_test_conversation(
+            &pool,
+            "group",
+            "group",
+            &[(alice, "owner"), (bob, "member")],
+        )
+        .await;
+        sqlx::query("INSERT INTO profiles(user_id,username,intro,updated_at) VALUES(?,'bob','',0)")
+            .bind(bob)
+            .execute(&pool)
+            .await
+            .unwrap();
+        create_message(
+            &pool,
+            NewMessage {
+                conversation_id: "group",
+                sender_kind: "user",
+                sender_id: alice,
+                body: format!("ping <@{bob}>"),
+                attachment_ids: Vec::new(),
+                urgent: false,
+                attachment_owner: None,
+                client_message_id: None,
+            },
+        )
+        .await
+        .unwrap();
+        let state = test_state(pool);
+        let axum::Json(conversations) = list_conversations(
+            State(state.clone()),
+            axum::Extension(UserIdentity { id: alice.into() }),
+        )
+        .await
+        .unwrap();
+        assert_eq!(conversations[0].latest_body.as_deref(), Some("ping @bob"));
+        let axum::Json(detail) = conversation_detail(
+            State(state),
+            axum::Extension(UserIdentity { id: alice.into() }),
+            Path("group".into()),
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            detail.conversation.latest_body.as_deref(),
+            Some("ping @bob")
+        );
     }
 
     #[tokio::test]
