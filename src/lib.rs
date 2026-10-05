@@ -1599,12 +1599,12 @@ async fn add_member(
     Path(id): Path<String>,
     axum::Json(input): axum::Json<MemberInput>,
 ) -> Result<StatusCode, AppError> {
-    require_group_owner(&state.db, &id, &user.id).await?;
+    let member_id = nonempty(&input.user_id, "user_id", 128)?;
+    authorize_add_member(&state.db, &id, &user.id, &member_id).await?;
     let now = chrono::Utc::now().timestamp();
     let mut tx = state.db.begin().await?;
-    add_member_by_user_id(&mut tx, &id, &user.id, &input.user_id, now).await?;
+    add_member_by_user_id(&mut tx, &id, &user.id, &member_id, now).await?;
     tx.commit().await?;
-    let member_id = input.user_id;
     let _ = state
         .events
         .send(ServerEvent::refresh_conversations(vec![member_id.clone()]));
@@ -2867,6 +2867,22 @@ async fn require_group_owner(
     if found.is_none() {
         return Err(AppError::forbidden(
             "only a group owner can manage membership",
+        ));
+    }
+    Ok(())
+}
+
+// A group owner adds anyone; any other member only adds bots they own.
+async fn authorize_add_member(
+    db: &SqlitePool,
+    conversation_id: &str,
+    user_id: &str,
+    member_id: &str,
+) -> Result<(), AppError> {
+    let allowed: Option<i64> = sqlx::query_scalar("SELECT 1 FROM conversations c JOIN conversation_members cm ON cm.conversation_id=c.id WHERE c.id=? AND c.kind='group' AND cm.user_id=? AND (cm.role='owner' OR EXISTS(SELECT 1 FROM bots b WHERE b.id=? AND b.owner_user_id=?))").bind(conversation_id).bind(user_id).bind(member_id).bind(user_id).fetch_optional(db).await?;
+    if allowed.is_none() {
+        return Err(AppError::forbidden(
+            "only a group owner can add members; members can only add bots they own",
         ));
     }
     Ok(())
@@ -5773,6 +5789,101 @@ mod tests {
             Err(error) => error,
         };
         assert_eq!(error.status, StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn group_members_add_their_own_bots_without_becoming_owners() {
+        let pool = db::connect_memory().await.unwrap();
+        for user_id in ["owner", "member", "outsider"] {
+            sqlx::query("INSERT INTO users(id,created_at) VALUES(?,0)")
+                .bind(user_id)
+                .execute(&pool)
+                .await
+                .unwrap();
+        }
+        sqlx::query("INSERT INTO users(id,type,created_at) VALUES('member-bot','bot',0),('outsider-bot','bot',0)")
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query("INSERT INTO bots(id,owner_user_id,name,token_prefix,token_hash,created_at,updated_at) VALUES('member-bot','member','Member Bot','sk-member','member-hash',0,0),('outsider-bot','outsider','Outsider Bot','sk-outsider','outsider-hash',0,0)")
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query("INSERT INTO conversations(id,kind,title,created_by,created_at) VALUES('group','group','Team','owner',0),('direct','direct','','owner',0)")
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query("INSERT INTO conversation_members(conversation_id,user_id,role,joined_at) VALUES('group','owner','owner',0),('group','member','member',0),('direct','owner','member',0),('direct','member','member',0)")
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        async fn add(
+            pool: &SqlitePool,
+            conversation_id: &str,
+            actor: &str,
+            target: &str,
+        ) -> Result<StatusCode, AppError> {
+            add_member(
+                State(test_state(pool.clone())),
+                axum::Extension(UserIdentity { id: actor.into() }),
+                Path(conversation_id.into()),
+                axum::Json(MemberInput {
+                    user_id: target.into(),
+                }),
+            )
+            .await
+        }
+        async fn role(pool: &SqlitePool, conversation_id: &str, user_id: &str) -> Option<String> {
+            sqlx::query_scalar(
+                "SELECT role FROM conversation_members WHERE conversation_id=? AND user_id=?",
+            )
+            .bind(conversation_id)
+            .bind(user_id)
+            .fetch_optional(pool)
+            .await
+            .unwrap()
+        }
+
+        // A member adds their own bot without being the group owner.
+        add(&pool, "group", "member", "member-bot").await.unwrap();
+        assert_eq!(
+            role(&pool, "group", "member-bot").await.as_deref(),
+            Some("member")
+        );
+
+        // The same bot cannot be added twice.
+        let error = add(&pool, "group", "member", "member-bot")
+            .await
+            .unwrap_err();
+        assert_eq!(error.status, StatusCode::BAD_REQUEST);
+
+        // Members can only add bots they own.
+        let error = add(&pool, "group", "member", "outsider-bot")
+            .await
+            .unwrap_err();
+        assert_eq!(error.status, StatusCode::FORBIDDEN);
+        let error = add(&pool, "group", "member", "outsider").await.unwrap_err();
+        assert_eq!(error.status, StatusCode::FORBIDDEN);
+
+        // Non-members cannot add their own bots.
+        let error = add(&pool, "group", "outsider", "outsider-bot")
+            .await
+            .unwrap_err();
+        assert_eq!(error.status, StatusCode::FORBIDDEN);
+
+        // Direct conversations never accept extra members.
+        let error = add(&pool, "direct", "member", "member-bot")
+            .await
+            .unwrap_err();
+        assert_eq!(error.status, StatusCode::FORBIDDEN);
+
+        // Owners keep full membership control.
+        add(&pool, "group", "owner", "outsider").await.unwrap();
+        assert_eq!(
+            role(&pool, "group", "outsider").await.as_deref(),
+            Some("member")
+        );
     }
 
     #[tokio::test]
