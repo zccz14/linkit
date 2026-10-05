@@ -166,6 +166,7 @@ import {
   activeMentionToken,
   applyMention,
   mentionCandidates,
+  type MentionCandidate,
   type MentionToken,
 } from "@/lib/mention";
 import {
@@ -1129,6 +1130,50 @@ function byteRate(bytes: number) {
   return `${byteSize(bytes)}/s`;
 }
 
+function MentionOption({
+  active,
+  id,
+  member,
+  onChoose,
+}: {
+  active: boolean;
+  id: string;
+  member: MentionCandidate;
+  onChoose: (username: string) => void;
+}) {
+  const { t } = useI18n();
+  const { note, profile } = useLinkitUserInfo(member.user_id);
+  const displayName = note?.name || profile?.username || member.username;
+  const avatarFallback =
+    Array.from(displayName.trim())[0]?.toLocaleUpperCase() ?? "?";
+  return (
+    <button
+      id={id}
+      type="button"
+      role="option"
+      aria-selected={active}
+      data-active={active || undefined}
+      className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm hover:bg-accent hover:text-accent-foreground data-[active]:bg-accent data-[active]:text-accent-foreground"
+      onMouseDown={(event) => event.preventDefault()}
+      onClick={() => onChoose(member.username)}
+    >
+      <Avatar aria-label={displayName}>
+        <AvatarImage src={profile?.avatar_url ?? undefined} alt="" />
+        <AvatarFallback>{avatarFallback}</AvatarFallback>
+      </Avatar>
+      <span className="min-w-0 flex-1">
+        <span className="block truncate font-medium">{displayName}</span>
+        <span className="block truncate text-xs text-muted-foreground">
+          @{member.username}
+        </span>
+      </span>
+      {member.user_type === "bot" ? (
+        <Badge variant="secondary">{t("conversation.bot")}</Badge>
+      ) : null}
+    </button>
+  );
+}
+
 function ConversationPage({ me, sdk }: { me: Me; sdk: AuthMiniApi }) {
   const { t } = useI18n();
   const { id = "" } = useParams();
@@ -1418,22 +1463,13 @@ function ConversationPage({ me, sdk }: { me: Me; sdk: AuthMiniApi }) {
                 className="absolute bottom-full left-0 z-50 mb-2 max-h-60 w-full overflow-auto rounded-lg border bg-popover p-1 text-popover-foreground shadow-md"
               >
                 {mentionOptions.map((option, index) => (
-                  <button
+                  <MentionOption
                     key={option.user_id}
                     id={`${mentionListId}-option-${index}`}
-                    type="button"
-                    role="option"
-                    aria-selected={index === activeMentionIndex}
-                    data-active={index === activeMentionIndex || undefined}
-                    className="flex w-full items-center justify-between gap-2 rounded-md px-2 py-1.5 text-left text-sm hover:bg-accent hover:text-accent-foreground data-[active]:bg-accent data-[active]:text-accent-foreground"
-                    onMouseDown={(event) => event.preventDefault()}
-                    onClick={() => chooseMention(option.username)}
-                  >
-                    <span className="truncate">@{option.username}</span>
-                    {option.user_type === "bot" ? (
-                      <Badge variant="secondary">{t("conversation.bot")}</Badge>
-                    ) : null}
-                  </button>
+                    member={option}
+                    active={index === activeMentionIndex}
+                    onChoose={chooseMention}
+                  />
                 ))}
               </div>
             ) : null}
