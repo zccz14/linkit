@@ -35,6 +35,7 @@ import {
   FileIcon,
   HardDriveIcon,
   ImageIcon,
+  KeyIcon,
   MemoryStickIcon,
   MessageCircleIcon,
   NetworkIcon,
@@ -189,6 +190,7 @@ import {
   type MessagePage,
   type Profile,
   type SystemOverview,
+  type UserApiKey,
 } from "@/lib/api";
 import { negotiateLocale, type TranslationKey } from "@/lib/locale";
 
@@ -542,6 +544,11 @@ function LinkitShell({
   const toolItems: NavigationItem[] = [
     { icon: BotIcon, label: t("navigation.bots"), to: "/bots" },
     {
+      icon: KeyIcon,
+      label: t("navigation.apiKeys"),
+      to: "/settings/api-keys",
+    },
+    {
       icon: BellIcon,
       label: t("navigation.notifications"),
       to: "/settings/notifications",
@@ -651,6 +658,7 @@ function LinkitShell({
               path="/bots/:botId/conversations/:conversationId"
               element={<BotViewConversation sdk={sdk} />}
             />
+            <Route path="/settings/api-keys" element={<ApiKeys sdk={sdk} />} />
             <Route
               path="/settings/notifications"
               element={<BarkNotifications sdk={sdk} />}
@@ -729,6 +737,7 @@ function appPageTitle(pathname: string, t: (key: TranslationKey) => string) {
   if (pathname.startsWith("/compose")) return t("compose.title");
   if (pathname.startsWith("/groups")) return t("group.title");
   if (pathname.startsWith("/bots")) return t("bots.title");
+  if (pathname.startsWith("/settings/api-keys")) return t("apiKeys.title");
   if (pathname.startsWith("/settings/notifications"))
     return t("barkSettings.title");
   if (pathname.startsWith("/settings/profile")) return t("profile.title");
@@ -2397,6 +2406,155 @@ function Bots({ sdk }: { sdk: AuthMiniApi }) {
               onClick={() => selected && remove.mutate(selected.id)}
             >
               {t("bots.delete")}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+    </Page>
+  );
+}
+
+function ApiKeys({ sdk }: { sdk: AuthMiniApi }) {
+  const { locale, t } = useI18n();
+  const queryClient = useQueryClient();
+  const keys = useQuery({
+    queryKey: ["user-api-keys"],
+    queryFn: () => api<UserApiKey[]>(sdk, "/api/user-api-keys"),
+  });
+  const [dialog, setDialog] = useState(false);
+  const [name, setName] = useState("");
+  const [token, setToken] = useState("");
+  const [selected, setSelected] = useState<UserApiKey>();
+  const [revokeConfirmation, setRevokeConfirmation] = useState(false);
+  const create = useMutation({
+    mutationFn: () =>
+      api<{ token: string }>(sdk, "/api/user-api-keys", {
+        method: "POST",
+        body: JSON.stringify({ name }),
+      }),
+    onSuccess: (created) => {
+      setToken(created.token);
+      void queryClient.invalidateQueries({ queryKey: ["user-api-keys"] });
+    },
+    onError: (error) => toast.error(error.message),
+  });
+  const revoke = useMutation({
+    mutationFn: (id: string) =>
+      api<void>(sdk, `/api/user-api-keys/${id}`, { method: "DELETE" }),
+    onSuccess: () => {
+      setRevokeConfirmation(false);
+      setSelected(undefined);
+      void queryClient.invalidateQueries({ queryKey: ["user-api-keys"] });
+      toast.success(t("apiKeys.revoked"));
+    },
+    onError: (error) => toast.error(error.message),
+  });
+  return (
+    <Page title={t("apiKeys.title")} description={t("apiKeys.description")}>
+      <div className="mb-5">
+        <Button
+          onClick={() => {
+            setDialog(true);
+            setToken("");
+            setName("");
+          }}
+        >
+          <PlusIcon data-icon="inline-start" />
+          {t("apiKeys.new")}
+        </Button>
+      </div>
+      <div className="grid gap-3 sm:grid-cols-2">
+        {keys.data?.map((key) => (
+          <Card key={key.id}>
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                <KeyIcon />
+                {key.name}
+              </CardTitle>
+              <CardDescription>
+                {new Date(key.created_at * 1000).toLocaleString(locale)}
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="flex items-center justify-between">
+              <Badge variant="secondary">{key.token_prefix}…</Badge>
+              <Button
+                variant="destructive"
+                size="sm"
+                onClick={() => {
+                  setSelected(key);
+                  setRevokeConfirmation(true);
+                }}
+              >
+                {t("apiKeys.revoke")}
+              </Button>
+            </CardContent>
+          </Card>
+        ))}
+      </div>
+      <Dialog open={dialog} onOpenChange={setDialog}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>{t("apiKeys.new")}</DialogTitle>
+          </DialogHeader>
+          {token ? (
+            <Field>
+              <FieldLabel>{t("apiKeys.copyToken")}</FieldLabel>
+              <Input readOnly value={token} />
+            </Field>
+          ) : (
+            <Field>
+              <FieldLabel htmlFor="api-key-name">
+                {t("apiKeys.name")}
+              </FieldLabel>
+              <Input
+                id="api-key-name"
+                value={name}
+                onChange={(event) => setName(event.target.value)}
+              />
+            </Field>
+          )}
+          <DialogFooter>
+            {token ? (
+              <Button onClick={() => setDialog(false)}>
+                {t("apiKeys.done")}
+              </Button>
+            ) : (
+              <Button
+                disabled={!name.trim() || create.isPending}
+                onClick={() => create.mutate()}
+              >
+                <KeyIcon data-icon="inline-start" />
+                {t("apiKeys.create")}
+              </Button>
+            )}
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+      <AlertDialog
+        open={revokeConfirmation}
+        onOpenChange={setRevokeConfirmation}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>
+              {selected
+                ? t("apiKeys.revokeTitle", { name: selected.name })
+                : t("apiKeys.revoke")}
+            </AlertDialogTitle>
+            <AlertDialogDescription>
+              {t("apiKeys.revokeDescription")}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={revoke.isPending}>
+              {t("common.cancel")}
+            </AlertDialogCancel>
+            <AlertDialogAction
+              variant="destructive"
+              disabled={!selected || revoke.isPending}
+              onClick={() => selected && revoke.mutate(selected.id)}
+            >
+              {t("apiKeys.revoke")}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

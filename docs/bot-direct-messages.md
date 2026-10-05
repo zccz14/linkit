@@ -5,6 +5,9 @@
 人类可在控制面管理该 Bot；Owner 不会因此成为 Bot 所在群聊的成员，只能像第 5 节
 那样以只读视角查看这些会话。
 
+要让脚本以人类用户**本人**的身份发言，请使用[用户 API Key](user-api-keys.md)：
+Bot Token 始终以 Bot 自身的身份认证，用户 API Key 则以创建它的用户身份认证。
+
 ## 1. 创建和配置 Profile
 
 1. 以人类 Owner 登录 Linkit，打开「机器人」页面（`#/bots`）创建 Bot。
