@@ -40,6 +40,11 @@ export type LinkitConversation = {
   unread_count?: number;
 };
 
+export type LinkitMessageMention = {
+  user_id: string;
+  username: string;
+};
+
 export type LinkitMessage = {
   id: string;
   conversation_id: string;
@@ -51,6 +56,7 @@ export type LinkitMessage = {
   urgent: boolean;
   created_at: number;
   attachments: LinkitAttachment[];
+  mentions: LinkitMessageMention[];
   cursor: string;
 };
 
