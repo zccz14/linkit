@@ -44,3 +44,22 @@ test("the favicon links the SVG mark instead of the retired PNG", () => {
   );
   assert.doesNotMatch(indexHtml, /favicon-64\.png/);
 });
+
+test("the favicon re-renders in the resolved theme without a reload", () => {
+  const favicon = readFileSync(
+    new URL("../src/lib/favicon.ts", import.meta.url),
+    "utf8",
+  );
+  const themeProvider = readFileSync(
+    new URL("../src/components/theme-provider.tsx", import.meta.url),
+    "utf8",
+  );
+
+  assert.match(
+    favicon,
+    /LINKIT_MARK_RECT = \{ x: 13\.5, y: 13\.5, width: 37, height: 37 \}/,
+  );
+  assert.match(favicon, /light: "#000",[\s\S]*dark: "#fff"/);
+  assert.match(favicon, /data:image\/svg\+xml/);
+  assert.match(themeProvider, /applyFavicon\(resolvedTheme\)/);
+});
