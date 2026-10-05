@@ -1726,6 +1726,25 @@ function GroupManagementContent({
   const isOwner = detail.members.some(
     (member) => member.user_id === me.id && member.role === "owner",
   );
+  const bots = useQuery({
+    queryKey: ["bots"],
+    queryFn: () => api<Bot[]>(sdk, "/api/bots"),
+  });
+  const addBot = useMutation({
+    mutationFn: (botId: string) =>
+      api(sdk, `/api/conversations/${detail.id}/members`, {
+        method: "POST",
+        body: JSON.stringify({ user_id: botId }),
+      }),
+    onSuccess: () => {
+      refresh();
+      toast.success(t("conversation.addBotSuccess"));
+    },
+    onError: (error) => toast.error(error.message),
+  });
+  const availableBots = (bots.data ?? []).filter(
+    (bot) => !detail.members.some((member) => member.user_id === bot.id),
+  );
 
   return (
     <div className="min-h-0 flex-1 overflow-auto p-4">
@@ -1834,6 +1853,37 @@ function GroupManagementContent({
             </form>
           ) : null}
         </section>
+        {availableBots.length ? (
+          <section className="flex flex-col gap-3">
+            <h2 className="font-medium">{t("conversation.addBot")}</h2>
+            <div className="flex flex-col gap-1">
+              {availableBots.map((bot) => (
+                <div
+                  key={bot.id}
+                  className="flex items-center gap-3 rounded-lg px-2 py-2"
+                >
+                  <Avatar>
+                    <AvatarFallback>
+                      <BotIcon />
+                    </AvatarFallback>
+                  </Avatar>
+                  <p className="min-w-0 flex-1 truncate text-sm font-medium">
+                    {bot.name}
+                  </p>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    disabled={addBot.isPending}
+                    onClick={() => addBot.mutate(bot.id)}
+                  >
+                    <PlusIcon data-icon="inline-start" />
+                    {t("conversation.addBot")}
+                  </Button>
+                </div>
+              ))}
+            </div>
+          </section>
+        ) : null}
       </div>
     </div>
   );
