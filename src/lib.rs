@@ -1431,7 +1431,7 @@ async fn conversation_detail(
     Path(id): Path<String>,
 ) -> Result<axum::Json<ConversationDetail>, AppError> {
     let conversation = conversation(&state.db, &id, &user.id).await?;
-    let members = sqlx::query_as("SELECT cm.user_id,COALESCE(p.username,cm.user_id) username,u.type AS user_type,cm.role,(p.user_id IS NOT NULL) AS has_profile FROM conversation_members cm JOIN users u ON u.id=cm.user_id LEFT JOIN profiles p ON p.user_id=cm.user_id WHERE cm.conversation_id=? ORDER BY cm.joined_at")
+    let members = sqlx::query_as("SELECT cm.user_id,COALESCE(p.username,b.name,cm.user_id) username,u.type AS user_type,cm.role,(p.user_id IS NOT NULL) AS has_profile FROM conversation_members cm JOIN users u ON u.id=cm.user_id LEFT JOIN profiles p ON p.user_id=cm.user_id LEFT JOIN bots b ON b.id=cm.user_id WHERE cm.conversation_id=? ORDER BY cm.joined_at")
         .bind(&id)
         .fetch_all(&state.db)
         .await?;
@@ -2613,7 +2613,7 @@ where
         return Ok(Vec::new());
     }
     let members: Vec<(String, String)> = sqlx::query_as(
-        "SELECT cm.user_id,COALESCE(p.username,cm.user_id) FROM conversation_members cm LEFT JOIN profiles p ON p.user_id=cm.user_id WHERE cm.conversation_id=?",
+        "SELECT cm.user_id,COALESCE(p.username,b.name,cm.user_id) FROM conversation_members cm LEFT JOIN profiles p ON p.user_id=cm.user_id LEFT JOIN bots b ON b.id=cm.user_id WHERE cm.conversation_id=?",
     )
     .bind(conversation_id)
     .fetch_all(executor)
@@ -5037,16 +5037,33 @@ mod tests {
         let bob = "550e8400-e29b-41d4-a716-446655440001";
         let quiet = "550e8400-e29b-41d4-a716-446655440002";
         let stranger = "550e8400-e29b-41d4-a716-446655440003";
+        let bot = "550e8400-e29b-41d4-a716-446655440004";
         insert_test_users(&pool, &[alice, bob, quiet]).await;
+        sqlx::query("INSERT INTO users(id,type,created_at) VALUES(?,'bot',0)")
+            .bind(bot)
+            .execute(&pool)
+            .await
+            .unwrap();
         insert_test_conversation(
             &pool,
             "group",
             "group",
-            &[(alice, "owner"), (bob, "member"), (quiet, "member")],
+            &[
+                (alice, "owner"),
+                (bob, "member"),
+                (quiet, "member"),
+                (bot, "member"),
+            ],
         )
         .await;
         sqlx::query("INSERT INTO profiles(user_id,username,intro,updated_at) VALUES(?,'bob','',0)")
             .bind(bob)
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query("INSERT INTO bots(id,owner_user_id,name,token_prefix,token_hash,created_at,updated_at) VALUES(?,?,'Fund Bot','sk-fund','hash',0,0)")
+            .bind(bot)
+            .bind(alice)
             .execute(&pool)
             .await
             .unwrap();
@@ -5056,7 +5073,7 @@ mod tests {
                 conversation_id: "group",
                 sender_kind: "user",
                 sender_id: alice,
-                body: format!("ping <@{bob}> and <@{quiet}> but not <@{stranger}>"),
+                body: format!("ping <@{bob}> and <@{quiet}> and <@{bot}> but not <@{stranger}>"),
                 attachment_ids: Vec::new(),
                 urgent: false,
                 attachment_owner: None,
@@ -5076,8 +5093,9 @@ mod tests {
             vec![
                 (bob.to_owned(), "bob".to_owned()),
                 (quiet.to_owned(), quiet.to_owned()),
+                (bot.to_owned(), "Fund Bot".to_owned()),
             ],
-            "members are mentioned with their profile username or user ID; non-members stay plain text"
+            "members are mentioned with their profile username, bot name, or user ID; non-members stay plain text"
         );
         let stored: Vec<(String, String)> = sqlx::query_as(
             "SELECT user_id,username FROM message_mentions WHERE message_id=? ORDER BY user_id",
@@ -5091,6 +5109,7 @@ mod tests {
             vec![
                 (bob.to_owned(), "bob".to_owned()),
                 (quiet.to_owned(), quiet.to_owned()),
+                (bot.to_owned(), "Fund Bot".to_owned()),
             ]
         );
         let page = messages_for(
@@ -5104,7 +5123,7 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(page.messages.len(), 1);
-        assert_eq!(page.messages[0].mentions.len(), 2);
+        assert_eq!(page.messages[0].mentions.len(), 3);
     }
 
     #[tokio::test]
@@ -5165,11 +5184,19 @@ mod tests {
     async fn conversation_members_report_whether_they_have_profiles() {
         let pool = db::connect_memory().await.unwrap();
         insert_test_users(&pool, &["alice", "quiet"]).await;
+        sqlx::query("INSERT INTO users(id,type,created_at) VALUES('fund-bot','bot',0)")
+            .execute(&pool)
+            .await
+            .unwrap();
         insert_test_conversation(
             &pool,
             "group",
             "group",
-            &[("alice", "owner"), ("quiet", "member")],
+            &[
+                ("alice", "owner"),
+                ("quiet", "member"),
+                ("fund-bot", "member"),
+            ],
         )
         .await;
         sqlx::query(
@@ -5178,6 +5205,10 @@ mod tests {
         .execute(&pool)
         .await
         .unwrap();
+        sqlx::query("INSERT INTO bots(id,owner_user_id,name,token_prefix,token_hash,created_at,updated_at) VALUES('fund-bot','alice','Fund Bot','sk-fund','hash',0,0)")
+            .execute(&pool)
+            .await
+            .unwrap();
         let state = test_state(pool);
         let axum::Json(detail) = conversation_detail(
             State(state),
@@ -5189,10 +5220,23 @@ mod tests {
         let mut members = detail
             .members
             .iter()
-            .map(|member| (member.user_id.as_str(), member.has_profile))
+            .map(|member| {
+                (
+                    member.user_id.as_str(),
+                    member.username.as_str(),
+                    member.has_profile,
+                )
+            })
             .collect::<Vec<_>>();
         members.sort();
-        assert_eq!(members, vec![("alice", true), ("quiet", false)]);
+        assert_eq!(
+            members,
+            vec![
+                ("alice", "alice", true),
+                ("fund-bot", "Fund Bot", false),
+                ("quiet", "quiet", false),
+            ]
+        );
     }
 
     #[tokio::test]

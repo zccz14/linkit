@@ -18,6 +18,7 @@
 
 - `LinkitProvider` supplies authenticated Linkit requests, identity/profile methods, uploads, message/conversation reads and writes, member-authorized event subscriptions, and attachment downloads. It owns Auth Mini bearer use, the single refresh retry, the one shared Linkit event stream, and the debounced in-memory batch cache used by `LinkitUserInfo`; consuming applications never receive or persist a token. It also publishes the signed-in viewer's language preference through `useLinkit()`: `languages` is the stored priority list and `lang` is the effective copy language (see [Language preference](#language-preference)).
 - `useLinkit` reads that provider context.
+- `useLinkitUserNotes` requests the private-note batch for a stable list of user IDs and returns the provider's shared note cache, so consumers can search and filter by the viewer's private note names.
 - `LinkitAvatar` renders a fixed-size profile avatar from its public, versioned `avatar_url` through a native `<img src>`; the browser reuses that URL through its normal HTTP cache, and a same-size initial fallback appears if the image fails.
 - `LinkitUserDisplay` renders a profile `username`; when the profile is unavailable it renders the localized unknown-user label and the complete source `user_id`.
 - `LinkitConversationDisplay` renders a group or direct conversation identity.

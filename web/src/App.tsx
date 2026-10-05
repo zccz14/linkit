@@ -57,6 +57,7 @@ import {
   LinkitUserPicker,
   useLinkit,
   useLinkitUserInfo,
+  useLinkitUserNotes,
 } from "linkit-react-components";
 import { QRCodeSVG } from "qrcode.react";
 
@@ -1169,7 +1170,13 @@ function MentionOption({
     >
       <Avatar aria-label={displayName}>
         <AvatarImage src={profile?.avatar_url ?? undefined} alt="" />
-        <AvatarFallback>{avatarFallback}</AvatarFallback>
+        {member.user_type === "bot" ? (
+          <AvatarFallback>
+            <BotIcon />
+          </AvatarFallback>
+        ) : (
+          <AvatarFallback>{avatarFallback}</AvatarFallback>
+        )}
       </Avatar>
       <span className="min-w-0 flex-1">
         <span className="block truncate font-medium">{displayName}</span>
@@ -1220,18 +1227,31 @@ function ConversationPage({ me, sdk }: { me: Me; sdk: AuthMiniApi }) {
     queryKey: ["conversation", id],
     queryFn: () => api<ConversationDetail>(sdk, `/api/conversations/${id}`),
   });
+  const memberIds = useMemo(
+    () => (detail.data?.members ?? []).map((member) => member.user_id),
+    [detail.data?.members],
+  );
+  const memberNotes = useLinkitUserNotes(memberIds);
+  const noteNames = useMemo(() => {
+    const names = new Map<string, string>();
+    for (const [userId, note] of memberNotes) {
+      if (note) names.set(userId, note.name);
+    }
+    return names;
+  }, [memberNotes]);
   const mentionOptions = useMemo(
     () =>
       mentionCandidates(
         detail.data?.members ?? [],
         mention?.query ?? "",
         me.id,
+        noteNames,
       ),
-    [detail.data?.members, me.id, mention?.query],
+    [detail.data?.members, me.id, mention?.query, noteNames],
   );
   const mentionableMembers = useMemo(
-    () => mentionCandidates(detail.data?.members ?? [], "", me.id),
-    [detail.data?.members, me.id],
+    () => mentionCandidates(detail.data?.members ?? [], "", me.id, noteNames),
+    [detail.data?.members, me.id, noteNames],
   );
   const mentionOpen = mention !== null && mentionOptions.length > 0;
   const activeMentionIndex = Math.min(mentionIndex, mentionOptions.length - 1);
