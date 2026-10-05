@@ -2,8 +2,9 @@ import { createElement } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 
+import type { MessageMention } from "./api.ts";
 import { safeMarkdownUrl } from "./message.ts";
-import { splitMentions } from "./mention.ts";
+import { replaceMentionTokens, splitMentionTokens } from "./mention.ts";
 
 type MarkdownNode = {
   type: string;
@@ -23,7 +24,7 @@ export function MessageMarkdown({
   mentions = [],
 }: {
   children: string;
-  mentions?: string[];
+  mentions?: MessageMention[];
 }) {
   return createElement(
     "div",
@@ -55,20 +56,29 @@ export function MessageMarkdown({
   );
 }
 
-function remarkMentions(usernames: string[]) {
+function remarkMentions(mentions: MessageMention[]) {
   return (tree: MarkdownNode) => {
-    highlightMentions(tree, usernames);
+    highlightMentions(tree, mentions);
   };
 }
 
-function highlightMentions(node: MarkdownNode, usernames: string[]) {
+function highlightMentions(node: MarkdownNode, mentions: MessageMention[]) {
+  // The composer converts mention text even inside code spans, so code spans
+  // substitute tokens back to `@username` to keep what the sender wrote.
+  if (
+    (node.type === "code" || node.type === "inlineCode") &&
+    typeof node.value === "string"
+  ) {
+    node.value = replaceMentionTokens(node.value, mentions);
+    return;
+  }
   if (!Array.isArray(node.children)) return;
   node.children = node.children.flatMap((child) => {
     if (child.type !== "text" || typeof child.value !== "string") {
-      highlightMentions(child, usernames);
+      highlightMentions(child, mentions);
       return [child];
     }
-    return splitMentions(child.value, usernames).map((segment) =>
+    return splitMentionTokens(child.value, mentions).map((segment) =>
       segment.username === null
         ? { type: "text", value: segment.text }
         : {

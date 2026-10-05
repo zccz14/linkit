@@ -269,6 +269,14 @@
   white-space: pre-wrap;
   line-height: 1.48;
 }
+
+.linkit-embedded-conversation__mention {
+  padding: 0 0.15rem;
+  font-weight: 500;
+  border-radius: 0.25rem;
+  background: rgba(128, 128, 128, 0.18);
+  background: color-mix(in oklab, currentColor 15%, transparent);
+}
 .linkit-embedded-conversation__attachment {
   display: inline-flex;
   width: fit-content;

@@ -6,10 +6,51 @@ import {
   activeMentionToken,
   applyMention,
   mentionCandidates,
-  splitMentions,
+  replaceMentionTokens,
+  splitMentionTokens,
+  tokenizeMentions,
 } from "../src/lib/mention.ts";
 
 const app = readFileSync(new URL("../src/App.tsx", import.meta.url), "utf8");
+
+const aliceId = "550e8400-e29b-41d4-a716-446655440001";
+const customId = "550e8400-e29b-41d4-a716-446655440002";
+const xiaomingId = "550e8400-e29b-41d4-a716-446655440003";
+const bobId = "550e8400-e29b-41d4-a716-446655440004";
+const bobbyId = "550e8400-e29b-41d4-a716-446655440005";
+
+const members = [
+  {
+    user_id: aliceId,
+    username: "Alice",
+    user_type: "human" as const,
+    has_profile: true,
+  },
+  {
+    user_id: customId,
+    username: "Custom Name",
+    user_type: "human" as const,
+    has_profile: true,
+  },
+  {
+    user_id: xiaomingId,
+    username: "小明",
+    user_type: "human" as const,
+    has_profile: true,
+  },
+  {
+    user_id: bobId,
+    username: "bob",
+    user_type: "human" as const,
+    has_profile: true,
+  },
+  {
+    user_id: bobbyId,
+    username: "bobby",
+    user_type: "bot" as const,
+    has_profile: true,
+  },
+];
 
 test("the composer tracks the mention token around the caret", () => {
   assert.deepEqual(activeMentionToken("hello @bo", 9), {
@@ -25,25 +66,8 @@ test("the composer tracks the mention token around the caret", () => {
 });
 
 test("mention candidates are members with profiles other than the sender", () => {
-  const members = [
-    {
-      user_id: "me",
-      username: "me",
-      user_type: "human" as const,
-      has_profile: true,
-    },
-    {
-      user_id: "alice",
-      username: "Alice",
-      user_type: "human" as const,
-      has_profile: true,
-    },
-    {
-      user_id: "fund-bot",
-      username: "Fund Bot",
-      user_type: "bot" as const,
-      has_profile: true,
-    },
+  const candidates = [
+    ...members,
     {
       user_id: "quiet",
       username: "quiet",
@@ -52,16 +76,28 @@ test("mention candidates are members with profiles other than the sender", () =>
     },
   ];
   assert.deepEqual(
-    mentionCandidates(members, "", "me").map((member) => member.user_id),
-    ["alice", "fund-bot"],
+    mentionCandidates(candidates, "", aliceId).map((member) => member.user_id),
+    [customId, xiaomingId, bobId, bobbyId],
   );
   assert.deepEqual(
-    mentionCandidates(members, "ALI", "me").map((member) => member.user_id),
-    ["alice"],
-  );
-  assert.deepEqual(
-    mentionCandidates(members, "li", "me").map((member) => member.user_id),
+    mentionCandidates(candidates, "ALI", aliceId).map(
+      (member) => member.user_id,
+    ),
     [],
+    "the sender is never suggested",
+  );
+  assert.deepEqual(
+    mentionCandidates(candidates, "BO", aliceId).map(
+      (member) => member.user_id,
+    ),
+    [bobId, bobbyId],
+  );
+  assert.deepEqual(
+    mentionCandidates(candidates, "li", aliceId).map(
+      (member) => member.user_id,
+    ),
+    [],
+    "candidates filter by username prefix",
   );
 });
 
@@ -79,26 +115,64 @@ test("applying a mention replaces the token and leaves room to keep typing", () 
   );
 });
 
-test("message text splits into plain and mention segments", () => {
-  assert.deepEqual(splitMentions("ping @Bob and @bobby!", ["bob", "bobby"]), [
-    { text: "ping ", username: null },
-    { text: "@Bob", username: "bob" },
-    { text: " and ", username: null },
-    { text: "@bobby", username: "bobby" },
-    { text: "!", username: null },
-  ]);
-  assert.deepEqual(splitMentions("not @bobcat", ["bob"]), [
-    { text: "not @bobcat", username: null },
-  ]);
-  assert.deepEqual(splitMentions("mail bob@alice.com", ["alice"]), [
-    { text: "mail bob@alice.com", username: null },
-  ]);
-  assert.deepEqual(splitMentions("的@小明 好", ["小明"]), [
-    { text: "的", username: null },
-    { text: "@小明", username: "小明" },
-    { text: " 好", username: null },
-  ]);
-  assert.deepEqual(splitMentions("", ["bob"]), []);
+test("sending replaces typed mentions with user ID tokens", () => {
+  assert.equal(
+    tokenizeMentions("hello @Alice, ping @ALICE again", members),
+    `hello <@${aliceId}>, ping <@${aliceId}> again`,
+  );
+  assert.equal(tokenizeMentions("@alice2", members), "@alice2");
+  assert.equal(
+    tokenizeMentions("mail bob@alice.com", members),
+    "mail bob@alice.com",
+  );
+  assert.equal(
+    tokenizeMentions("@Custom Name please", members),
+    `<@${customId}> please`,
+  );
+  assert.equal(tokenizeMentions("@Custom Named", members), "@Custom Named");
+  assert.equal(
+    tokenizeMentions("的@小明 你好", members),
+    `的<@${xiaomingId}> 你好`,
+  );
+  assert.equal(tokenizeMentions("@小明你好", members), "@小明你好");
+  assert.equal(
+    tokenizeMentions("thanks @bob.", members),
+    `thanks <@${bobId}>.`,
+  );
+  assert.equal(tokenizeMentions("@bobby!", members), `<@${bobbyId}>!`);
+  assert.equal(tokenizeMentions("@bobcat", members), "@bobcat");
+});
+
+test("message text splits into plain and mention segments by token", () => {
+  const mentions = [
+    { user_id: bobId, username: "bob" },
+    { user_id: bobbyId, username: "bobby" },
+  ];
+  assert.deepEqual(
+    splitMentionTokens(`ping <@${bobId}> and <@${bobbyId}>!`, mentions),
+    [
+      { text: "ping ", username: null },
+      { text: "@bob", username: "bob" },
+      { text: " and ", username: null },
+      { text: "@bobby", username: "bobby" },
+      { text: "!", username: null },
+    ],
+  );
+  assert.deepEqual(
+    splitMentionTokens(`ping <@${bobId.toUpperCase()}>`, mentions),
+    [
+      { text: "ping ", username: null },
+      { text: "@bob", username: "bob" },
+    ],
+    "tokens match case-insensitively",
+  );
+  assert.deepEqual(
+    splitMentionTokens(`hey <@${aliceId}>`, mentions),
+    [{ text: `hey <@${aliceId}>`, username: null }],
+    "tokens without a mention stay as written",
+  );
+  assert.deepEqual(splitMentionTokens("", mentions), []);
+  assert.equal(replaceMentionTokens(`<@${bobId}>`, mentions), "@bob");
 });
 
 test("mention candidates show the avatar, private note and username", () => {
@@ -112,4 +186,9 @@ test("mention candidates show the avatar, private note and username", () => {
   );
   assert.match(option, /profile\?\.avatar_url/);
   assert.match(option, /@\{member\.username\}/);
+});
+
+test("the conversation composer sends tokenized mentions", () => {
+  assert.match(app, /tokenizeMentions\(body, mentionableMembers\)/);
+  assert.match(app, /const mentionableMembers = useMemo\(/);
 });

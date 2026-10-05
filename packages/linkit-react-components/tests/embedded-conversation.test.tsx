@@ -145,6 +145,32 @@ describe("LinkitEmbeddedConversation", () => {
     );
   });
 
+  it("renders mention tokens as mention text and leaves unresolved tokens alone", async () => {
+    const mentionId = "550e8400-e29b-41d4-a716-446655440004";
+    linkit.listMessages.mockResolvedValue({
+      messages: [
+        {
+          ...firstMessage,
+          body: `ping <@${mentionId}>`,
+          mentions: [{ user_id: mentionId, username: "bob" }],
+        },
+        {
+          ...firstMessage,
+          id: "message-legacy",
+          sender_id: "bob-id",
+          body: "old <@unknown> text",
+          cursor: "2:2",
+        },
+      ],
+      older_cursor: "0:1",
+    });
+    render(<LinkitEmbeddedConversation conversationId="conversation-1" />);
+
+    const mention = await screen.findByText("@bob");
+    expect(mention).toHaveClass("linkit-embedded-conversation__mention");
+    expect(await screen.findByText("old <@unknown> text")).toBeInTheDocument();
+  });
+
   it("uploads a selected attachment before sending its message", async () => {
     const attachment = {
       id: "attachment-1",
