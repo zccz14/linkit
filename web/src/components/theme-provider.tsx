@@ -1,6 +1,8 @@
 /* eslint-disable react-refresh/only-export-components */
 import * as React from "react"
 
+import { applyFavicon } from "@/lib/favicon"
+
 type Theme = "dark" | "light" | "system"
 type ResolvedTheme = "dark" | "light"
 
@@ -116,6 +118,8 @@ export function ThemeProvider({
       if (restoreTransitions) {
         restoreTransitions()
       }
+
+      applyFavicon(resolvedTheme)
     },
     [disableTransitionOnChange]
   )
