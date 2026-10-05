@@ -37,7 +37,13 @@ export type ConversationDetail = Conversation & {
     username: string;
     user_type: "human" | "bot";
     role: string;
+    has_profile: boolean;
   }>;
+};
+
+export type MessageMention = {
+  user_id: string;
+  username: string;
 };
 
 export type Message = {
@@ -51,6 +57,7 @@ export type Message = {
   urgent: boolean;
   created_at: number;
   attachments: Attachment[];
+  mentions: MessageMention[];
   cursor: string;
 };
 

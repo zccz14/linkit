@@ -21,11 +21,19 @@ test("Enter sends only after IME composition completes", () => {
     true,
   );
   assert.equal(
-    shouldSendMessageOnEnter({ key: "Enter", shiftKey: true, isComposing: false }),
+    shouldSendMessageOnEnter({
+      key: "Enter",
+      shiftKey: true,
+      isComposing: false,
+    }),
     false,
   );
   assert.equal(
-    shouldSendMessageOnEnter({ key: "Enter", shiftKey: false, isComposing: true }),
+    shouldSendMessageOnEnter({
+      key: "Enter",
+      shiftKey: false,
+      isComposing: true,
+    }),
     false,
   );
   assert.equal(
@@ -35,7 +43,10 @@ test("Enter sends only after IME composition completes", () => {
 });
 
 test("Markdown URLs only allow http, https, local paths, and fragment links", () => {
-  assert.equal(safeMarkdownUrl("https://example.com/path"), "https://example.com/path");
+  assert.equal(
+    safeMarkdownUrl("https://example.com/path"),
+    "https://example.com/path",
+  );
   assert.equal(safeMarkdownUrl("/attachments/file"), "/attachments/file");
   assert.equal(safeMarkdownUrl("#message"), "#message");
   assert.equal(safeMarkdownUrl("javascript:alert(1)"), "");
@@ -63,7 +74,6 @@ test("message Markdown renders formatting and safe external links without raw HT
   assert.doesNotMatch(html, /javascript:/);
 });
 
-
 test("renaming a group updates the loaded conversation cache without changing members", () => {
   const conversation = {
     id: "group",
@@ -75,8 +85,34 @@ test("renaming a group updates the loaded conversation cache without changing me
     members: [{ user_id: "owner", username: "owner", role: "owner" }],
     bots: [],
   };
-  const renamed = updatedConversationDetail(conversation, { title: "After", avatar_attachment_id: undefined });
+  const renamed = updatedConversationDetail(conversation, {
+    title: "After",
+    avatar_attachment_id: undefined,
+  });
   assert.equal(renamed?.title, "After");
   assert.deepEqual(renamed?.members, conversation.members);
-  assert.equal(updatedConversationDetail(undefined, { title: "After", avatar_attachment_id: undefined }), undefined);
+  assert.equal(
+    updatedConversationDetail(undefined, {
+      title: "After",
+      avatar_attachment_id: undefined,
+    }),
+    undefined,
+  );
+});
+
+test("message Markdown highlights only resolved mentions outside code", () => {
+  const html = renderToStaticMarkup(
+    createElement(MessageMarkdown, {
+      children: "ping @bob and @bobby, not @bobcat or `@bob`",
+      mentions: ["bob", "bobby"],
+    }),
+  );
+  assert.match(html, /data-mention="bob">@bob</);
+  assert.match(html, /data-mention="bobby">@bobby</);
+  assert.doesNotMatch(html, /data-mention="bob">@bobcat</);
+  assert.match(html, /<code>@bob<\/code>/);
+  const plain = renderToStaticMarkup(
+    createElement(MessageMarkdown, { children: "ping @bob" }),
+  );
+  assert.doesNotMatch(plain, /data-mention/);
 });

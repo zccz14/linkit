@@ -1405,6 +1405,7 @@ struct ConversationMember {
     username: String,
     user_type: String,
     role: String,
+    has_profile: bool,
 }
 
 #[derive(Serialize)]
@@ -1420,7 +1421,7 @@ async fn conversation_detail(
     Path(id): Path<String>,
 ) -> Result<axum::Json<ConversationDetail>, AppError> {
     let conversation = conversation(&state.db, &id, &user.id).await?;
-    let members = sqlx::query_as("SELECT cm.user_id,COALESCE(p.username,cm.user_id) username,u.type AS user_type,cm.role FROM conversation_members cm JOIN users u ON u.id=cm.user_id LEFT JOIN profiles p ON p.user_id=cm.user_id WHERE cm.conversation_id=? ORDER BY cm.joined_at")
+    let members = sqlx::query_as("SELECT cm.user_id,COALESCE(p.username,cm.user_id) username,u.type AS user_type,cm.role,(p.user_id IS NOT NULL) AS has_profile FROM conversation_members cm JOIN users u ON u.id=cm.user_id LEFT JOIN profiles p ON p.user_id=cm.user_id WHERE cm.conversation_id=? ORDER BY cm.joined_at")
         .bind(&id)
         .fetch_all(&state.db)
         .await?;
@@ -1655,11 +1656,18 @@ struct StoredMessage {
     sequence: i64,
 }
 
+#[derive(Clone, Serialize, FromRow)]
+struct MessageMention {
+    user_id: String,
+    username: String,
+}
+
 #[derive(Clone, Serialize)]
 struct Message {
     #[serde(flatten)]
     message: StoredMessage,
     attachments: Vec<Attachment>,
+    mentions: Vec<MessageMention>,
     cursor: String,
 }
 
@@ -2214,6 +2222,20 @@ async fn bark_notification_destinations(
     .await
 }
 
+/// A mentioned member's notification says so, so an `@` still reaches them when the
+/// message would otherwise read as ordinary conversation.
+fn bark_notification_title_for(message: &Message, recipient_user_id: &str) -> String {
+    let mentioned = message
+        .mentions
+        .iter()
+        .any(|mention| mention.user_id == recipient_user_id);
+    if mentioned {
+        format!("Linkit · {} mentioned you", message.message.sender_name)
+    } else {
+        format!("Linkit · {}", message.message.sender_name)
+    }
+}
+
 fn bark_notification_recipients(
     destinations: Vec<BarkNotificationDestination>,
     sender_user_id: Option<&str>,
@@ -2252,7 +2274,6 @@ async fn deliver_bark_notifications(
             return;
         }
     };
-    let title = format!("Linkit · {}", message.message.sender_name);
     let body = if message.message.body.is_empty() {
         "Sent an attachment".to_owned()
     } else {
@@ -2273,16 +2294,16 @@ async fn deliver_bark_notifications(
     };
     let url = bark_conversation_url(&public_origin, &conversation_id);
     let icon = bark_notification_icon(&state.db, &public_origin, &conversation_id, &message).await;
-    let push = bark::PushInput::message(
-        title,
-        body,
-        conversation_id,
-        Some(message.message.id),
-        url,
-        icon,
-        message.message.urgent,
-    );
     for destination in bark_notification_recipients(destinations, sender_user_id.as_deref()) {
+        let push = bark::PushInput::message(
+            bark_notification_title_for(&message, &destination.user_id),
+            body.clone(),
+            conversation_id.clone(),
+            Some(message.message.id.clone()),
+            url.clone(),
+            icon.clone(),
+            message.message.urgent,
+        );
         match state.bark.deliver(&destination.device_token, &push).await {
             Ok(bark::Delivery::Delivered) => {}
             Ok(bark::Delivery::InvalidDeviceToken) => {
@@ -2463,7 +2484,7 @@ async fn create_message(db: &SqlitePool, input: NewMessage<'_>) -> Result<Messag
         .bind(conversation_id)
         .bind(sender_kind)
         .bind(sender_id)
-        .bind(body)
+        .bind(&body)
         .bind(urgent)
         .bind(now)
         .bind(sequence)
@@ -2477,8 +2498,98 @@ async fn create_message(db: &SqlitePool, input: NewMessage<'_>) -> Result<Messag
             .execute(&mut *tx)
             .await?;
     }
+    for mention in resolve_mentions(&mut *tx, conversation_id, &body).await? {
+        sqlx::query("INSERT INTO message_mentions(message_id,user_id,username) VALUES(?,?,?)")
+            .bind(&id)
+            .bind(&mention.user_id)
+            .bind(&mention.username)
+            .execute(&mut *tx)
+            .await?;
+    }
     tx.commit().await?;
     message(db, &id).await
+}
+
+/// Mentions are written as `@username` in the message body. Only conversation members
+/// with a profile can be mentioned; usernames match case-insensitively, and the longest
+/// member username wins, so `@bobby` does not mention `bob`.
+async fn resolve_mentions<'e, E>(
+    executor: E,
+    conversation_id: &str,
+    body: &str,
+) -> Result<Vec<MessageMention>, sqlx::Error>
+where
+    E: sqlx::Executor<'e, Database = sqlx::Sqlite>,
+{
+    let members: Vec<(String, String)> = sqlx::query_as(
+        "SELECT cm.user_id,p.username FROM conversation_members cm JOIN profiles p ON p.user_id=cm.user_id WHERE cm.conversation_id=?",
+    )
+    .bind(conversation_id)
+    .fetch_all(executor)
+    .await?;
+    Ok(mentioned_members(body, &members))
+}
+
+/// ASSUMPTION: the text around an `@` approximates whom the sender addresses. An `@`
+/// glued to an ASCII handle (`bob@alice`) and a username that continues into more
+/// letters, digits, `_` or `-` (`@alice2`, `@小明你好`) stay plain text. A wrong guess
+/// either misses a highlight or highlights an unintended name; it cannot change
+/// authorization or delivery.
+fn mentioned_members(body: &str, members: &[(String, String)]) -> Vec<MessageMention> {
+    let text: Vec<char> = body.chars().collect();
+    let mut mentions: Vec<MessageMention> = Vec::new();
+    let mut index = 0;
+    while index < text.len() {
+        if text[index] != '@' || (index > 0 && is_mention_prefix(text[index - 1])) {
+            index += 1;
+            continue;
+        }
+        let start = index + 1;
+        let matched = members
+            .iter()
+            .filter(|(_, username)| matches_username(&text, start, username))
+            .max_by_key(|(_, username)| username.chars().count());
+        index = match matched {
+            Some((user_id, username)) => {
+                if !mentions.iter().any(|mention| &mention.user_id == user_id) {
+                    mentions.push(MessageMention {
+                        user_id: user_id.clone(),
+                        username: username.clone(),
+                    });
+                }
+                start + username.chars().count()
+            }
+            None => index + 1,
+        };
+    }
+    mentions
+}
+
+fn matches_username(text: &[char], start: usize, username: &str) -> bool {
+    let username: Vec<char> = username.chars().collect();
+    if start + username.len() > text.len() {
+        return false;
+    }
+    if !text[start..start + username.len()]
+        .iter()
+        .zip(&username)
+        .all(|(text, username)| text.eq_ignore_ascii_case(username))
+    {
+        return false;
+    }
+    text.get(start + username.len())
+        .is_none_or(|next| !is_mention_continuation(*next))
+}
+
+/// A username must end the handle: more letters, digits, `_` or `-` keep it open.
+fn is_mention_continuation(character: char) -> bool {
+    character.is_alphanumeric() || character == '_' || character == '-'
+}
+
+/// Only an ASCII handle glued to `@` (an email address) blocks a mention; other scripts
+/// may precede `@` directly, as in `你好@小明`.
+fn is_mention_prefix(character: char) -> bool {
+    character.is_ascii_alphanumeric() || character == '_' || character == '-'
 }
 
 fn message_cursor(created_at: i64, sequence: i64) -> String {
@@ -2505,6 +2616,7 @@ async fn message_from_row(db: &SqlitePool, row: StoredMessage) -> Result<Message
     Ok(Message {
         cursor: message_cursor(row.created_at, row.sequence),
         attachments: attachments_for(db, &row.id).await?,
+        mentions: mentions_for(db, &row.id).await?,
         message: row,
     })
 }
@@ -2590,6 +2702,10 @@ async fn message(db: &SqlitePool, id: &str) -> Result<Message, AppError> {
 
 async fn attachments_for(db: &SqlitePool, message_id: &str) -> Result<Vec<Attachment>, AppError> {
     Ok(sqlx::query_as("SELECT id,file_name,media_type,byte_size,created_at FROM attachments WHERE message_id=? ORDER BY created_at").bind(message_id).fetch_all(db).await?)
+}
+
+async fn mentions_for(db: &SqlitePool, message_id: &str) -> Result<Vec<MessageMention>, AppError> {
+    Ok(sqlx::query_as("SELECT user_id,username FROM message_mentions WHERE message_id=? ORDER BY username COLLATE NOCASE").bind(message_id).fetch_all(db).await?)
 }
 
 async fn conversation(db: &SqlitePool, id: &str, user_id: &str) -> Result<Conversation, AppError> {
@@ -4705,6 +4821,163 @@ mod tests {
         assert!(matches!(second.kind, ServerEventKind::Unread));
     }
 
+    #[test]
+    fn mention_matching_follows_usernames_with_boundaries() {
+        let members = vec![
+            ("alice".to_owned(), "Alice".to_owned()),
+            ("custom".to_owned(), "Custom Name".to_owned()),
+            ("xiaoming".to_owned(), "小明".to_owned()),
+            ("bob".to_owned(), "bob".to_owned()),
+            ("bobby".to_owned(), "bobby".to_owned()),
+        ];
+        let ids = |body: &str| {
+            mentioned_members(body, &members)
+                .into_iter()
+                .map(|mention| mention.user_id)
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(ids("hello @Alice, ping @ALICE again"), vec!["alice"]);
+        assert_eq!(ids("@alice2"), Vec::<String>::new());
+        assert_eq!(ids("mail bob@alice.com"), Vec::<String>::new());
+        assert_eq!(ids("@Custom Name please"), vec!["custom"]);
+        assert_eq!(ids("@Custom Named"), Vec::<String>::new());
+        assert_eq!(ids("的@小明 你好"), vec!["xiaoming"]);
+        assert_eq!(ids("@小明你好"), Vec::<String>::new());
+        assert_eq!(ids("thanks @bob."), vec!["bob"]);
+        assert_eq!(ids("@bobby!"), vec!["bobby"]);
+        assert_eq!(ids("@bobcat"), Vec::<String>::new());
+        assert_eq!(
+            ids("ping @Custom Name then @Alice"),
+            vec!["custom", "alice"]
+        );
+    }
+
+    #[test]
+    fn bark_titles_announce_mentions_per_recipient() {
+        let message = Message {
+            message: StoredMessage {
+                id: "message".into(),
+                conversation_id: "group".into(),
+                sender_kind: "user".into(),
+                sender_id: "alice".into(),
+                sender_name: "alice".into(),
+                sender_deleted: false,
+                body: "ping @bob".into(),
+                urgent: false,
+                created_at: 0,
+                sequence: 1,
+            },
+            attachments: Vec::new(),
+            mentions: vec![MessageMention {
+                user_id: "bob".into(),
+                username: "bob".into(),
+            }],
+            cursor: "0:1".into(),
+        };
+        assert_eq!(
+            bark_notification_title_for(&message, "bob"),
+            "Linkit · alice mentioned you"
+        );
+        assert_eq!(
+            bark_notification_title_for(&message, "carol"),
+            "Linkit · alice"
+        );
+    }
+
+    #[tokio::test]
+    async fn create_message_resolves_mentions_for_members_with_profiles() {
+        let pool = db::connect_memory().await.unwrap();
+        insert_test_users(&pool, &["alice", "bob", "quiet"]).await;
+        insert_test_conversation(
+            &pool,
+            "group",
+            "group",
+            &[("alice", "owner"), ("bob", "member"), ("quiet", "member")],
+        )
+        .await;
+        sqlx::query("INSERT INTO profiles(user_id,username,intro,updated_at) VALUES('alice','alice','',0),('bob','bob','',0)")
+            .execute(&pool)
+            .await
+            .unwrap();
+        let message = create_message(
+            &pool,
+            NewMessage {
+                conversation_id: "group",
+                sender_kind: "user",
+                sender_id: "alice",
+                body: "ping @bob and @quiet".into(),
+                attachment_ids: Vec::new(),
+                urgent: false,
+                attachment_owner: None,
+                client_message_id: None,
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            message
+                .mentions
+                .iter()
+                .map(|mention| (mention.user_id.as_str(), mention.username.as_str()))
+                .collect::<Vec<_>>(),
+            vec![("bob", "bob")]
+        );
+        let stored: Vec<(String, String)> =
+            sqlx::query_as("SELECT user_id,username FROM message_mentions WHERE message_id=?")
+                .bind(&message.message.id)
+                .fetch_all(&pool)
+                .await
+                .unwrap();
+        assert_eq!(stored, vec![("bob".to_owned(), "bob".to_owned())]);
+        let page = messages_for(
+            &pool,
+            "group",
+            MessagePageQuery {
+                before_cursor: None,
+                after_cursor: None,
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(page.messages.len(), 1);
+        assert_eq!(page.messages[0].mentions.len(), 1);
+        assert_eq!(page.messages[0].mentions[0].user_id, "bob");
+    }
+
+    #[tokio::test]
+    async fn conversation_members_report_whether_they_have_profiles() {
+        let pool = db::connect_memory().await.unwrap();
+        insert_test_users(&pool, &["alice", "quiet"]).await;
+        insert_test_conversation(
+            &pool,
+            "group",
+            "group",
+            &[("alice", "owner"), ("quiet", "member")],
+        )
+        .await;
+        sqlx::query(
+            "INSERT INTO profiles(user_id,username,intro,updated_at) VALUES('alice','alice','',0)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        let state = test_state(pool);
+        let axum::Json(detail) = conversation_detail(
+            State(state),
+            axum::Extension(UserIdentity { id: "alice".into() }),
+            Path("group".into()),
+        )
+        .await
+        .unwrap();
+        let mut members = detail
+            .members
+            .iter()
+            .map(|member| (member.user_id.as_str(), member.has_profile))
+            .collect::<Vec<_>>();
+        members.sort();
+        assert_eq!(members, vec![("alice", true), ("quiet", false)]);
+    }
+
     #[tokio::test]
     async fn mark_read_notifies_the_reader_only() {
         let pool = db::connect_memory().await.unwrap();
@@ -5203,6 +5476,7 @@ mod tests {
                 sequence: 1,
             },
             attachments: Vec::new(),
+            mentions: Vec::new(),
             cursor: "0:1".into(),
         };
         let bot_message = Message {
@@ -5212,6 +5486,7 @@ mod tests {
                 ..user_message.message.clone()
             },
             attachments: Vec::new(),
+            mentions: Vec::new(),
             cursor: "0:1".into(),
         };
         assert_eq!(

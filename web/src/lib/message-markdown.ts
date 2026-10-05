@@ -3,8 +3,28 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 
 import { safeMarkdownUrl } from "./message.ts";
+import { splitMentions } from "./mention.ts";
 
-export function MessageMarkdown({ children }: { children: string }) {
+type MarkdownNode = {
+  type: string;
+  value?: string;
+  children?: MarkdownNode[];
+  data?: {
+    hName?: string;
+    hProperties?: Record<string, string>;
+  };
+};
+
+const mentionClassName =
+  "rounded-sm bg-current/15 px-0.5 font-medium [box-decoration-break:clone]";
+
+export function MessageMarkdown({
+  children,
+  mentions = [],
+}: {
+  children: string;
+  mentions?: string[];
+}) {
   return createElement(
     "div",
     {
@@ -13,7 +33,7 @@ export function MessageMarkdown({ children }: { children: string }) {
     },
     createElement(ReactMarkdown, {
       skipHtml: true,
-      remarkPlugins: [remarkGfm],
+      remarkPlugins: [remarkGfm, [remarkMentions, mentions]],
       urlTransform: safeMarkdownUrl,
       components: {
         a: ({ children, href }) =>
@@ -33,4 +53,35 @@ export function MessageMarkdown({ children }: { children: string }) {
       children,
     }),
   );
+}
+
+function remarkMentions(usernames: string[]) {
+  return (tree: MarkdownNode) => {
+    highlightMentions(tree, usernames);
+  };
+}
+
+function highlightMentions(node: MarkdownNode, usernames: string[]) {
+  if (!Array.isArray(node.children)) return;
+  node.children = node.children.flatMap((child) => {
+    if (child.type !== "text" || typeof child.value !== "string") {
+      highlightMentions(child, usernames);
+      return [child];
+    }
+    return splitMentions(child.value, usernames).map((segment) =>
+      segment.username === null
+        ? { type: "text", value: segment.text }
+        : {
+            type: "text",
+            value: segment.text,
+            data: {
+              hName: "span",
+              hProperties: {
+                className: mentionClassName,
+                "data-mention": segment.username,
+              },
+            },
+          },
+    );
+  });
 }

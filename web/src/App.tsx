@@ -1,4 +1,11 @@
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import {
+  useEffect,
+  useId,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
 import {
   type InfiniteData,
   useInfiniteQuery,
@@ -155,6 +162,12 @@ import { updatedConversationDetail } from "@/lib/conversation";
 import { clipboardFiles } from "@/lib/clipboard-files";
 import { MessageMarkdown } from "@/lib/message-markdown";
 import { shouldSendMessageOnEnter } from "@/lib/message";
+import {
+  activeMentionToken,
+  applyMention,
+  mentionCandidates,
+  type MentionToken,
+} from "@/lib/mention";
 import {
   api,
   attachmentObjectUrl,
@@ -1127,8 +1140,13 @@ function ConversationPage({ me, sdk }: { me: Me; sdk: AuthMiniApi }) {
   const [pendingAttachmentUploads, setPendingAttachmentUploads] = useState(0);
   const [urgent, setUrgent] = useState(false);
   const [manageOpen, setManageOpen] = useState(false);
+  const [mention, setMention] = useState<MentionToken | null>(null);
+  const [mentionIndex, setMentionIndex] = useState(0);
   const fileRef = useRef<HTMLInputElement>(null);
   const composingRef = useRef(false);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const dismissedMentionRef = useRef<number | null>(null);
+  const mentionListId = useId();
   const messages = useInfiniteQuery({
     queryKey: ["messages", id],
     initialPageParam: "",
@@ -1147,6 +1165,17 @@ function ConversationPage({ me, sdk }: { me: Me; sdk: AuthMiniApi }) {
     queryKey: ["conversation", id],
     queryFn: () => api<ConversationDetail>(sdk, `/api/conversations/${id}`),
   });
+  const mentionOptions = useMemo(
+    () =>
+      mentionCandidates(
+        detail.data?.members ?? [],
+        mention?.query ?? "",
+        me.id,
+      ),
+    [detail.data?.members, me.id, mention?.query],
+  );
+  const mentionOpen = mention !== null && mentionOptions.length > 0;
+  const activeMentionIndex = Math.min(mentionIndex, mentionOptions.length - 1);
   const send = useMutation({
     mutationFn: () =>
       api<Message>(sdk, `/api/conversations/${id}/messages`, {
@@ -1161,6 +1190,8 @@ function ConversationPage({ me, sdk }: { me: Me; sdk: AuthMiniApi }) {
       setBody("");
       setAttachments([]);
       setUrgent(false);
+      setMention(null);
+      dismissedMentionRef.current = null;
       queryClient.setQueryData<InfiniteData<MessagePage>>(
         ["messages", id],
         (data) => appendMessage(data, message),
@@ -1206,6 +1237,27 @@ function ConversationPage({ me, sdk }: { me: Me; sdk: AuthMiniApi }) {
     if (!files.length) return;
     event.preventDefault();
     void uploadFiles(files);
+  };
+  const syncMention = (value: string, caret: number | null) => {
+    const token = caret === null ? null : activeMentionToken(value, caret);
+    if (!token) dismissedMentionRef.current = null;
+    setMention(
+      token && token.start !== dismissedMentionRef.current ? token : null,
+    );
+    setMentionIndex(0);
+  };
+  const chooseMention = (username: string) => {
+    if (!mention) return;
+    const applied = applyMention(body, mention, username);
+    dismissedMentionRef.current = null;
+    setBody(applied.value);
+    setMention(null);
+    requestAnimationFrame(() => {
+      const textarea = textareaRef.current;
+      if (!textarea) return;
+      textarea.focus();
+      textarea.setSelectionRange(applied.caret, applied.caret);
+    });
   };
   const sendMessage = () => {
     if (
@@ -1357,34 +1409,108 @@ function ConversationPage({ me, sdk }: { me: Me; sdk: AuthMiniApi }) {
           >
             <PaperclipIcon />
           </Button>
-          <Textarea
-            rows={1}
-            className="min-h-9 max-h-36 resize-none"
-            value={body}
-            onChange={(event) => setBody(event.target.value)}
-            onPaste={pasteFiles}
-            onCompositionStart={() => {
-              composingRef.current = true;
-            }}
-            onCompositionEnd={() => {
-              composingRef.current = false;
-            }}
-            onKeyDown={(event) => {
-              if (
-                !shouldSendMessageOnEnter({
-                  key: event.key,
-                  shiftKey: event.shiftKey,
-                  isComposing:
-                    event.nativeEvent.isComposing || composingRef.current,
-                })
-              )
-                return;
-              event.preventDefault();
-              event.currentTarget.form?.requestSubmit();
-            }}
-            placeholder={t("conversation.writeMessage")}
-            aria-describedby="conversation-compose-hint"
-          />
+          <div className="relative min-w-0 flex-1">
+            {mentionOpen ? (
+              <div
+                id={mentionListId}
+                role="listbox"
+                aria-label={t("conversation.mentionMember")}
+                className="absolute bottom-full left-0 z-50 mb-2 max-h-60 w-full overflow-auto rounded-lg border bg-popover p-1 text-popover-foreground shadow-md"
+              >
+                {mentionOptions.map((option, index) => (
+                  <button
+                    key={option.user_id}
+                    id={`${mentionListId}-option-${index}`}
+                    type="button"
+                    role="option"
+                    aria-selected={index === activeMentionIndex}
+                    data-active={index === activeMentionIndex || undefined}
+                    className="flex w-full items-center justify-between gap-2 rounded-md px-2 py-1.5 text-left text-sm hover:bg-accent hover:text-accent-foreground data-[active]:bg-accent data-[active]:text-accent-foreground"
+                    onMouseDown={(event) => event.preventDefault()}
+                    onClick={() => chooseMention(option.username)}
+                  >
+                    <span className="truncate">@{option.username}</span>
+                    {option.user_type === "bot" ? (
+                      <Badge variant="secondary">{t("conversation.bot")}</Badge>
+                    ) : null}
+                  </button>
+                ))}
+              </div>
+            ) : null}
+            <Textarea
+              ref={textareaRef}
+              rows={1}
+              className="min-h-9 max-h-36 resize-none"
+              value={body}
+              onChange={(event) => {
+                setBody(event.target.value);
+                syncMention(event.target.value, event.target.selectionStart);
+              }}
+              onPaste={pasteFiles}
+              onBlur={() => setMention(null)}
+              onSelect={(event) =>
+                syncMention(
+                  event.currentTarget.value,
+                  event.currentTarget.selectionStart,
+                )
+              }
+              aria-autocomplete="list"
+              aria-controls={mentionOpen ? mentionListId : undefined}
+              aria-expanded={mentionOpen}
+              aria-activedescendant={
+                mentionOpen
+                  ? `${mentionListId}-option-${activeMentionIndex}`
+                  : undefined
+              }
+              onCompositionStart={() => {
+                composingRef.current = true;
+              }}
+              onCompositionEnd={() => {
+                composingRef.current = false;
+              }}
+              onKeyDown={(event) => {
+                const composing =
+                  event.nativeEvent.isComposing || composingRef.current;
+                if (mentionOpen && !composing) {
+                  if (event.key === "ArrowDown") {
+                    event.preventDefault();
+                    setMentionIndex((index) =>
+                      Math.min(index + 1, mentionOptions.length - 1),
+                    );
+                    return;
+                  }
+                  if (event.key === "ArrowUp") {
+                    event.preventDefault();
+                    setMentionIndex((index) => Math.max(index - 1, 0));
+                    return;
+                  }
+                  if (event.key === "Enter" || event.key === "Tab") {
+                    event.preventDefault();
+                    chooseMention(mentionOptions[activeMentionIndex].username);
+                    return;
+                  }
+                  if (event.key === "Escape") {
+                    event.preventDefault();
+                    dismissedMentionRef.current = mention?.start ?? null;
+                    setMention(null);
+                    return;
+                  }
+                }
+                if (
+                  !shouldSendMessageOnEnter({
+                    key: event.key,
+                    shiftKey: event.shiftKey,
+                    isComposing: composing,
+                  })
+                )
+                  return;
+                event.preventDefault();
+                event.currentTarget.form?.requestSubmit();
+              }}
+              placeholder={t("conversation.writeMessage")}
+              aria-describedby="conversation-compose-hint"
+            />
+          </div>
           <Button
             type="submit"
             disabled={
@@ -1757,7 +1883,11 @@ function MessageRow({
           <BubbleContent>
             <div className="flex flex-col gap-3">
               {message.body ? (
-                <MessageMarkdown>{message.body}</MessageMarkdown>
+                <MessageMarkdown
+                  mentions={message.mentions.map((mention) => mention.username)}
+                >
+                  {message.body}
+                </MessageMarkdown>
               ) : null}
               {message.sender_kind === "bot" ? (
                 <Badge variant="secondary">{t("conversation.bot")}</Badge>

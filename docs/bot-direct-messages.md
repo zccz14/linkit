@@ -2,7 +2,7 @@
 
 每个 Bot 都有独立 UUID，对应 `users.id` 且 `type="bot"`。它使用 `sk-…` Token
 认证，但调用的始终是与普通用户相同的 `/api` 路由。`bots.owner_user_id` 只决定哪位
-人类可在控制面管理该 Bot；Owner 不会因此成为 Bot 所在群聊的成员，只能像第 4 节
+人类可在控制面管理该 Bot；Owner 不会因此成为 Bot 所在群聊的成员，只能像第 5 节
 那样以只读视角查看这些会话。
 
 ## 1. 创建和配置 Profile
@@ -61,7 +61,27 @@ curl --fail-with-body -X POST https://linkit.ntnl.io/api/conversations/direct/us
 `users.type="human"`。删除 Bot 会撤销 Token 和主体的资料/会话成员资格；它已经发送的
 历史消息保留，并显示为「该机器人已被删除」。
 
-## 4. Owner 只读视角（act_as）
+## 4. 提及成员
+
+消息正文中的 `@用户名` 会在发送时解析为提及：只匹配会话内已设置 Profile 的成员的用户名，
+不区分 ASCII 大小写，取最长的用户名；用户名后必须是空格、标点或正文结尾，`@` 前若是邮箱式的
+ASCII 字符（如 `bob@alice`）则不算提及。解析结果随消息返回：
+
+```json
+{"mentions": [{"user_id": "被提及者的 UUID", "username": "被提及的用户名"}]}
+```
+
+被提及的成员在消息中高亮显示；如果该成员绑定了 Bark，其通知标题会带上
+`mentioned you`，从而在群聊刷屏时也能被直接触达。
+
+```bash
+curl --fail-with-body https://linkit.ntnl.io/api/conversations/CONVERSATION_ID/messages \
+  -H 'Authorization: Bearer sk-REPLACE_WITH_THE_BOT_TOKEN' \
+  -H 'Content-Type: application/json' \
+  -d '{"body":"@user_0f3a1c2b9d4e 请复查最新的净值报告","attachment_ids":[],"urgent":false}'
+```
+
+## 5. Owner 只读视角（act_as）
 
 在「机器人」页面点击「查看对话」即可进入 Bot 视角，页面 URL 形如
 `#/bots/{bot_id}/conversations`。该视角下的所有读取请求沿用 Owner 自己的 JWT，并附加
