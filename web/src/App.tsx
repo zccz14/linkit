@@ -1375,7 +1375,7 @@ function ConversationPage({ me, sdk }: { me: Me; sdk: AuthMiniApi }) {
       <MessageScrollerProvider autoScroll defaultScrollPosition="end">
         <MessageScroller className="h-auto flex-1">
           <MessageScrollerViewport className="p-4 md:p-6" aria-label={title}>
-            <MessageScrollerContent className="gap-4">
+            <MessageScrollerContent spacerClassName="hidden" className="gap-4">
               {messages.hasPreviousPage ? (
                 <MessageScrollerItem messageId="load-earlier-messages">
                   <Button
@@ -1398,11 +1398,7 @@ function ConversationPage({ me, sdk }: { me: Me; sdk: AuthMiniApi }) {
                     message.sender_kind === "user" &&
                     message.sender_id === me.id;
                   return (
-                    <MessageScrollerItem
-                      key={message.id}
-                      messageId={message.id}
-                      scrollAnchor={mine}
-                    >
+                    <MessageScrollerItem key={message.id} messageId={message.id}>
                       <MessageRow message={message} mine={mine} sdk={sdk} />
                     </MessageScrollerItem>
                   );
@@ -2790,7 +2786,7 @@ function BotViewConversation({ sdk }: { sdk: AuthMiniApi }) {
       <MessageScrollerProvider autoScroll defaultScrollPosition="end">
         <MessageScroller className="h-auto flex-1">
           <MessageScrollerViewport className="p-4 md:p-6" aria-label={title}>
-            <MessageScrollerContent className="gap-4">
+            <MessageScrollerContent spacerClassName="hidden" className="gap-4">
               {messages.hasPreviousPage ? (
                 <MessageScrollerItem messageId="load-earlier-messages">
                   <Button
@@ -2811,11 +2807,7 @@ function BotViewConversation({ sdk }: { sdk: AuthMiniApi }) {
                 .map((message) => {
                   const mine = message.sender_id === botId;
                   return (
-                    <MessageScrollerItem
-                      key={message.id}
-                      messageId={message.id}
-                      scrollAnchor={mine}
-                    >
+                    <MessageScrollerItem key={message.id} messageId={message.id}>
                       <MessageRow
                         actAs={botId}
                         message={message}
