@@ -76,6 +76,13 @@ export type Bot = {
   updated_at: number;
 };
 
+export type UserApiKey = {
+  id: string;
+  name: string;
+  token_prefix: string;
+  created_at: number;
+};
+
 export type Config = {
   setup_required: boolean;
   auth_issuer?: string;

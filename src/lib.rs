@@ -20,7 +20,7 @@ use axum::{
     http::{HeaderMap, StatusCode, header},
     middleware::from_fn_with_state,
     response::{IntoResponse, Response},
-    routing::{get, patch, post, put},
+    routing::{delete, get, patch, post, put},
 };
 use image::{ImageReader, imageops::FilterType};
 use rand::{Rng, distr::Alphanumeric};
@@ -162,6 +162,11 @@ pub fn router(state: AppState) -> Router {
         )
         .route("/api/bots", get(list_bots).post(create_bot))
         .route("/api/bots/{id}", patch(update_bot).delete(delete_bot))
+        .route(
+            "/api/user-api-keys",
+            get(list_user_api_keys).post(create_user_api_key),
+        )
+        .route("/api/user-api-keys/{id}", delete(delete_user_api_key))
         .route_layer(from_fn_with_state(state.clone(), auth::authenticate));
 
     let public_profiles = Router::new()
@@ -1876,7 +1881,7 @@ async fn create_bot(
     require_human(&state.db, &user.id).await?;
     let name = nonempty(&input.name, "name", 80)?;
     let id = Uuid::new_v4().to_string();
-    let token = new_bot_token();
+    let token = new_secret_token("sk");
     let now = chrono::Utc::now().timestamp();
     let bot = Bot {
         id: id.clone(),
@@ -1940,7 +1945,10 @@ async fn update_bot(
         Some(username) => human_user_id_from_username(&state.db, &username).await?,
         None => bot.owner_user_id.clone(),
     };
-    let token = input.rotate_token.unwrap_or(false).then(new_bot_token);
+    let token = input
+        .rotate_token
+        .unwrap_or(false)
+        .then(|| new_secret_token("sk"));
     let prefix = token
         .as_ref()
         .map(|value| value[..11].to_owned())
@@ -1984,6 +1992,81 @@ async fn delete_owned_bot(db: &SqlitePool, id: &str, owner_user_id: &str) -> Res
         return Err(AppError::not_found("bot not found"));
     }
     Ok(())
+}
+
+#[derive(Serialize, FromRow)]
+struct UserApiKey {
+    id: String,
+    name: String,
+    token_prefix: String,
+    created_at: i64,
+}
+
+#[derive(Deserialize)]
+struct CreateUserApiKeyInput {
+    name: String,
+}
+
+#[derive(Serialize)]
+struct CreatedUserApiKey {
+    #[serde(flatten)]
+    key: UserApiKey,
+    token: String,
+}
+
+async fn list_user_api_keys(
+    State(state): State<AppState>,
+    axum::Extension(user): axum::Extension<UserIdentity>,
+) -> Result<axum::Json<Vec<UserApiKey>>, AppError> {
+    require_human(&state.db, &user.id).await?;
+    Ok(axum::Json(
+        sqlx::query_as("SELECT id,name,token_prefix,created_at FROM user_api_keys WHERE user_id=? ORDER BY created_at DESC")
+            .bind(user.id)
+            .fetch_all(&state.db)
+            .await?,
+    ))
+}
+
+async fn create_user_api_key(
+    State(state): State<AppState>,
+    axum::Extension(user): axum::Extension<UserIdentity>,
+    axum::Json(input): axum::Json<CreateUserApiKeyInput>,
+) -> Result<axum::Json<CreatedUserApiKey>, AppError> {
+    require_human(&state.db, &user.id).await?;
+    let token = new_secret_token("uk");
+    let key = UserApiKey {
+        id: Uuid::new_v4().to_string(),
+        name: nonempty(&input.name, "name", 80)?,
+        token_prefix: token[..11].to_owned(),
+        created_at: chrono::Utc::now().timestamp(),
+    };
+    sqlx::query("INSERT INTO user_api_keys(id,user_id,name,token_prefix,token_hash,created_at) VALUES(?,?,?,?,?,?)")
+        .bind(&key.id)
+        .bind(&user.id)
+        .bind(&key.name)
+        .bind(&key.token_prefix)
+        .bind(auth::token_hash(&token))
+        .bind(key.created_at)
+        .execute(&state.db)
+        .await?;
+    Ok(axum::Json(CreatedUserApiKey { key, token }))
+}
+
+async fn delete_user_api_key(
+    State(state): State<AppState>,
+    axum::Extension(user): axum::Extension<UserIdentity>,
+    Path(id): Path<String>,
+) -> Result<StatusCode, AppError> {
+    require_human(&state.db, &user.id).await?;
+    let result = sqlx::query("DELETE FROM user_api_keys WHERE id=? AND user_id=?")
+        .bind(id)
+        .bind(&user.id)
+        .execute(&state.db)
+        .await?;
+    if result.rows_affected() == 0 {
+        return Err(AppError::not_found("user API key not found"));
+    }
+    Ok(StatusCode::NO_CONTENT)
 }
 
 #[derive(FromRow)]
@@ -2796,7 +2879,7 @@ async fn require_human(db: &SqlitePool, user_id: &str) -> Result<(), AppError> {
         .await?;
     if human.is_none() {
         return Err(AppError::forbidden(
-            "bot credentials cannot manage Bot credentials",
+            "bot credentials cannot manage credentials",
         ));
     }
     Ok(())
@@ -3064,9 +3147,9 @@ fn direct_key(first: &str, second: &str) -> String {
         format!("user:{second}:user:{first}")
     }
 }
-fn new_bot_token() -> String {
+fn new_secret_token(prefix: &str) -> String {
     format!(
-        "sk-{}",
+        "{prefix}-{}",
         rand::rng()
             .sample_iter(&Alphanumeric)
             .take(40)
@@ -3866,8 +3949,9 @@ mod tests {
     }
 
     #[test]
-    fn bot_tokens_have_an_unambiguous_public_prefix() {
-        assert!(new_bot_token().starts_with("sk-"));
+    fn secret_tokens_carry_their_public_class_prefix() {
+        assert!(new_secret_token("sk").starts_with("sk-"));
+        assert!(new_secret_token("uk").starts_with("uk-"));
     }
 
     #[test]
@@ -5383,6 +5467,189 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(blocked.status(), StatusCode::FORBIDDEN);
+    }
+
+    #[tokio::test]
+    async fn user_api_keys_are_human_only_and_post_messages_as_their_human() {
+        let pool = db::connect_memory().await.unwrap();
+        insert_test_users(&pool, &["alice", "bob"]).await;
+        sqlx::query("INSERT INTO profiles(user_id,username,intro,updated_at) VALUES('alice','alice','',0),('bob','bob','',0)")
+            .execute(&pool)
+            .await
+            .unwrap();
+        insert_test_conversation(
+            &pool,
+            "group",
+            "group",
+            &[("alice", "owner"), ("bob", "member")],
+        )
+        .await;
+        let alice_key = "uk-alice-scripts";
+        sqlx::query("INSERT INTO user_api_keys(id,user_id,name,token_prefix,token_hash,created_at) VALUES('key-alice','alice','MacMini scripts',?,?,0)")
+            .bind(&alice_key[..11])
+            .bind(auth::token_hash(alice_key))
+            .execute(&pool)
+            .await
+            .unwrap();
+        let bob_key = "uk-bob-laptop";
+        sqlx::query("INSERT INTO user_api_keys(id,user_id,name,token_prefix,token_hash,created_at) VALUES('key-bob','bob','Laptop',?,?,0)")
+            .bind(&bob_key[..11])
+            .bind(auth::token_hash(bob_key))
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query("INSERT INTO users(id,type,created_at) VALUES('fund-bot','bot',0)")
+            .execute(&pool)
+            .await
+            .unwrap();
+        let bot_token = "sk-fund-bot-token";
+        sqlx::query("INSERT INTO bots(id,owner_user_id,name,token_prefix,token_hash,created_at,updated_at) VALUES('fund-bot','alice','Fund Bot','sk-fund',?,0,0)")
+            .bind(auth::token_hash(bot_token))
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        let app = router(test_state(pool.clone()));
+
+        // The control plane lists only the caller's own keys and never their hashes.
+        let listed = app
+            .clone()
+            .oneshot(
+                axum::http::Request::builder()
+                    .uri("/api/user-api-keys")
+                    .header(header::AUTHORIZATION, format!("Bearer {alice_key}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(listed.status(), StatusCode::OK);
+        let listed = listed.into_body().collect().await.unwrap().to_bytes();
+        let listed: Value = serde_json::from_slice(&listed).unwrap();
+        assert_eq!(listed.as_array().unwrap().len(), 1);
+        assert_eq!(listed[0]["id"], "key-alice");
+        assert_eq!(listed[0]["name"], "MacMini scripts");
+        assert_eq!(listed[0]["token_prefix"], &alice_key[..11]);
+        assert!(!listed.to_string().contains("token_hash"));
+
+        // Creating a key returns its uk- token exactly once.
+        let created = app
+            .clone()
+            .oneshot(
+                axum::http::Request::builder()
+                    .method("POST")
+                    .uri("/api/user-api-keys")
+                    .header(header::AUTHORIZATION, format!("Bearer {alice_key}"))
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(r#"{"name":"Server"}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(created.status(), StatusCode::OK);
+        let created = created.into_body().collect().await.unwrap().to_bytes();
+        let created: Value = serde_json::from_slice(&created).unwrap();
+        let created_token = created["token"].as_str().unwrap().to_owned();
+        assert!(created_token.starts_with("uk-"));
+        assert_eq!(created["name"], "Server");
+        assert_eq!(created["token_prefix"], &created_token[..11]);
+        let created_id = created["id"].as_str().unwrap().to_owned();
+
+        // The new key speaks as its human: normal route, user sender identity.
+        let sent = app
+            .clone()
+            .oneshot(
+                axum::http::Request::builder()
+                    .method("POST")
+                    .uri("/api/conversations/group/messages")
+                    .header(header::AUTHORIZATION, format!("Bearer {created_token}"))
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(
+                        r#"{"body":"Status report","attachment_ids":[],"urgent":false}"#,
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(sent.status(), StatusCode::OK);
+        let sent = sent.into_body().collect().await.unwrap().to_bytes();
+        let sent: Value = serde_json::from_slice(&sent).unwrap();
+        assert_eq!(sent["sender_kind"], "user");
+        assert_eq!(sent["sender_id"], "alice");
+        assert_eq!(sent["sender_name"], "alice");
+
+        // Bot credentials stay outside the human-only control plane.
+        for method in ["GET", "POST"] {
+            let blocked = app
+                .clone()
+                .oneshot(
+                    axum::http::Request::builder()
+                        .method(method)
+                        .uri("/api/user-api-keys")
+                        .header(header::AUTHORIZATION, format!("Bearer {bot_token}"))
+                        .header(header::CONTENT_TYPE, "application/json")
+                        .body(Body::from(r#"{"name":"Probe"}"#))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(blocked.status(), StatusCode::FORBIDDEN);
+        }
+
+        // Revocation is immediate and scoped to the owner.
+        let foreign = app
+            .clone()
+            .oneshot(
+                axum::http::Request::builder()
+                    .method("DELETE")
+                    .uri("/api/user-api-keys/key-bob")
+                    .header(header::AUTHORIZATION, format!("Bearer {alice_key}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(foreign.status(), StatusCode::NOT_FOUND);
+
+        let revoked = app
+            .clone()
+            .oneshot(
+                axum::http::Request::builder()
+                    .method("DELETE")
+                    .uri(format!("/api/user-api-keys/{created_id}"))
+                    .header(header::AUTHORIZATION, format!("Bearer {alice_key}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(revoked.status(), StatusCode::NO_CONTENT);
+
+        let after = app
+            .clone()
+            .oneshot(
+                axum::http::Request::builder()
+                    .uri("/api/me")
+                    .header(header::AUTHORIZATION, format!("Bearer {created_token}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(after.status(), StatusCode::UNAUTHORIZED);
+
+        // Other users' keys stay untouched.
+        let bob = app
+            .oneshot(
+                axum::http::Request::builder()
+                    .uri("/api/me")
+                    .header(header::AUTHORIZATION, format!("Bearer {bob_key}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(bob.status(), StatusCode::OK);
     }
 
     #[tokio::test]

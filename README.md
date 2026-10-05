@@ -3,7 +3,8 @@
 Linkit is an open-source, Auth Mini-powered profile and instant-messaging app
 distributed as one Rust binary. It includes user profiles, a searchable
 directory, direct messages, group conversations, media attachments, direct Bark/APNs
-notifications, and native Bot API tokens.
+notifications, native Bot API tokens, and personal API keys that let scripts
+speak as a human user.
 
 ## Features
 
@@ -26,6 +27,9 @@ notifications, and native Bot API tokens.
   human control owner, an `sk-…` bearer token, owner transfer, and token
   rotation. A Bot uses the same profile and conversation APIs as a user, and
   its owner can open a read-only view of the Bot's conversations.
+- **User API keys** — personal `uk-…` tokens created on the **API keys** page
+  authenticate as their creating human on the normal routes, so scripts can
+  send messages as you; revocation is immediate.
 - **Auth Mini** — setup verifies its `root_user_id` against an Auth Mini JWT;
   authenticated requests validate JWTs against the configured issuer and audience,
   then silently ensure the user's account and default profile exist. No separate
@@ -77,8 +81,9 @@ curl https://linkit.ntnl.io/api/conversations \
 
 A Bot can create and own groups, add or remove their members, update its own
 profile, open direct conversations, and send messages through the corresponding
-normal user routes. Only `/api/bots` remains a human-only control plane: Bots
-cannot create, rotate, transfer, or delete Bots.
+normal user routes. Only `/api/bots` and `/api/user-api-keys` remain
+human-only control planes: Bots cannot create, rotate, transfer, or delete
+Bots, and cannot manage user API keys.
 
 The Bots page also opens a read-only perspective of a Bot's conversations. The
 browser keeps the owner's Auth Mini session and adds the Bot's user ID to read
@@ -87,6 +92,24 @@ requests and only for a Bot owned by the authenticated user.
 
 See [the Bot direct-message guide](docs/bot-direct-messages.md) for the full
 creation flow, token handling, response contract, and error handling.
+
+## User API keys
+
+A human creates `uk-…` keys on the **API keys** page. A key authenticates as
+the human who created it, so scripts and tools use the normal routes with that
+user's own identity — the same profile, conversations, mentions, read state
+and notifications as the web UI:
+
+```bash
+curl --fail-with-body https://linkit.ntnl.io/api/conversations/CONVERSATION_ID/messages \
+  -H 'Authorization: Bearer uk-…' \
+  -H 'Content-Type: application/json' \
+  -d '{"body":"Status report from my scripts.","attachment_ids":[],"urgent":false}'
+```
+
+Tokens are shown exactly once, stored as hashes, and a revoked key fails on
+its next request. See [the user API key guide](docs/user-api-keys.md) for the
+creation flow, management API and boundaries.
 
 ## External profile lookup
 

@@ -85,6 +85,21 @@ pub async fn authenticate(
             return AppError::unauthorized("invalid or expired bearer token").into_response();
         };
         UserIdentity { id }
+    } else if token.starts_with("uk-") {
+        let user_id = sqlx::query_scalar(
+            "SELECT k.user_id FROM user_api_keys k JOIN users u ON u.id=k.user_id WHERE k.token_hash=? AND u.type='human'",
+        )
+        .bind(token_hash(token))
+        .fetch_optional(&state.db)
+        .await;
+        let user_id: Option<String> = match user_id {
+            Ok(value) => value,
+            Err(error) => return AppError::from(error).into_response(),
+        };
+        let Some(id) = user_id else {
+            return AppError::unauthorized("invalid or expired bearer token").into_response();
+        };
+        UserIdentity { id }
     } else {
         let layers = match state.auth.layers().await {
             Ok(layers) => layers,
@@ -537,5 +552,56 @@ mod tests {
             .unwrap();
         let switched = call(state.clone(), "/api/conversations?act_as=bot", bot_token).await;
         assert_eq!(switched.status(), StatusCode::FORBIDDEN);
+    }
+
+    #[tokio::test]
+    async fn user_api_keys_authenticate_as_their_creating_human_only() {
+        let state = crate::tests::test_state(crate::db::connect_memory().await.unwrap());
+        let alice_key = "uk-alice-scripts";
+        sqlx::query(
+            "INSERT INTO users(id,type,created_at) VALUES('alice','human',0),('bot','bot',0)",
+        )
+        .execute(&state.db)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO profiles(user_id,username,intro,updated_at) VALUES('alice','alice','',0)",
+        )
+        .execute(&state.db)
+        .await
+        .unwrap();
+        sqlx::query("INSERT INTO user_api_keys(id,user_id,name,token_prefix,token_hash,created_at) VALUES('key-alice','alice','Scripts',?,?,0)")
+            .bind(&alice_key[..11])
+            .bind(token_hash(alice_key))
+            .execute(&state.db)
+            .await
+            .unwrap();
+        let bot_key = "uk-bot-probe";
+        sqlx::query("INSERT INTO user_api_keys(id,user_id,name,token_prefix,token_hash,created_at) VALUES('key-bot','bot','Probe',?,?,0)")
+            .bind(&bot_key[..11])
+            .bind(token_hash(bot_key))
+            .execute(&state.db)
+            .await
+            .unwrap();
+
+        let response = call(state.clone(), "/api/me", alice_key).await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let me = json_body(response).await;
+        assert_eq!(me["id"], "alice");
+        assert_eq!(me["profile"]["username"], "alice");
+
+        // Unknown keys and keys attached to non-human principals never authenticate,
+        // and a rejected key never provisions an account.
+        for rejected in ["uk-unknown", bot_key] {
+            assert_eq!(
+                call(state.clone(), "/api/me", rejected).await.status(),
+                StatusCode::UNAUTHORIZED
+            );
+        }
+        let users: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM users")
+            .fetch_one(&state.db)
+            .await
+            .unwrap();
+        assert_eq!(users, 2);
     }
 }
