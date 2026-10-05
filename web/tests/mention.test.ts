@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import test from "node:test";
 
 import {
@@ -7,6 +8,8 @@ import {
   mentionCandidates,
   splitMentions,
 } from "../src/lib/mention.ts";
+
+const app = readFileSync(new URL("../src/App.tsx", import.meta.url), "utf8");
 
 test("the composer tracks the mention token around the caret", () => {
   assert.deepEqual(activeMentionToken("hello @bo", 9), {
@@ -96,4 +99,17 @@ test("message text splits into plain and mention segments", () => {
     { text: " 好", username: null },
   ]);
   assert.deepEqual(splitMentions("", ["bob"]), []);
+});
+
+test("mention candidates show the avatar, private note and username", () => {
+  const start = app.indexOf("function MentionOption");
+  assert.ok(start >= 0, "MentionOption exists");
+  const option = app.slice(start, start + 2_000);
+  assert.match(option, /useLinkitUserInfo\(member\.user_id\)/);
+  assert.match(
+    option,
+    /note\?\.name \|\| profile\?\.username \|\| member\.username/,
+  );
+  assert.match(option, /profile\?\.avatar_url/);
+  assert.match(option, /@\{member\.username\}/);
 });

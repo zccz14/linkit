@@ -13,7 +13,8 @@ notifications, and native Bot API tokens.
   attachments, read state, cursor-paged history, and immediate SSE message and
   unread refresh.
 - **@ mentions** — type `@` in the composer to pick a conversation member;
-  mentioned members are highlighted in the message, and their Bark
+  every candidate shows its avatar, your private note, and the username.
+  Mentioned members are highlighted in the message, and their Bark
   notification says they were mentioned.
 - **Open-page links** — external apps may open `/?open=profile` to edit the
   profile or `/?open=message&username=alice` to begin a direct message.
