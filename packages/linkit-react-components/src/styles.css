@@ -259,11 +259,6 @@
   border-radius: 0.65rem;
   overflow-wrap: anywhere;
 }
-.linkit-embedded-conversation__message--mine
-  .linkit-embedded-conversation__bubble {
-  color: var(--primary-foreground, #fff);
-  background: var(--primary, #0f172a);
-}
 .linkit-embedded-conversation__bubble p {
   margin: 0;
   white-space: pre-wrap;
