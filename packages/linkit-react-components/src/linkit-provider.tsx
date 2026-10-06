@@ -63,6 +63,12 @@ const profileBatchDelayMs = 40;
 const profileBatchSize = 100;
 const userNoteBatchSize = 100;
 const colorSchemeQuery = "(prefers-color-scheme: dark)";
+const canUseDOM = typeof window !== "undefined";
+
+// React warns when useLayoutEffect runs during server rendering. The provider
+// renders on the server without a DOM (the effect is a no-op there) and applies
+// the theme before the first paint on the client.
+const useIsomorphicLayoutEffect = canUseDOM ? useLayoutEffect : useEffect;
 
 /// The localStorage mirror of the signed-in profile's theme preference. It lets
 /// a reload keep the last known theme before the profile request resolves.
@@ -553,8 +559,8 @@ export function LinkitProvider({
   const openLinkitInbox = useCallback(() => {
     window.open(linkitInboxUrl(baseUrl), "_blank", "noopener,noreferrer");
   }, [baseUrl]);
-  const [systemDark, setSystemDark] = useState(() =>
-    window.matchMedia(colorSchemeQuery).matches,
+  const [systemDark, setSystemDark] = useState(
+    () => canUseDOM && window.matchMedia(colorSchemeQuery).matches,
   );
   useEffect(() => {
     const media = window.matchMedia(colorSchemeQuery);
@@ -571,7 +577,7 @@ export function LinkitProvider({
   // The document root is the one host surface this package owns: Tailwind's
   // class dark mode and color-scheme both key off it. Apply it in a layout
   // effect so the mirrored preference lands before the first paint.
-  useLayoutEffect(() => {
+  useIsomorphicLayoutEffect(() => {
     const root = document.documentElement;
     root.classList.toggle("dark", resolvedTheme === "dark");
     root.style.colorScheme = resolvedTheme;

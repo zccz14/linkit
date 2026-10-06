@@ -5,7 +5,7 @@ import "@testing-library/jest-dom/vitest";
 // to control the scheme or emit change events.
 // Node 25+ ships an experimental localStorage that can shadow jsdom's; fall
 // back to an in-memory Storage so the provider mirror behaves like a browser.
-if (!window.localStorage) {
+if (typeof window !== "undefined" && !window.localStorage) {
   const store = new Map<string, string>();
   Object.defineProperty(window, "localStorage", {
     configurable: true,
@@ -20,7 +20,7 @@ if (!window.localStorage) {
   });
 }
 
-if (!window.matchMedia) {
+if (typeof window !== "undefined" && !window.matchMedia) {
   Object.defineProperty(window, "matchMedia", {
     configurable: true,
     writable: true,
