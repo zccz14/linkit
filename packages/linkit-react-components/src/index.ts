@@ -1,5 +1,6 @@
 export {
   LinkitProvider,
+  linkitThemeStorageKey,
   useLinkit,
   useLinkitUserInfo,
   useLinkitUserNotes,
@@ -41,6 +42,8 @@ export type {
   LinkitMessagePage,
   LinkitProfile,
   LinkitProfileUpdate,
+  LinkitResolvedTheme,
+  LinkitTheme,
   LinkitUserNote,
   LinkitUserSearchResult,
 } from "./types.js";

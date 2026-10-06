@@ -4,10 +4,10 @@ import { Button as ButtonPrimitive } from "@base-ui/react/button";
 import { Dialog as DialogPrimitive } from "@base-ui/react/dialog";
 import { Select as SelectPrimitive } from "@base-ui/react/select";
 import { Separator as SeparatorPrimitive } from "@base-ui/react/separator";
-import { CheckIcon, ChevronDownIcon, CopyIcon, KeyRoundIcon, LoaderCircleIcon, LogOutIcon, MessageCircleIcon, SettingsIcon, UploadIcon, XIcon } from "lucide-react";
+import { CheckIcon, ChevronDownIcon, CopyIcon, KeyRoundIcon, LoaderCircleIcon, LogOutIcon, MessageCircleIcon, MonitorIcon, MoonIcon, SettingsIcon, SunIcon, UploadIcon, XIcon } from "lucide-react";
 import { useEffect, useId, useRef, useState, type ChangeEvent, type FormEvent } from "react";
-import { useLinkit } from "./linkit-provider.js";
-import type { LinkitProfile } from "./types.js";
+import { parseLinkitTheme, useLinkit } from "./linkit-provider.js";
+import type { LinkitProfile, LinkitTheme } from "./types.js";
 
 type LinkitMyInfoLabels = {
   account: string;
@@ -24,6 +24,10 @@ type LinkitMyInfoLabels = {
   intro: string;
   language: string;
   languageAuto: string;
+  theme: string;
+  themeSystem: string;
+  themeDark: string;
+  themeLight: string;
   uid: string;
   copyUid: string;
   copied: string;
@@ -57,6 +61,10 @@ const labelsByLanguage: Record<"en" | "zh", LinkitMyInfoLabels> = {
     intro: "Introduction",
     language: "Language",
     languageAuto: "Automatic (follow browser)",
+    theme: "Dark mode",
+    themeSystem: "Follow system (default)",
+    themeDark: "Always dark",
+    themeLight: "Always light",
     uid: "UID",
     copyUid: "Copy UID",
     copied: "UID copied.",
@@ -88,6 +96,10 @@ const labelsByLanguage: Record<"en" | "zh", LinkitMyInfoLabels> = {
     intro: "个人介绍",
     language: "语言",
     languageAuto: "自动（跟随浏览器）",
+    theme: "暗黑模式",
+    themeSystem: "跟随系统（默认）",
+    themeDark: "始终暗黑",
+    themeLight: "始终明亮",
     uid: "UID",
     copyUid: "复制 UID",
     copied: "UID 已复制。",
@@ -106,17 +118,19 @@ const labelsByLanguage: Record<"en" | "zh", LinkitMyInfoLabels> = {
   },
 };
 
-type Editor = { username: string; intro: string; lang: string; avatarAttachmentId: string };
+type Editor = { username: string; intro: string; lang: string; theme: LinkitTheme; avatarAttachmentId: string };
 
 export function LinkitMyInfo() {
   const auth = useAuthMini();
   const {
     lang,
     myProfile: profile,
+    setTheme,
     myProfileError,
     myProfileLoading: loading,
     myUserId: userId,
     unreadMessageCount,
+    theme,
     refreshMyProfile,
     saveMyProfile,
     signOut: signOutFromLinkit,
@@ -128,6 +142,7 @@ export function LinkitMyInfo() {
   const [open, setOpen] = useState(false);
   const [editor, setEditor] = useState<Editor>(emptyEditor);
   const [saving, setSaving] = useState(false);
+  const [savingTheme, setSavingTheme] = useState(false);
   const [signingOut, setSigningOut] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
@@ -157,10 +172,11 @@ export function LinkitMyInfo() {
   }, [avatarPreview]);
 
   const dirty = !profile
-    ? Boolean(editor.username || editor.intro || editor.lang || editor.avatarAttachmentId)
+    ? Boolean(editor.username || editor.intro || editor.lang || editor.theme !== "system" || editor.avatarAttachmentId)
     : editor.username !== profile.username
       || editor.intro !== (profile.intro ?? "")
       || editor.lang !== (profile.lang ?? "")
+      || editor.theme !== parseLinkitTheme(profile.theme)
       || editor.avatarAttachmentId !== (profile.avatar_attachment_id ?? "");
 
   async function chooseAvatar(event: ChangeEvent<HTMLInputElement>) {
@@ -193,6 +209,7 @@ export function LinkitMyInfo() {
         username: editor.username.trim(),
         intro: editor.intro.trim(),
         lang: editor.lang,
+        theme: editor.theme,
         avatar_attachment_id: editor.avatarAttachmentId || undefined,
       });
       setEditor(toEditor(saved));
@@ -229,6 +246,19 @@ export function LinkitMyInfo() {
     }
   }
 
+  async function cycleTheme() {
+    setError(null);
+    setNotice(null);
+    setSavingTheme(true);
+    try {
+      await setTheme(nextTheme(theme));
+    } catch (cause) {
+      setError(message(cause));
+    } finally {
+      setSavingTheme(false);
+    }
+  }
+
   if (!auth.isReady) return <span aria-live="polite" className="linkit-my-info">{labels.checking}</span>;
   if (!auth.isAuthenticated) {
     return <ButtonPrimitive className="linkit-my-info" type="button" onClick={auth.signIn}>{labels.signIn}</ButtonPrimitive>;
@@ -240,6 +270,7 @@ export function LinkitMyInfo() {
   const unreadLabel = unreadMessageCount > 99 ? "99+" : String(unreadMessageCount);
   const inboxLabel = unreadMessageCount > 0 ? `${labels.inbox} (${unreadLabel} ${labels.unreadMessages})` : labels.inbox;
   return <div className="linkit-my-info">
+    <ThemeButton disabled={!profile || savingTheme} labels={labels} onCycle={() => void cycleTheme()} theme={theme} />
     <ButtonPrimitive aria-label={inboxLabel} className="linkit-my-info__inbox" type="button" onClick={openLinkitInbox}>
       <MessageCircleIcon aria-hidden="true" />
       {unreadMessageCount > 0 ? <span aria-hidden="true" className="linkit-my-info__unread-badge">{unreadLabel}</span> : null}
@@ -282,6 +313,7 @@ export function LinkitMyInfo() {
               <label className="linkit-my-info__field" htmlFor={`${titleId}-username`}><span>{labels.username}</span><input autoComplete="username" id={`${titleId}-username`} maxLength={80} required value={editor.username} onChange={(event) => setEditor((current) => ({ ...current, username: event.target.value }))} /></label>
               <label className="linkit-my-info__field" htmlFor={`${titleId}-intro`}><span>{labels.intro}</span><textarea id={`${titleId}-intro`} maxLength={280} rows={3} value={editor.intro} onChange={(event) => setEditor((current) => ({ ...current, intro: event.target.value }))} /></label>
               <LanguageSelect autoLabel={labels.languageAuto} id={`${titleId}-language`} label={labels.language} onChange={(lang) => setEditor((current) => ({ ...current, lang }))} value={editor.lang} />
+              <ThemeSelect id={`${titleId}-theme`} label={labels.theme} onChange={(theme) => setEditor((current) => ({ ...current, theme }))} options={{ system: labels.themeSystem, dark: labels.themeDark, light: labels.themeLight }} value={editor.theme} />
             </div>
           </section>
           <SeparatorPrimitive className="linkit-my-info__separator" />
@@ -312,6 +344,13 @@ function HeaderAvatar({ profile, label, size = "sm" }: { profile: Pick<LinkitPro
   </AvatarPrimitive.Root>;
 }
 
+function ThemeButton({ labels, theme, disabled, onCycle }: { labels: LinkitMyInfoLabels; theme: LinkitTheme; disabled: boolean; onCycle: () => void }) {
+  const ActiveIcon = theme === "dark" ? MoonIcon : theme === "light" ? SunIcon : MonitorIcon;
+  const name = theme === "dark" ? labels.themeDark : theme === "light" ? labels.themeLight : labels.themeSystem;
+  const label = `${labels.theme}: ${name}`;
+  return <ButtonPrimitive aria-label={label} className="linkit-my-info__theme" disabled={disabled} title={label} type="button" onClick={onCycle}><ActiveIcon /></ButtonPrimitive>;
+}
+
 function LoadingSkeleton({ labels }: { labels: LinkitMyInfoLabels }) {
   return <div aria-label={labels.checking} aria-live="polite" className="linkit-my-info__skeletons" role="status"><span /><span /><span /></div>;
 }
@@ -322,14 +361,10 @@ function Alert({ children, variant = "default" }: { children: React.ReactNode; v
 
 const languageNames: Record<string, string> = { "zh-CN": "中文", en: "English" };
 
-function LanguageSelect({ id, label, autoLabel, value, onChange }: { id: string; label: string; autoLabel: string; value: string; onChange: (lang: string) => void }) {
-  const selected = firstLanguageTag(value);
-  const custom = selected && !(selected in languageNames) ? selected : "";
-  const items: Record<string, string> = { "": autoLabel, ...languageNames };
-  if (custom) items[custom] = custom;
+function SelectField({ id, label, items, value, onChange }: { id: string; label: string; items: Record<string, string>; value: string; onChange: (value: string) => void }) {
   return <div className="linkit-my-info__field">
     <span id={`${id}-label`}>{label}</span>
-    <SelectPrimitive.Root items={items} onValueChange={(next) => onChange(next ?? "")} value={selected}>
+    <SelectPrimitive.Root items={items} onValueChange={(next) => onChange(next ?? "")} value={value}>
       <SelectPrimitive.Trigger aria-labelledby={`${id}-label`} className="linkit-my-info__select" id={id}>
         <SelectPrimitive.Value />
         <SelectPrimitive.Icon className="linkit-my-info__select-icon"><ChevronDownIcon /></SelectPrimitive.Icon>
@@ -348,13 +383,26 @@ function LanguageSelect({ id, label, autoLabel, value, onChange }: { id: string;
   </div>;
 }
 
+function LanguageSelect({ id, label, autoLabel, value, onChange }: { id: string; label: string; autoLabel: string; value: string; onChange: (lang: string) => void }) {
+  const selected = firstLanguageTag(value);
+  const custom = selected && !(selected in languageNames) ? selected : "";
+  const items: Record<string, string> = { "": autoLabel, ...languageNames };
+  if (custom) items[custom] = custom;
+  return <SelectField id={id} items={items} label={label} onChange={onChange} value={selected} />;
+}
+
+function ThemeSelect({ id, label, options, value, onChange }: { id: string; label: string; options: Record<LinkitTheme, string>; value: LinkitTheme; onChange: (theme: LinkitTheme) => void }) {
+  return <SelectField id={id} items={options} label={label} onChange={(next) => onChange(parseLinkitTheme(next))} value={value} />;
+}
+
 function firstLanguageTag(value: string): string {
   const [tag] = value.split(",").map((part) => part.trim()).filter((part) => part.length > 0);
   return tag ?? "";
 }
 
-function emptyEditor(): Editor { return { username: "", intro: "", lang: "", avatarAttachmentId: "" }; }
-function toEditor(profile: LinkitProfile | null): Editor { return { username: profile?.username ?? "", intro: profile?.intro ?? "", lang: profile?.lang ?? "", avatarAttachmentId: profile?.avatar_attachment_id ?? "" }; }
+function nextTheme(theme: LinkitTheme): LinkitTheme { return theme === "system" ? "dark" : theme === "dark" ? "light" : "system"; }
+function emptyEditor(): Editor { return { username: "", intro: "", lang: "", theme: "system", avatarAttachmentId: "" }; }
+function toEditor(profile: LinkitProfile | null): Editor { return { username: profile?.username ?? "", intro: profile?.intro ?? "", lang: profile?.lang ?? "", theme: parseLinkitTheme(profile?.theme), avatarAttachmentId: profile?.avatar_attachment_id ?? "" }; }
 function languageKey(lang: string): "en" | "zh" { const normalized = lang.toLowerCase(); return normalized === "zh" || normalized.startsWith("zh-") ? "zh" : "en"; }
 function authMiniSecurityUrl(authMiniBaseUrl: string) { const url = new URL("/web/", authMiniBaseUrl); url.hash = "/"; return url.toString(); }
 function message(cause: unknown): string { return cause instanceof Error ? cause.message : String(cause); }

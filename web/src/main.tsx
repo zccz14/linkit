@@ -8,7 +8,6 @@ import "linkit-react-components/styles.css";
 import App from "./App.tsx";
 import { I18nProvider } from "@/components/i18n-provider.tsx";
 import { RenderErrorBoundary } from "@/components/render-error-boundary.tsx";
-import { ThemeProvider } from "@/components/theme-provider.tsx";
 
 const queryClient = new QueryClient({
   defaultOptions: { queries: { retry: false, staleTime: 5_000 } },
@@ -19,11 +18,9 @@ createRoot(document.getElementById("root")!).render(
     <RenderErrorBoundary>
       <QueryClientProvider client={queryClient}>
         <HashRouter>
-          <ThemeProvider>
-            <I18nProvider>
-              <App />
-            </I18nProvider>
-          </ThemeProvider>
+          <I18nProvider>
+            <App />
+          </I18nProvider>
         </HashRouter>
       </QueryClientProvider>
     </RenderErrorBoundary>

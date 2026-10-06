@@ -7,6 +7,18 @@
       name="description"
       content="Profiles and instant messaging, powered by Auth Mini."
     />
+    <script>
+      // Linkit owns the dark mode preference (see linkit-react-components);
+      // apply the mirrored preference before the first paint.
+      (function () {
+        try {
+          var choice = localStorage.getItem("linkit.theme");
+          var dark = choice === "dark" || (choice !== "light" && matchMedia("(prefers-color-scheme: dark)").matches);
+          document.documentElement.classList.toggle("dark", dark);
+          document.documentElement.style.colorScheme = dark ? "dark" : "light";
+        } catch (error) {}
+      })();
+    </script>
     <link rel="icon" type="image/svg+xml" sizes="any" href="/linkit-mark.svg" />
     <title>Linkit</title>
   </head>

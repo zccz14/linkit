@@ -2,7 +2,12 @@ import { cleanup, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 const state = { missing: false };
-afterEach(() => cleanup());
+afterEach(() => {
+  cleanup();
+  window.localStorage.clear();
+  document.documentElement.className = "";
+  document.documentElement.style.removeProperty("color-scheme");
+});
 vi.mock("auth-mini-react-components", () => ({
   AuthMiniProvider: ({ children }: { children: React.ReactNode }) => <>{children}</>,
   useAuthMini: () => {
@@ -19,6 +24,11 @@ function Consumer() {
   return <span>{linkitBaseUrl}</span>;
 }
 
+function ThemeConsumer() {
+  const { theme, resolvedTheme } = useLinkit();
+  return <span data-testid="theme-probe">{`${theme}|${resolvedTheme}`}</span>;
+}
+
 describe("LinkitProvider", () => {
   it("reports a Linkit-specific provider nesting error", () => {
     state.missing = true;
@@ -29,6 +39,19 @@ describe("LinkitProvider", () => {
   it("exposes Linkit API context inside AuthMiniProvider", () => {
     render(<AuthMiniProvider authMiniBaseUrl="https://auth.example.test" autoRedirectToLogin={false}><LinkitProvider linkitBaseUrl="https://linkit.example.test"><Consumer /></LinkitProvider></AuthMiniProvider>);
     expect(screen.getByText("https://linkit.example.test")).toBeInTheDocument();
+  });
+
+  it("exposes the system theme until a preference is stored", () => {
+    render(<AuthMiniProvider authMiniBaseUrl="https://auth.example.test" autoRedirectToLogin={false}><LinkitProvider linkitBaseUrl="https://linkit.example.test"><ThemeConsumer /></LinkitProvider></AuthMiniProvider>);
+    expect(screen.getByTestId("theme-probe")).toHaveTextContent("system|light");
+  });
+
+  it("applies the mirrored preference before the profile resolves", () => {
+    window.localStorage.setItem("linkit.theme", "dark");
+    render(<AuthMiniProvider authMiniBaseUrl="https://auth.example.test" autoRedirectToLogin={false}><LinkitProvider linkitBaseUrl="https://linkit.example.test"><ThemeConsumer /></LinkitProvider></AuthMiniProvider>);
+    expect(screen.getByTestId("theme-probe")).toHaveTextContent("dark|dark");
+    expect(document.documentElement.classList.contains("dark")).toBe(true);
+    expect(document.documentElement.style.colorScheme).toBe("dark");
   });
 });
 
