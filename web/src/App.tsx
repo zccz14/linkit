@@ -1992,10 +1992,7 @@ function MessageRow({
             {new Date(message.created_at * 1000).toLocaleString(locale)}
           </time>
         </MessageHeader>
-        <Bubble
-          align={mine ? "end" : "start"}
-          variant={mine ? "default" : "secondary"}
-        >
+        <Bubble align={mine ? "end" : "start"} variant="secondary">
           <BubbleContent>
             <div className="flex flex-col gap-3">
               {message.body ? (
@@ -2004,7 +2001,7 @@ function MessageRow({
                 </MessageMarkdown>
               ) : null}
               {message.sender_kind === "bot" ? (
-                <Badge variant="secondary">{t("conversation.bot")}</Badge>
+                <Badge variant="outline">{t("conversation.bot")}</Badge>
               ) : null}
               {message.urgent ? (
                 <Badge variant="destructive">{t("conversation.urgent")}</Badge>

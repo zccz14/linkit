@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import test from "node:test";
 
 import { createElement } from "react";
@@ -10,6 +11,16 @@ import {
   safeMarkdownUrl,
   shouldSendMessageOnEnter,
 } from "../src/lib/message.ts";
+
+const app = readFileSync(new URL("../src/App.tsx", import.meta.url), "utf8");
+
+test("message bubbles separate sender by alignment instead of color", () => {
+  const start = app.indexOf("function MessageRow");
+  assert.ok(start >= 0, "MessageRow exists");
+  const source = app.slice(start, start + 2_500);
+  assert.match(source, /<Bubble[\s\S]{0,120}variant="secondary"/);
+  assert.doesNotMatch(source, /variant=\{mine \?/);
+});
 
 test("Enter sends only after IME composition completes", () => {
   assert.equal(
