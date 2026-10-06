@@ -3,6 +3,7 @@ import {
   useCallback,
   useContext,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -17,6 +18,8 @@ import type {
   LinkitMessagePage,
   LinkitProfile,
   LinkitProfileUpdate,
+  LinkitResolvedTheme,
+  LinkitTheme,
   LinkitUserNote,
   LinkitUserSearchResult,
 } from "./types.js";
@@ -59,6 +62,11 @@ type LinkitUserInfoContextValue = {
 const profileBatchDelayMs = 40;
 const profileBatchSize = 100;
 const userNoteBatchSize = 100;
+const colorSchemeQuery = "(prefers-color-scheme: dark)";
+
+/// The localStorage mirror of the signed-in profile's theme preference. It lets
+/// a reload keep the last known theme before the profile request resolves.
+export const linkitThemeStorageKey = "linkit.theme";
 
 export type LinkitServerEvent =
   | { type: "message"; conversationId: string; message: LinkitMessage }
@@ -73,6 +81,12 @@ export type LinkitContextValue = {
   lang: string;
   /** The viewer's stored language priority list, for example ["zh-CN", "en-US"]; empty when unset. */
   languages: readonly string[];
+  /** The viewer's stored theme preference: "system", "dark", or "light". */
+  theme: LinkitTheme;
+  /** The theme applied to the document right now: "dark" or "light". */
+  resolvedTheme: LinkitResolvedTheme;
+  /** Persists a theme preference to the signed-in profile and applies it immediately. */
+  setTheme: (theme: LinkitTheme) => Promise<void>;
   linkitBaseUrl: string;
   myProfile: LinkitProfile | null;
   myProfileError: string | null;
@@ -539,6 +553,57 @@ export function LinkitProvider({
   const openLinkitInbox = useCallback(() => {
     window.open(linkitInboxUrl(baseUrl), "_blank", "noopener,noreferrer");
   }, [baseUrl]);
+  const [systemDark, setSystemDark] = useState(() =>
+    window.matchMedia(colorSchemeQuery).matches,
+  );
+  useEffect(() => {
+    const media = window.matchMedia(colorSchemeQuery);
+    const update = () => setSystemDark(media.matches);
+    update();
+    media.addEventListener("change", update);
+    return () => media.removeEventListener("change", update);
+  }, []);
+  const [storedTheme, setStoredTheme] = useState(readStoredTheme);
+  const profileTheme = myProfile ? parseLinkitTheme(myProfile.theme) : null;
+  const theme = profileTheme ?? storedTheme ?? "system";
+  const resolvedTheme: LinkitResolvedTheme =
+    theme === "system" ? (systemDark ? "dark" : "light") : theme;
+  // The document root is the one host surface this package owns: Tailwind's
+  // class dark mode and color-scheme both key off it. Apply it in a layout
+  // effect so the mirrored preference lands before the first paint.
+  useLayoutEffect(() => {
+    const root = document.documentElement;
+    root.classList.toggle("dark", resolvedTheme === "dark");
+    root.style.colorScheme = resolvedTheme;
+  }, [resolvedTheme]);
+  useEffect(() => {
+    if (!profileTheme) return;
+    writeStoredTheme(profileTheme);
+    setStoredTheme(profileTheme);
+  }, [profileTheme]);
+  const setTheme = useCallback(
+    async (next: LinkitTheme) => {
+      const current = myProfile;
+      if (!current)
+        throw new Error(
+          "A Linkit profile is required to save the theme preference.",
+        );
+      setMyProfile({ ...current, theme: next });
+      try {
+        await saveMyProfile({
+          username: current.username,
+          intro: current.intro ?? "",
+          lang: current.lang ?? "",
+          avatar_attachment_id: current.avatar_attachment_id ?? undefined,
+          theme: next,
+        });
+      } catch (cause) {
+        setMyProfile(current);
+        throw cause;
+      }
+    },
+    [myProfile, saveMyProfile],
+  );
   const languages = useMemo(() => parseLanguages(myProfile?.lang), [myProfile?.lang]);
   const effectiveLang = useMemo(
     () => firstSupportedLanguage(languages) ?? lang,
@@ -570,6 +635,9 @@ export function LinkitProvider({
     () => ({
       lang: effectiveLang,
       languages,
+      theme,
+      resolvedTheme,
+      setTheme,
       linkitBaseUrl: baseUrl,
       myProfile,
       myProfileError,
@@ -661,9 +729,12 @@ export function LinkitProvider({
       refreshUnreadMessageCount,
       request,
       requestRaw,
+      resolvedTheme,
       saveMyProfile,
+      setTheme,
       signOut,
       subscribeToEvents,
+      theme,
       unreadMessageCount,
     ],
   );
@@ -764,6 +835,32 @@ async function publicRequest<T>(
   if (!response.ok)
     throw await requestError(response, "Linkit public request failed");
   return (await response.json()) as T;
+}
+
+export function parseLinkitTheme(value: string | null | undefined): LinkitTheme {
+  return value === "dark" || value === "light" || value === "system"
+    ? value
+    : "system";
+}
+
+function readStoredTheme(): LinkitTheme | null {
+  try {
+    const value = window.localStorage.getItem(linkitThemeStorageKey);
+    return value === "dark" || value === "light" || value === "system"
+      ? value
+      : null;
+  } catch {
+    // RECOVERY: Storage is unavailable (for example private browsing); follow the system scheme.
+    return null;
+  }
+}
+
+function writeStoredTheme(theme: LinkitTheme) {
+  try {
+    window.localStorage.setItem(linkitThemeStorageKey, theme);
+  } catch {
+    // RECOVERY: The theme still applies for this session; only cross-reload continuity is lost.
+  }
 }
 
 function parseLanguages(value: string | null | undefined): string[] {

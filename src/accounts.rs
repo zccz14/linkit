@@ -105,6 +105,7 @@ mod tests {
         assert_eq!(before.username, default_username(id));
         assert_eq!(before.username.len(), 17);
         assert!(before.intro.is_empty());
+        assert_eq!(before.theme, "system");
         assert!(before.avatar_attachment_id.is_none());
         for _ in 0..3 {
             ensure(&db, id).await.unwrap();

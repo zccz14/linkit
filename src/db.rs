@@ -258,6 +258,48 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn profile_theme_migration_defaults_to_system_and_preserves_existing_content() {
+        let mut connection = SqliteConnection::connect_with(
+            &"sqlite::memory:".parse::<SqliteConnectOptions>().unwrap(),
+        )
+        .await
+        .unwrap();
+        sqlx::query(
+            "CREATE TABLE profiles(user_id TEXT PRIMARY KEY, username TEXT NOT NULL, intro TEXT NOT NULL)",
+        )
+        .execute(&mut connection)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO profiles(user_id,username,intro) VALUES('one','alice','Existing introduction')",
+        )
+        .execute(&mut connection)
+        .await
+        .unwrap();
+
+        sqlx::query(include_str!(
+            "../migrations/20261007000000_profile_theme.sql"
+        ))
+        .execute(&mut connection)
+        .await
+        .unwrap();
+
+        let columns =
+            sqlx::query_scalar::<_, String>("SELECT name FROM pragma_table_info('profiles')")
+                .fetch_all(&mut connection)
+                .await
+                .unwrap();
+        assert!(columns.iter().any(|column| column == "theme"));
+        let (theme, intro): (String, String) =
+            sqlx::query_as("SELECT theme,intro FROM profiles WHERE user_id='one'")
+                .fetch_one(&mut connection)
+                .await
+                .unwrap();
+        assert_eq!(theme, "system");
+        assert_eq!(intro, "Existing introduction");
+    }
+
+    #[tokio::test]
     async fn bot_user_migration_makes_bots_user_principals_and_group_members() {
         let mut connection = SqliteConnection::connect_with(
             &"sqlite::memory:".parse::<SqliteConnectOptions>().unwrap(),

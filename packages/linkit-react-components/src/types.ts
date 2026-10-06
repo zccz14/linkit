@@ -1,9 +1,13 @@
+export type LinkitTheme = "system" | "dark" | "light";
+export type LinkitResolvedTheme = "dark" | "light";
+
 export type LinkitProfile = {
   user_id: string;
   username: string;
   avatar_url?: string | null;
   intro?: string | null;
   lang?: string | null;
+  theme?: string | null;
   avatar_attachment_id?: string | null;
   updated_at?: number;
 };
@@ -21,6 +25,7 @@ export type LinkitProfileUpdate = {
   intro: string;
   avatar_attachment_id?: string;
   lang?: string;
+  theme?: LinkitTheme;
 };
 
 export type LinkitUserNote = {

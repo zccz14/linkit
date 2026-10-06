@@ -161,6 +161,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { useIsMobile } from "@/hooks/use-mobile";
 import { updatedConversationDetail } from "@/lib/conversation";
+import { applyFavicon } from "@/lib/favicon";
 import { clipboardFiles } from "@/lib/clipboard-files";
 import { MessageMarkdown } from "@/lib/message-markdown";
 import { shouldSendMessageOnEnter } from "@/lib/message";
@@ -259,10 +260,20 @@ export default function App() {
         linkitBaseUrl={config.data.public_origin ?? window.location.origin}
       >
         <LinkitLocaleSync />
+        <FaviconSync />
         <AuthedApp />
       </LinkitProvider>
     </AuthMiniProvider>
   );
+}
+
+// Keep the favicon in step with the resolved theme without a reload.
+function FaviconSync() {
+  const { resolvedTheme } = useLinkit();
+  useEffect(() => {
+    applyFavicon(resolvedTheme);
+  }, [resolvedTheme]);
+  return null;
 }
 
 // The signed-in Linkit profile owns the language preference; follow it instead of
@@ -441,7 +452,7 @@ function SetupForm({
           </form>
         </CardContent>
       </Card>
-      <Toaster richColors />
+      <Toaster richColors theme="system" />
     </main>
   );
 }
@@ -462,7 +473,7 @@ function AuthedApp() {
 }
 
 function Shell({ me, sdk }: { me: Me; sdk: AuthMiniApi }) {
-  const { subscribeToEvents } = useLinkit();
+  const { resolvedTheme, subscribeToEvents } = useLinkit();
   const queryClient = useQueryClient();
   const conversations = useQuery({
     queryKey: ["conversations"],
@@ -506,7 +517,7 @@ function Shell({ me, sdk }: { me: Me; sdk: AuthMiniApi }) {
           sdk={sdk}
         />
       </SidebarProvider>
-      <Toaster richColors />
+      <Toaster richColors theme={resolvedTheme} />
     </TooltipProvider>
   );
 }

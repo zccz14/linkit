@@ -16,13 +16,13 @@
 
 ## API
 
-- `LinkitProvider` supplies authenticated Linkit requests, identity/profile methods, uploads, message/conversation reads and writes, member-authorized event subscriptions, and attachment downloads. It owns Auth Mini bearer use, the single refresh retry, the one shared Linkit event stream, and the debounced in-memory batch cache used by `LinkitUserInfo`; consuming applications never receive or persist a token. It also publishes the signed-in viewer's language preference through `useLinkit()`: `languages` is the stored priority list and `lang` is the effective copy language (see [Language preference](#language-preference)).
+- `LinkitProvider` supplies authenticated Linkit requests, identity/profile methods, uploads, message/conversation reads and writes, member-authorized event subscriptions, and attachment downloads. It owns Auth Mini bearer use, the single refresh retry, the one shared Linkit event stream, and the debounced in-memory batch cache used by `LinkitUserInfo`; consuming applications never receive or persist a token. It also publishes the signed-in viewer's language and theme preferences through `useLinkit()`: `languages` is the stored priority list, `lang` is the effective copy language (see [Language preference](#language-preference)), and `theme`/`resolvedTheme`/`setTheme` own dark mode (see [Dark mode preference](#dark-mode-preference)).
 - `useLinkit` reads that provider context.
 - `useLinkitUserNotes` requests the private-note batch for a stable list of user IDs and returns the provider's shared note cache, so consumers can search and filter by the viewer's private note names.
 - `LinkitAvatar` renders a fixed-size profile avatar from its public, versioned `avatar_url` through a native `<img src>`; the browser reuses that URL through its normal HTTP cache, and a same-size initial fallback appears if the image fails.
 - `LinkitUserDisplay` renders a profile `username`; when the profile is unavailable it renders the localized unknown-user label and the complete source `user_id`.
 - `LinkitConversationDisplay` renders a group or direct conversation identity.
-- `LinkitMyInfo` renders the package-owned application-header account trigger, Linkit inbox action with unread-message badge, and Base UI dialog for username, intro, language preference, avatar upload, UID copy, passkey registration, sign-in-method settings, and sign out. It accepts no props: language, profile state, unread count, navigation, save, and sign-out behavior are owned by `LinkitProvider` and available through `useLinkit`. The unread badge follows the provider's event stream and dedicated unread endpoint; the component itself performs no polling.
+- `LinkitMyInfo` renders the package-owned application-header theme-cycle action, Linkit inbox action with unread-message badge, account trigger, and Base UI dialog for username, intro, language preference, dark mode preference, avatar upload, UID copy, passkey registration, sign-in-method settings, and sign out. It accepts no props: language, profile state, unread count, navigation, save, and sign-out behavior are owned by `LinkitProvider` and available through `useLinkit`. The unread badge follows the provider's event stream and dedicated unread endpoint; the component itself performs no polling.
 - `LinkitUserPicker` searches username prefixes and UUID-character `user_id` prefixes, then writes the chosen `user_id` in controlled or uncontrolled form usage.
 - `LinkitUserInfo` accepts only `userId` and optional `compact`. Its inline avatar, username, complete `user_id`, localized fixed copy, cached public profile lookup, private note, and Linkit direct-message action are owned by `LinkitProvider`. Multiple uncached IDs are deduplicated and fetched through debounced profile and private-note batches; a direct-message action always opens the corresponding Linkit conversation in a new window. A private note belongs only to the authenticated viewer, overrides the inline display name, remains available when the target has not initialized a Linkit profile, and is never included in public profile data.
 - `LinkitEmbeddedConversation` mounts a complete member-authorized direct or group conversation for a specific `conversationId`: it loads history, supports earlier-message paging, receives new message events with a bounded polling fallback, renders attachments, and includes file upload, urgent-message and accessible message-compose controls. The component never accepts a token, user ID, or membership flag from its consumer.
@@ -48,7 +48,7 @@ While the outer Auth Mini session is authenticated, `LinkitProvider` keeps exact
 
 A Linkit username is the sole human-readable user identity. Linkit trims it before persistence, keeps SQLite `NOCASE` uniqueness semantics, permits Unicode and punctuation, and rejects empty, control-character, and over-80-character values. Consumers must render it as text and URL-encode it when it appears in a path or query.
 
-`LinkitProfile` contains `user_id`, `username`, optional `avatar_url`, optional `intro`, optional `lang`, optional `avatar_attachment_id`, and optional `updated_at`. There is no nickname or `display_name` field. `lang` is a comma-separated language priority list such as `zh-CN,en-US`; an empty string means the viewer has not set a preference. It is private personalization: only the authenticated profile (`GET /api/me`, `PUT /api/profile`) carries it, and public profile data never includes it.
+`LinkitProfile` contains `user_id`, `username`, optional `avatar_url`, optional `intro`, optional `lang`, optional `theme`, optional `avatar_attachment_id`, and optional `updated_at`. There is no nickname or `display_name` field. `lang` is a comma-separated language priority list such as `zh-CN,en-US`; an empty string means the viewer has not set a preference. `theme` is one of `system` (default, follow the operating system), `dark`, or `light`. Both are private personalization: only the authenticated profile (`GET /api/me`, `PUT /api/profile`) carries them, and public profile data never includes them.
 
 `LinkitUserNote` contains the target `user_id`, the viewer-owned `name`, and `updated_at`. It is read and written only by `LinkitProvider`'s authenticated user-info flow; applications must not proxy or persist another user's note data.
 
@@ -71,6 +71,32 @@ useEffect(() => {
 
 Saves that omit `lang` keep the stored preference (older package versions do not send it); an explicit empty string clears it back to automatic. Once every consumer depends on `>=0.4.0`, the server can make `lang` a required field.
 
+## Dark mode preference
+
+The signed-in Linkit profile also owns the dark mode preference, so applications do not need their own theme storage or switch. `LinkitMyInfo` edits it in two places: the header button group cycles `system → dark → light → system` and saves immediately, and the profile dialog offers the same three choices as a form control saved with the rest of the profile. Applications that embed the package should delete local theme systems and let Linkit own the preference.
+
+- `useLinkit().theme` is the stored preference: `"system"`, `"dark"`, or `"light"`.
+- `useLinkit().resolvedTheme` is the theme applied right now: `"dark"` or `"light"`. Use it for theme-aware details such as a favicon or a toast surface.
+- `useLinkit().setTheme(theme)` persists a preference to the profile and applies it immediately.
+- `LinkitProvider` applies `resolvedTheme` to `document.documentElement` by toggling the `dark` class and setting `color-scheme`, and it follows `prefers-color-scheme` while the preference is `system`. That document-root class is the one host surface the package owns, because it is the integration contract for Tailwind's class-based dark mode.
+
+The provider also mirrors the known preference to `localStorage` under `linkit.theme` (exported as `linkitThemeStorageKey`) so a reload starts from the last known theme even before the profile request resolves. Applications that want a flash-free first paint can inline the same read as a head script:
+
+```html
+<script>
+  (function () {
+    try {
+      var choice = localStorage.getItem("linkit.theme");
+      var dark = choice === "dark" || (choice !== "light" && matchMedia("(prefers-color-scheme: dark)").matches);
+      document.documentElement.classList.toggle("dark", dark);
+      document.documentElement.style.colorScheme = dark ? "dark" : "light";
+    } catch (error) {}
+  })();
+</script>
+```
+
+Saves that omit `theme` keep the stored preference (older package versions do not send it). Once every consumer depends on `>=0.5.0`, the server can make `theme` a required field.
+
 ## Public data and CORS
 
 `getProfile(userId)` reads the minimal public profile without sending a Bearer token. `LinkitUserInfo` uses `POST /api/public/profiles/batch` internally for debounced batches of up to 100 IDs; missing profiles are represented by their absence from the returned list and cached as unavailable. Public profile data contains `user_id`, `username`, the user-authored `intro`, and optional versioned public `avatar_url`; search data remains limited to `user_id`, `username`, and optional avatar URL. Neither response exposes attachment IDs, email, login methods, sessions, or security data. Authenticated API calls require an outer token whose `aud` includes `linkit.ntnl.io`; every Linkit route—public, authenticated, or unmatched—answers `Access-Control-Allow-Origin: *`, and CORS never enables credentials. The `LinkitUserInfo` direct-message action opens a protected Linkit conversation through `openDirectConversation(username)` and navigates a new Linkit window using only the returned conversation ID—no token is added to the URL.
@@ -91,7 +117,7 @@ Import `linkit-react-components/styles.css`. That stylesheet includes the App He
 }
 ```
 
-The package deliberately does **not** target `#root`, `body`, `html`, `:root`, or any host application root. It also deliberately assigns no elevated `z-index` to `.linkit-user-info__popup`, so consumer dialogs, sheets, and toast layers remain authoritative.
+The package deliberately does **not** target `#root`, `body`, `html`, `:root`, or any host application root from CSS, and it deliberately assigns no elevated `z-index` to `.linkit-user-info__popup`, so consumer dialogs, sheets, and toast layers remain authoritative. The single intentional exception is runtime: `LinkitProvider` toggles `dark` and `color-scheme` on `document.documentElement` to apply the viewer's theme preference (see [Dark mode preference](#dark-mode-preference)).
 
 ## User picker selection modes
 
