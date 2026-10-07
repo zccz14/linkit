@@ -2,6 +2,7 @@
 @import "tw-animate-css";
 @import "shadcn/tailwind.css";
 @import "@fontsource-variable/geist";
+@import "@zccz14/ux/styles.css";
 
 @source "../node_modules/auth-mini-react-components/dist";
 
