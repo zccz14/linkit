@@ -10,6 +10,13 @@ import {
   type ReactNode,
 } from "react";
 import { useAuthMini } from "auth-mini-react-components";
+import {
+  clearCachedNotes,
+  readCachedNotes,
+  readCachedProfiles,
+  writeCachedNotes,
+  writeCachedProfiles,
+} from "./user-info-cache.js";
 import type {
   LinkitAttachment,
   LinkitConversation,
@@ -167,6 +174,15 @@ export function LinkitProvider({
   const requestedNoteIds = useRef(new Set<string>());
   const noteRevisions = useRef(new Map<string, number>());
   const noteCacheGeneration = useRef(0);
+  // IDs whose profile/note network attempt already finished during this page
+  // session: cached and hydrated values revalidate once on demand, and every
+  // attempt — success or failure — settles so a session never retries in a loop.
+  const settledProfileIds = useRef(new Set<string>());
+  const settledNoteIds = useRef(new Set<string>());
+  const viewerUserIdRef = useRef<string | null>(null);
+  // The "baseUrl|viewerUserId" identity whose persisted notes are already
+  // merged, so a viewer switch or instance change re-reads before this holds.
+  const hydratedNotesFor = useRef<string | null>(null);
   const profileBatchTimer = useRef<ReturnType<typeof setTimeout> | undefined>(
     undefined,
   );
@@ -191,6 +207,22 @@ export function LinkitProvider({
     },
     [],
   );
+  const persistProfiles = useCallback(
+    (updates: ReadonlyMap<string, LinkitProfile | null>) => {
+      void writeCachedProfiles(baseUrl, updates);
+    },
+    [baseUrl],
+  );
+  const persistNotes = useCallback(
+    (updates: ReadonlyMap<string, LinkitUserNote | null>) => {
+      const viewer =
+        viewerUserIdRef.current ??
+        readViewerId(auth.sdk?.session.getState()?.accessToken);
+      if (!viewer) return;
+      void writeCachedNotes(baseUrl, viewer, updates);
+    },
+    [auth.sdk, baseUrl],
+  );
   const clearNotes = useCallback(() => {
     if (noteBatchTimer.current) {
       clearTimeout(noteBatchTimer.current);
@@ -199,6 +231,9 @@ export function LinkitProvider({
     pendingNoteIds.current.clear();
     requestedNoteIds.current.clear();
     noteRevisions.current.clear();
+    settledNoteIds.current.clear();
+    viewerUserIdRef.current = null;
+    hydratedNotesFor.current = null;
     noteCacheGeneration.current += 1;
     const next = new Map<string, LinkitUserNote | null>();
     notesRef.current = next;
@@ -248,9 +283,11 @@ export function LinkitProvider({
         `/api/public/profiles/${encodeURIComponent(userId)}`,
       );
       storeProfiles(new Map([[userId, profile]]));
+      settledProfileIds.current.add(userId);
+      persistProfiles(new Map([[userId, profile]]));
       return profile;
     },
-    [baseUrl, storeProfiles],
+    [baseUrl, persistProfiles, storeProfiles],
   );
   const clearProfiles = useCallback(() => {
     if (profileBatchTimer.current) {
@@ -259,6 +296,7 @@ export function LinkitProvider({
     }
     pendingProfileIds.current.clear();
     requestedProfileIds.current.clear();
+    settledProfileIds.current.clear();
     const next = new Map<string, LinkitProfile | null>();
     profilesRef.current = next;
     setProfiles(next);
@@ -292,19 +330,31 @@ export function LinkitProvider({
         )
       ).flat();
       const byUserId = new Map(profiles.map((profile) => [profile.user_id, profile]));
-      storeProfiles(
-        new Map(userIds.map((userId) => [userId, byUserId.get(userId) ?? null])),
+      const updates = new Map(
+        userIds.map((userId) => [userId, byUserId.get(userId) ?? null]),
       );
+      storeProfiles(updates);
+      persistProfiles(updates);
     } catch {
-      storeProfiles(new Map(userIds.map((userId) => [userId, null])));
+      // Keep any value already known (for example a hydrated profile); only
+      // never-seen IDs become unavailable. Every attempted ID still settles.
+      const updates = new Map(
+        userIds
+          .filter((userId) => !profilesRef.current.has(userId))
+          .map((userId) => [userId, null]),
+      );
+      if (updates.size) storeProfiles(updates);
     } finally {
-      for (const userId of userIds) requestedProfileIds.current.delete(userId);
+      for (const userId of userIds) {
+        requestedProfileIds.current.delete(userId);
+        settledProfileIds.current.add(userId);
+      }
     }
-  }, [baseUrl, storeProfiles]);
+  }, [baseUrl, persistProfiles, storeProfiles]);
   const requestProfiles = useCallback(
     (userIds: readonly string[]) => {
       for (const userId of new Set(userIds)) {
-        if (!userId || profilesRef.current.has(userId) || requestedProfileIds.current.has(userId)) continue;
+        if (!userId || requestedProfileIds.current.has(userId) || settledProfileIds.current.has(userId)) continue;
         requestedProfileIds.current.add(userId);
         pendingProfileIds.current.add(userId);
       }
@@ -350,26 +400,38 @@ export function LinkitProvider({
           updates.set(userId, byUserId.get(userId) ?? null);
         }
       }
-      if (updates.size) storeNotes(updates);
+      if (updates.size) {
+        storeNotes(updates);
+        persistNotes(updates);
+      }
     } catch {
       if (generation === noteCacheGeneration.current) {
+        // Keep any note already known (for example a hydrated note); only
+        // never-seen IDs become known-missing. Every attempted ID still settles.
         const updates = new Map<string, LinkitUserNote | null>();
         for (const userId of userIds) {
-          if (noteRevisions.current.get(userId) === revisions.get(userId)) {
+          if (
+            noteRevisions.current.get(userId) === revisions.get(userId) &&
+            !notesRef.current.has(userId)
+          ) {
             updates.set(userId, null);
           }
         }
         if (updates.size) storeNotes(updates);
       }
     } finally {
-      for (const userId of userIds) requestedNoteIds.current.delete(userId);
+      for (const userId of userIds) {
+        requestedNoteIds.current.delete(userId);
+        if (generation === noteCacheGeneration.current)
+          settledNoteIds.current.add(userId);
+      }
     }
-  }, [request, storeNotes]);
+  }, [persistNotes, request, storeNotes]);
   const requestNotes = useCallback(
     (userIds: readonly string[]) => {
       if (!auth.isAuthenticated) return;
       for (const userId of new Set(userIds)) {
-        if (!userId || notesRef.current.has(userId) || requestedNoteIds.current.has(userId)) continue;
+        if (!userId || requestedNoteIds.current.has(userId) || settledNoteIds.current.has(userId)) continue;
         requestedNoteIds.current.add(userId);
         pendingNoteIds.current.add(userId);
       }
@@ -391,9 +453,11 @@ export function LinkitProvider({
         (noteRevisions.current.get(userId) ?? 0) + 1,
       );
       storeNotes(new Map([[userId, note]]));
+      settledNoteIds.current.add(userId);
+      persistNotes(new Map([[userId, note]]));
       return note;
     },
-    [request, storeNotes],
+    [persistNotes, request, storeNotes],
   );
   const deleteUserNote = useCallback(
     async (userId: string) => {
@@ -405,8 +469,10 @@ export function LinkitProvider({
         (noteRevisions.current.get(userId) ?? 0) + 1,
       );
       storeNotes(new Map([[userId, null]]));
+      settledNoteIds.current.add(userId);
+      persistNotes(new Map([[userId, null]]));
     },
-    [request, storeNotes],
+    [persistNotes, request, storeNotes],
   );
   useEffect(
     () => () => {
@@ -415,6 +481,43 @@ export function LinkitProvider({
     },
     [],
   );
+  // Warm the in-memory caches from IndexedDB so previously seen user info
+  // renders before the network revalidates it. Values that arrive while a
+  // request is in flight or after a fresh response are never overwritten.
+  useEffect(() => {
+    let disposed = false;
+    void (async () => {
+      const cached = await readCachedProfiles(baseUrl);
+      if (disposed) return;
+      const updates = new Map(
+        [...cached].filter(([userId]) => !profilesRef.current.has(userId)),
+      );
+      if (updates.size) storeProfiles(updates);
+    })();
+    return () => {
+      disposed = true;
+    };
+  }, [baseUrl, storeProfiles]);
+  useEffect(() => {
+    if (!auth.isAuthenticated) return;
+    const viewer =
+      viewerUserIdRef.current ??
+      readViewerId(auth.sdk?.session.getState()?.accessToken);
+    if (!viewer) return;
+    viewerUserIdRef.current = viewer;
+    const identity = `${baseUrl}|${viewer}`;
+    if (hydratedNotesFor.current === identity) return;
+    hydratedNotesFor.current = identity;
+    const generation = noteCacheGeneration.current;
+    void (async () => {
+      const cached = await readCachedNotes(baseUrl, viewer);
+      if (generation !== noteCacheGeneration.current) return;
+      const updates = new Map(
+        [...cached].filter(([userId]) => !notesRef.current.has(userId)),
+      );
+      if (updates.size) storeNotes(updates);
+    })();
+  }, [auth.isAuthenticated, auth.sdk, baseUrl, storeNotes]);
   const refreshMyProfile = useCallback(async () => {
     if (!auth.isAuthenticated) {
       setMyProfile(null);
@@ -439,13 +542,15 @@ export function LinkitProvider({
         : null;
       setMyProfile(next);
       storeProfiles(new Map([[me.id, next]]));
+      settledProfileIds.current.add(me.id);
+      persistProfiles(new Map([[me.id, next]]));
     } catch (cause) {
       setMyProfile(null);
       setMyProfileError(message(cause));
     } finally {
       setMyProfileLoading(false);
     }
-  }, [auth.isAuthenticated, getProfile, request, storeProfiles]);
+  }, [auth.isAuthenticated, getProfile, persistProfiles, request, storeProfiles]);
   const refreshUnreadMessageCount = useCallback(async () => {
     if (!auth.isAuthenticated) {
       setUnreadMessageCount(0);
@@ -532,20 +637,28 @@ export function LinkitProvider({
       setMyProfile(next);
       setMyUserId(saved.user_id);
       storeProfiles(new Map([[saved.user_id, next]]));
+      settledProfileIds.current.add(saved.user_id);
+      persistProfiles(new Map([[saved.user_id, next]]));
       return next;
     },
-    [getProfile, request, storeProfiles],
+    [getProfile, persistProfiles, request, storeProfiles],
   );
   const signOut = useCallback(async () => {
+    const viewer =
+      viewerUserIdRef.current ??
+      readViewerId(auth.sdk?.session.getState()?.accessToken);
     await auth.signOut();
     clearProfiles();
     clearNotes();
+    // Notes are private personalization, so sign-out drops them from disk.
+    // Public profiles stay cached; they are readable without a session.
+    if (viewer) void clearCachedNotes(baseUrl, viewer);
     setMyProfile(null);
     setMyProfileError(null);
     setMyProfileLoading(false);
     setMyUserId(null);
     setUnreadMessageCount(0);
-  }, [auth, clearNotes, clearProfiles]);
+  }, [auth, baseUrl, clearNotes, clearProfiles]);
   useEffect(() => {
     if (auth.isAuthenticated) return;
     clearProfiles();
@@ -866,6 +979,23 @@ function writeStoredTheme(theme: LinkitTheme) {
     window.localStorage.setItem(linkitThemeStorageKey, theme);
   } catch {
     // RECOVERY: The theme still applies for this session; only cross-reload continuity is lost.
+  }
+}
+
+/// Reads the Auth Mini subject — the Linkit user ID this session speaks as —
+/// from the access token without verifying it, mirroring auth-mini-react-components.
+function readViewerId(accessToken: string | null | undefined): string | null {
+  const payload = accessToken?.split(".")[1];
+  if (!payload) return null;
+  try {
+    const base64 = payload.replace(/-/g, "+").replace(/_/g, "/");
+    const padded = base64.padEnd(Math.ceil(base64.length / 4) * 4, "=");
+    const value: unknown = JSON.parse(atob(padded));
+    if (!value || typeof value !== "object") return null;
+    const subject = (value as { sub?: unknown }).sub;
+    return typeof subject === "string" ? subject : null;
+  } catch {
+    return null;
   }
 }
 

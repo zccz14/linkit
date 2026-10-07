@@ -1,6 +1,6 @@
 {
   "name": "linkit-react-components",
-  "version": "0.5.1",
+  "version": "0.6.0",
   "description": "Authenticated Linkit provider and compact React display primitives.",
   "license": "MIT",
   "repository": {
@@ -55,6 +55,7 @@
     "@types/react": "^19.1.16",
     "@types/react-dom": "^19.1.9",
     "auth-mini-react-components": "^0.6.10",
+    "fake-indexeddb": "^6.2.5",
     "jsdom": "^26.1.0",
     "react": "^19.1.1",
     "react-dom": "^19.1.1",
