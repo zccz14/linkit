@@ -53,12 +53,12 @@ import {
 import { toast } from "sonner";
 import {
   LinkitProvider,
-  LinkitMyInfo,
   LinkitUserPicker,
   useLinkit,
   useLinkitUserInfo,
   useLinkitUserNotes,
 } from "linkit-react-components";
+import { AppLayout, type AppNavGroup, type AppNavItem } from "@zccz14/ux";
 import { QRCodeSVG } from "qrcode.react";
 
 import { AuthMiniDirectory } from "@/components/admin/auth-mini-directory";
@@ -141,21 +141,6 @@ import {
   MessageScrollerViewport,
 } from "@/components/ui/message-scroller";
 import { Separator } from "@/components/ui/separator";
-import {
-  Sidebar,
-  SidebarContent,
-  SidebarGroup,
-  SidebarGroupContent,
-  SidebarGroupLabel,
-  SidebarHeader,
-  SidebarInset,
-  SidebarMenu,
-  SidebarMenuButton,
-  SidebarMenuItem,
-  SidebarProvider,
-  SidebarTrigger,
-  useSidebar,
-} from "@/components/ui/sidebar";
 import { Toaster } from "@/components/ui/sonner";
 import { Textarea } from "@/components/ui/textarea";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -510,13 +495,11 @@ function Shell({ me, sdk }: { me: Me; sdk: AuthMiniApi }) {
 
   return (
     <TooltipProvider>
-      <SidebarProvider className="h-dvh">
-        <LinkitShell
-          conversations={conversations.data ?? []}
-          me={me}
-          sdk={sdk}
-        />
-      </SidebarProvider>
+      <LinkitShell
+        conversations={conversations.data ?? []}
+        me={me}
+        sdk={sdk}
+      />
       <Toaster richColors theme={resolvedTheme} />
     </TooltipProvider>
   );
@@ -527,6 +510,10 @@ type NavigationItem = {
   label: string;
   to: string;
 };
+
+function navigationItems(items: NavigationItem[]): AppNavItem[] {
+  return items.map(({ to, label, icon: Icon }) => ({ to, label, icon: <Icon /> }));
+}
 
 function LinkitShell({
   conversations,
@@ -540,7 +527,6 @@ function LinkitShell({
   const { t } = useI18n();
   const location = useLocation();
   const navigate = useNavigate();
-  const { isMobile, setOpenMobile } = useSidebar();
   const workspaceItems: NavigationItem[] = [
     {
       icon: MessageCircleIcon,
@@ -583,163 +569,92 @@ function LinkitShell({
       to: "/admin/bark-users",
     },
   ];
-  const goTo = (to: string) => {
-    navigate(to);
-    if (isMobile) setOpenMobile(false);
-  };
+  const nav: AppNavGroup[] = [
+    { label: t("navigation.workspace"), items: navigationItems(workspaceItems) },
+    { label: t("navigation.tools"), items: navigationItems(toolItems) },
+    ...(me.root
+      ? [{ label: t("navigation.system"), items: navigationItems(systemItems) }]
+      : []),
+  ];
   const title = appPageTitle(location.pathname, t);
   const isConversationList = location.pathname === "/conversations";
 
   return (
-    <>
-      <Sidebar collapsible="icon">
-        <SidebarHeader className="px-3 py-4">
-          <Link
-            className="flex items-center gap-2 text-lg font-semibold"
-            to="/conversations"
-            onClick={() => isMobile && setOpenMobile(false)}
-          >
-            <LinkitMark className="size-7 shrink-0" />
-            <span className="group-data-[collapsible=icon]:hidden">Linkit</span>
-          </Link>
-        </SidebarHeader>
-        <SidebarContent>
-          <SidebarNavigationGroup
-            items={workspaceItems}
-            label={t("navigation.workspace")}
-            onNavigate={goTo}
-            pathname={location.pathname}
-          />
-          <SidebarNavigationGroup
-            items={toolItems}
-            label={t("navigation.tools")}
-            onNavigate={goTo}
-            pathname={location.pathname}
-          />
-          {me.root ? (
-            <SidebarNavigationGroup
-              items={systemItems}
-              label={t("navigation.system")}
-              onNavigate={goTo}
-              pathname={location.pathname}
-            />
-          ) : null}
-        </SidebarContent>
-      </Sidebar>
-      <SidebarInset>
-        <header className="flex h-14 shrink-0 items-center gap-3 border-b bg-background/95 px-4 backdrop-blur supports-backdrop-filter:bg-background/85">
-          <SidebarTrigger />
-          <Separator className="h-5" orientation="vertical" />
-          <h1 className="min-w-0 flex-1 truncate text-sm font-medium">
-            {title}
-          </h1>
-          {isConversationList ? (
-            <Button size="sm" onClick={() => navigate("/groups/new")}>
-              <PlusIcon data-icon="inline-start" />
-              {t("navigation.newGroup")}
-            </Button>
-          ) : null}
-          <LinkitMyInfo />
-        </header>
-        <div className="min-h-0 flex-1 overflow-auto">
-          <Routes>
-            <Route
-              path="/conversations"
-              element={
-                <ConversationIndex conversations={conversations} sdk={sdk} />
-              }
-            />
-            <Route
-              path="/conversations/:id"
-              element={<ConversationPage me={me} sdk={sdk} />}
-            />
-            <Route
-              path="/conversations/:id/manage"
-              element={<MobileGroupManager me={me} sdk={sdk} />}
-            />
-            <Route path="/directory" element={<Directory sdk={sdk} />} />
-            <Route path="/people/:username" element={<Person sdk={sdk} />} />
-            <Route path="/compose/:username" element={<Compose sdk={sdk} />} />
-            <Route path="/groups/new" element={<GroupCreator sdk={sdk} />} />
-            <Route path="/bots" element={<Bots sdk={sdk} />} />
-            <Route
-              path="/bots/:botId/conversations"
-              element={<BotViewConversations sdk={sdk} />}
-            />
-            <Route
-              path="/bots/:botId/conversations/:conversationId"
-              element={<BotViewConversation sdk={sdk} />}
-            />
-            <Route path="/settings/api-keys" element={<ApiKeys sdk={sdk} />} />
-            <Route
-              path="/settings/notifications"
-              element={<BarkNotifications sdk={sdk} />}
-            />
-            <Route
-              path="/admin/auth-mini-directory"
-              element={
-                me.root ? (
-                  <AuthMiniDirectory sdk={sdk} />
-                ) : (
-                  <Navigate to="/conversations" replace />
-                )
-              }
-            />
-            <Route
-              path="/admin/resources"
-              element={<SystemResourcesPage sdk={sdk} />}
-            />
-            <Route
-              path="/admin/bark-users"
-              element={<AdminBarkUsers sdk={sdk} />}
-            />
-            <Route
-              path="*"
-              element={<Navigate to="/conversations" replace />}
-            />
-          </Routes>
-        </div>
-      </SidebarInset>
-    </>
+    <AppLayout
+      logo={{
+        light: <LinkitMark className="size-7 shrink-0" />,
+        dark: <LinkitMark className="size-7 shrink-0" />,
+      }}
+      title="Linkit"
+      nav={nav}
+      pageTitle={title}
+      headerSlot={
+        isConversationList ? (
+          <Button size="sm" onClick={() => navigate("/groups/new")}>
+            <PlusIcon data-icon="inline-start" />
+            {t("navigation.newGroup")}
+          </Button>
+        ) : undefined
+      }
+    >
+      <Routes>
+        <Route
+          path="/conversations"
+          element={
+            <ConversationIndex conversations={conversations} sdk={sdk} />
+          }
+        />
+        <Route
+          path="/conversations/:id"
+          element={<ConversationPage me={me} sdk={sdk} />}
+        />
+        <Route
+          path="/conversations/:id/manage"
+          element={<MobileGroupManager me={me} sdk={sdk} />}
+        />
+        <Route path="/directory" element={<Directory sdk={sdk} />} />
+        <Route path="/people/:username" element={<Person sdk={sdk} />} />
+        <Route path="/compose/:username" element={<Compose sdk={sdk} />} />
+        <Route path="/groups/new" element={<GroupCreator sdk={sdk} />} />
+        <Route path="/bots" element={<Bots sdk={sdk} />} />
+        <Route
+          path="/bots/:botId/conversations"
+          element={<BotViewConversations sdk={sdk} />}
+        />
+        <Route
+          path="/bots/:botId/conversations/:conversationId"
+          element={<BotViewConversation sdk={sdk} />}
+        />
+        <Route path="/settings/api-keys" element={<ApiKeys sdk={sdk} />} />
+        <Route
+          path="/settings/notifications"
+          element={<BarkNotifications sdk={sdk} />}
+        />
+        <Route
+          path="/admin/auth-mini-directory"
+          element={
+            me.root ? (
+              <AuthMiniDirectory sdk={sdk} />
+            ) : (
+              <Navigate to="/conversations" replace />
+            )
+          }
+        />
+        <Route
+          path="/admin/resources"
+          element={<SystemResourcesPage sdk={sdk} />}
+        />
+        <Route
+          path="/admin/bark-users"
+          element={<AdminBarkUsers sdk={sdk} />}
+        />
+        <Route
+          path="*"
+          element={<Navigate to="/conversations" replace />}
+        />
+      </Routes>
+    </AppLayout>
   );
-}
-
-function SidebarNavigationGroup({
-  items,
-  label,
-  onNavigate,
-  pathname,
-}: {
-  items: NavigationItem[];
-  label: string;
-  onNavigate: (to: string) => void;
-  pathname: string;
-}) {
-  return (
-    <SidebarGroup>
-      <SidebarGroupLabel>{label}</SidebarGroupLabel>
-      <SidebarGroupContent>
-        <SidebarMenu>
-          {items.map((item) => (
-            <SidebarMenuItem key={item.to}>
-              <SidebarMenuButton
-                isActive={isNavigationActive(pathname, item.to)}
-                tooltip={item.label}
-                onClick={() => onNavigate(item.to)}
-              >
-                <item.icon />
-                <span>{item.label}</span>
-              </SidebarMenuButton>
-            </SidebarMenuItem>
-          ))}
-        </SidebarMenu>
-      </SidebarGroupContent>
-    </SidebarGroup>
-  );
-}
-
-function isNavigationActive(pathname: string, to: string) {
-  return pathname === to || pathname.startsWith(`${to}/`);
 }
 
 function appPageTitle(pathname: string, t: (key: TranslationKey) => string) {

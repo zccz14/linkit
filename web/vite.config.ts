@@ -6,6 +6,10 @@ import { defineConfig } from "vite";
 // https://vite.dev/config/
 export default defineConfig({
   plugins: [react(), tailwindcss()],
+  // @zccz14/ux resolves linkit-react-components by package name; keep it
+  // unbundled so the source alias below supplies the same provider instance
+  // as the rest of the application (one React context, one Linkit session).
+  optimizeDeps: { exclude: ["@zccz14/ux"] },
   server: {
     proxy: {
       "/api": "http://127.0.0.1:8080",

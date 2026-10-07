@@ -21,6 +21,7 @@
     "@tailwindcss/vite": "^4",
     "@tanstack/react-query": "^5.101.2",
     "@tanstack/react-table": "^8.21.3",
+    "@zccz14/ux": "0.1.4",
     "auth-mini": "^0.4.14",
     "auth-mini-react-components": "^0.6.10",
     "class-variance-authority": "^0.7.1",
