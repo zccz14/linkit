@@ -8,17 +8,22 @@ import {
 import { useState } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-const { searchUsers, linkit } = vi.hoisted(() => {
+const { searchUsers, notes, linkit } = vi.hoisted(() => {
   const searchUsers = vi.fn();
-  return { searchUsers, linkit: { searchUsers } };
+  const notes = new Map();
+  return { searchUsers, notes, linkit: { searchUsers } };
 });
-vi.mock("../src/linkit-provider.js", () => ({ useLinkit: () => linkit }));
+vi.mock("../src/linkit-provider.js", () => ({
+  useLinkit: () => linkit,
+  useLinkitUserNotes: () => notes,
+}));
 
 import { LinkitUserPicker } from "../src/user-picker.js";
 
 afterEach(() => {
   cleanup();
   vi.clearAllMocks();
+  notes.clear();
   vi.useRealTimers();
 });
 
@@ -68,7 +73,7 @@ describe("LinkitUserPicker", () => {
     expect(screen.getByText("alice")).toBeInTheDocument();
   });
 
-  it("passes a UUID-character query through and exposes its complete candidate-only identity", async () => {
+  it("passes a UUID-character query through and exposes its complete identity", async () => {
     vi.useFakeTimers();
     const uuidUser = {
       user_id: "a1b2c3d4-0000-0000-0000-000000000001",
@@ -149,7 +154,8 @@ describe("LinkitUserPicker", () => {
         .getAllByDisplayValue(/user-(alice|bob)/)
         .map((input) => input.getAttribute("name")),
     ).toEqual(["member_ids", "member_ids"]);
-    expect(screen.queryByText("user-alice")).not.toBeInTheDocument();
+    expect(screen.getByText("user-alice")).toBeInTheDocument();
+    expect(screen.getByText("user-bob")).toBeInTheDocument();
     expect(screen.getByText("alice")).toBeInTheDocument();
     expect(screen.getByText("bob")).toBeInTheDocument();
 
@@ -242,7 +248,83 @@ describe("LinkitUserPicker", () => {
     expect(option.querySelector(".linkit-avatar.linkit-avatar--sm.linkit-user-picker__option-avatar")).toBeInTheDocument();
     expect(option.querySelector(".linkit-user-picker__option-id")).toHaveTextContent(stableId);
     fireEvent.click(option);
-    expect(screen.queryByText(stableId)).not.toBeInTheDocument();
+    expect(screen.getByText(stableId)).toBeInTheDocument();
+    expect(screen.getByText(longUsername)).toBeInTheDocument();
+  });
+
+  it("shows the viewer's note name, username and complete user ID on candidates and selected members", async () => {
+    vi.useFakeTimers();
+    notes.set("user-alice", {
+      user_id: "user-alice",
+      name: "投资人",
+      updated_at: 1,
+    });
+    searchUsers.mockImplementation((term: string) =>
+      Promise.resolve(term === "bob" ? [bob] : [alice]),
+    );
+    function ControlledPicker() {
+      const [value, setValue] = useState<string[]>([]);
+      return (
+        <LinkitUserPicker
+          multiple
+          lang="zh-CN"
+          value={value}
+          onValueChange={(ids) => setValue(ids)}
+        />
+      );
+    }
+    render(<ControlledPicker />);
+
+    await searchFor("ali");
+    const noteOption = screen.getByRole("option", {
+      name: "投资人, alice, user-alice",
+    });
+    expect(
+      noteOption.querySelector(".linkit-user-picker__option-name"),
+    ).toHaveTextContent("投资人");
+    expect(
+      noteOption.querySelector(".linkit-user-picker__option-username"),
+    ).toHaveTextContent("alice");
+    expect(
+      noteOption.querySelector(".linkit-user-picker__option-id"),
+    ).toHaveTextContent("user-alice");
+
+    fireEvent.click(noteOption);
+    const noteChip = document.querySelectorAll(
+      ".linkit-user-picker__selected-user",
+    )[0];
+    expect(
+      noteChip?.querySelector(".linkit-user-picker__selected-name"),
+    ).toHaveTextContent("投资人");
+    expect(
+      noteChip?.querySelector(".linkit-user-picker__selected-username"),
+    ).toHaveTextContent("alice");
+    expect(
+      noteChip?.querySelector(".linkit-user-picker__selected-id"),
+    ).toHaveTextContent("user-alice");
+    expect(screen.getByRole("button", { name: "移除 alice" })).toBeInTheDocument();
+
+    await searchFor("bob");
+    const plainOption = screen.getByRole("option", {
+      name: "bob, user-bob",
+    });
+    expect(
+      plainOption.querySelector(".linkit-user-picker__option-name"),
+    ).toHaveTextContent("bob");
+    expect(
+      plainOption.querySelector(".linkit-user-picker__option-username"),
+    ).toBeNull();
+
+    fireEvent.click(plainOption);
+    const plainChip = document.querySelectorAll(
+      ".linkit-user-picker__selected-user",
+    )[1];
+    expect(
+      plainChip?.querySelector(".linkit-user-picker__selected-username"),
+    ).toBeNull();
+    expect(
+      plainChip?.querySelector(".linkit-user-picker__selected-id"),
+    ).toHaveTextContent("user-bob");
   });
 
   it("does not request users for whitespace-only input", () => {

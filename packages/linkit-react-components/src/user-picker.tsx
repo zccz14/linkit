@@ -7,7 +7,7 @@ import {
   type KeyboardEvent,
 } from "react";
 import { LinkitAvatar } from "./displays.js";
-import { useLinkit } from "./linkit-provider.js";
+import { useLinkit, useLinkitUserNotes } from "./linkit-provider.js";
 import type { LinkitUserSearchResult } from "./types.js";
 
 export type LinkitUserPickerLabels = {
@@ -220,6 +220,11 @@ function PickerControl({
         username: labels.unknown,
       },
   );
+  const noteIds = useMemo(
+    () => unique([...selectedIds, ...results.map((user) => user.user_id)]),
+    [selectedIds, results],
+  );
+  const notes = useLinkitUserNotes(noteIds);
 
   useEffect(() => {
     setSelectedUsers((current) =>
@@ -349,31 +354,53 @@ function PickerControl({
           aria-label={selectedLabel}
         >
           <div className="linkit-user-picker__selected-users">
-            {selected.map((user) => (
-              <div
-                className="linkit-user-picker__selected-user"
-                key={user.user_id}
-              >
-                <LinkitAvatar
-                  profile={user}
-                  fallback={user.username}
-                  size="sm"
-                />
-                <strong title={user.username}>{user.username}</strong>
-                <button
-                  type="button"
-                  className="linkit-user-picker__remove"
-                  disabled={disabled}
-                  aria-label={labels.remove.replace(
-                    "{username}",
-                    user.username,
-                  )}
-                  onClick={() => remove(user.user_id)}
+            {selected.map((user) => {
+              const note = notes.get(user.user_id) ?? null;
+              const displayName = note?.name || user.username;
+              return (
+                <div
+                  className="linkit-user-picker__selected-user"
+                  key={user.user_id}
                 >
-                  {selectionMode === "single" ? labels.clear : "×"}
-                </button>
-              </div>
-            ))}
+                  <LinkitAvatar
+                    profile={user}
+                    fallback={displayName}
+                    size="sm"
+                  />
+                  <span className="linkit-user-picker__selected-copy">
+                    <strong
+                      className="linkit-user-picker__selected-name"
+                      title={displayName}
+                    >
+                      {displayName}
+                    </strong>
+                    {note ? (
+                      <span
+                        className="linkit-user-picker__selected-username"
+                        title={user.username}
+                      >
+                        {user.username}
+                      </span>
+                    ) : null}
+                    <code className="linkit-user-picker__selected-id">
+                      {user.user_id}
+                    </code>
+                  </span>
+                  <button
+                    type="button"
+                    className="linkit-user-picker__remove"
+                    disabled={disabled}
+                    aria-label={labels.remove.replace(
+                      "{username}",
+                      user.username,
+                    )}
+                    onClick={() => remove(user.user_id)}
+                  >
+                    {selectionMode === "single" ? labels.clear : "×"}
+                  </button>
+                </div>
+              );
+            })}
           </div>
           {selectionMode === "multiple" && selectedIds.length > 1 ? (
             <button
@@ -433,35 +460,50 @@ function PickerControl({
             <p className="linkit-user-picker__status">{labels.empty}</p>
           ) : null}
           {!loading && !error
-            ? results.map((user, index) => (
-                <button
-                  id={`${listboxId}-option-${index}`}
-                  key={user.user_id}
-                  type="button"
-                  role="option"
-                  aria-label={`${user.username}, ${user.user_id}`}
-                  aria-selected={activeIndex === index}
-                  className="linkit-user-picker__option"
-                  data-active={activeIndex === index || undefined}
-                  onMouseDown={(event) => event.preventDefault()}
-                  onClick={() => choose(user)}
-                >
-                  <LinkitAvatar
-                    className="linkit-user-picker__option-avatar"
-                    profile={user}
-                    fallback={user.username}
-                    size="sm"
-                  />
-                  <span className="linkit-user-picker__option-copy">
-                    <strong className="linkit-user-picker__option-username">
-                      {user.username}
-                    </strong>
-                    <code className="linkit-user-picker__option-id">
-                      {user.user_id}
-                    </code>
-                  </span>
-                </button>
-              ))
+            ? results.map((user, index) => {
+                const note = notes.get(user.user_id) ?? null;
+                const displayName = note?.name || user.username;
+                return (
+                  <button
+                    id={`${listboxId}-option-${index}`}
+                    key={user.user_id}
+                    type="button"
+                    role="option"
+                    aria-label={note ? `${note.name}, ${user.username}, ${user.user_id}` : `${user.username}, ${user.user_id}`}
+                    aria-selected={activeIndex === index}
+                    className="linkit-user-picker__option"
+                    data-active={activeIndex === index || undefined}
+                    onMouseDown={(event) => event.preventDefault()}
+                    onClick={() => choose(user)}
+                  >
+                    <LinkitAvatar
+                      className="linkit-user-picker__option-avatar"
+                      profile={user}
+                      fallback={displayName}
+                      size="sm"
+                    />
+                    <span className="linkit-user-picker__option-copy">
+                      <strong
+                        className="linkit-user-picker__option-name"
+                        title={displayName}
+                      >
+                        {displayName}
+                      </strong>
+                      {note ? (
+                        <span
+                          className="linkit-user-picker__option-username"
+                          title={user.username}
+                        >
+                          {user.username}
+                        </span>
+                      ) : null}
+                      <code className="linkit-user-picker__option-id">
+                        {user.user_id}
+                      </code>
+                    </span>
+                  </button>
+                );
+              })
             : null}
         </div>
       ) : null}
