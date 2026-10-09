@@ -87,7 +87,7 @@ describe("LinkitUserPicker", () => {
     expect(option.querySelector(".linkit-user-picker__option-id")).toHaveTextContent(uuidUser.user_id);
     expect(screen.getByRole("combobox")).toHaveAttribute(
       "placeholder",
-      "Search username or UUID",
+      "Search username, UUID or note",
     );
   });
 

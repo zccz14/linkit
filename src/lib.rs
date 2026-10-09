@@ -1304,22 +1304,28 @@ struct UserSearchResponse {
 
 async fn search_users(
     State(state): State<AppState>,
+    axum::Extension(user): axum::Extension<UserIdentity>,
     Query(query): Query<UserQuery>,
 ) -> Result<axum::Json<Vec<UserSearchResponse>>, AppError> {
     let query = bounded(&query.query.unwrap_or_default(), "query", 80)?;
     if query.is_empty() {
         return Ok(axum::Json(Vec::new()));
     }
-    let username_prefix = format!("{}%", escape_like(&query));
+    let name_fragment = format!("%{}%", escape_like(&query));
+    let name_prefix = format!("{}%", escape_like(&query));
     let rows = if uuid_charset_query(&query) {
-        let user_id_prefix = format!("{query}%");
+        let user_id_fragment = format!("%{query}%");
         sqlx::query_as::<_, UserSearchResult>(
             "WITH matches AS (
                 SELECT user_id,username,avatar_attachment_id,updated_at,0 AS source
                 FROM profiles
-                WHERE username LIKE ? ESCAPE '\\' COLLATE NOCASE
+                WHERE username LIKE ? ESCAPE '\\\' COLLATE NOCASE
                 UNION ALL
-                SELECT u.id,COALESCE(p.username,u.id),p.avatar_attachment_id,COALESCE(p.updated_at,u.created_at),1 AS source
+                SELECT n.target_user_id,COALESCE(p.username,u.id),p.avatar_attachment_id,COALESCE(p.updated_at,u.created_at),1 AS source
+                FROM user_notes n JOIN users u ON u.id=n.target_user_id LEFT JOIN profiles p ON p.user_id=n.target_user_id
+                WHERE n.owner_user_id=? AND n.name LIKE ? ESCAPE '\\\' COLLATE NOCASE
+                UNION ALL
+                SELECT u.id,COALESCE(p.username,u.id),p.avatar_attachment_id,COALESCE(p.updated_at,u.created_at),2 AS source
                 FROM users u LEFT JOIN profiles p ON p.user_id=u.id
                 WHERE u.id LIKE ? COLLATE NOCASE
              ), deduplicated AS (
@@ -1332,27 +1338,51 @@ async fn search_users(
              ORDER BY CASE
                  WHEN user_id=? COLLATE NOCASE THEN 0
                  WHEN username=? COLLATE NOCASE THEN 1
-                 WHEN source=0 THEN 2
+                 WHEN username LIKE ? ESCAPE '\\\' COLLATE NOCASE THEN 2
                  ELSE 3
-             END, username COLLATE NOCASE, user_id
+             END, source, username COLLATE NOCASE, user_id
              LIMIT 5",
         )
-        .bind(&username_prefix)
-        .bind(&user_id_prefix)
+        .bind(&name_fragment)
+        .bind(&user.id)
+        .bind(&name_fragment)
+        .bind(&user_id_fragment)
         .bind(&query)
         .bind(&query)
+        .bind(&name_prefix)
         .fetch_all(&state.db)
         .await?
     } else {
         sqlx::query_as::<_, UserSearchResult>(
-            "SELECT user_id,username,avatar_attachment_id,updated_at
-             FROM profiles
-             WHERE username LIKE ? ESCAPE '\\' COLLATE NOCASE
-             ORDER BY CASE WHEN username=? COLLATE NOCASE THEN 0 ELSE 1 END, username COLLATE NOCASE
+            "WITH matches AS (
+                SELECT user_id,username,avatar_attachment_id,updated_at,0 AS source
+                FROM profiles
+                WHERE username LIKE ? ESCAPE '\\\' COLLATE NOCASE
+                UNION ALL
+                SELECT n.target_user_id,COALESCE(p.username,u.id),p.avatar_attachment_id,COALESCE(p.updated_at,u.created_at),1 AS source
+                FROM user_notes n JOIN users u ON u.id=n.target_user_id LEFT JOIN profiles p ON p.user_id=n.target_user_id
+                WHERE n.owner_user_id=? AND n.name LIKE ? ESCAPE '\\\' COLLATE NOCASE
+             ), deduplicated AS (
+                SELECT user_id,username,avatar_attachment_id,updated_at,MIN(source) AS source
+                FROM matches
+                GROUP BY user_id,username,avatar_attachment_id,updated_at
+             )
+             SELECT user_id,username,avatar_attachment_id,updated_at
+             FROM deduplicated
+             ORDER BY CASE
+                 WHEN user_id=? COLLATE NOCASE THEN 0
+                 WHEN username=? COLLATE NOCASE THEN 1
+                 WHEN username LIKE ? ESCAPE '\\\' COLLATE NOCASE THEN 2
+                 ELSE 3
+             END, source, username COLLATE NOCASE, user_id
              LIMIT 5",
         )
-        .bind(&username_prefix)
+        .bind(&name_fragment)
+        .bind(&user.id)
+        .bind(&name_fragment)
         .bind(&query)
+        .bind(&query)
+        .bind(&name_prefix)
         .fetch_all(&state.db)
         .await?
     };
@@ -3522,6 +3552,9 @@ mod tests {
 
         let axum::Json(matches) = search_users(
             State(test_state(pool.clone())),
+            axum::Extension(UserIdentity {
+                id: "viewer".into(),
+            }),
             Query(UserQuery {
                 query: Some("  AL  ".to_owned()),
             }),
@@ -3545,6 +3578,9 @@ mod tests {
 
         let axum::Json(empty) = search_users(
             State(test_state(pool)),
+            axum::Extension(UserIdentity {
+                id: "viewer".into(),
+            }),
             Query(UserQuery {
                 query: Some("   ".to_owned()),
             }),
@@ -3555,7 +3591,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn user_search_matches_uuid_charset_user_id_prefixes_without_dropping_usernames() {
+    async fn user_search_matches_uuid_charset_user_id_fragments_without_dropping_usernames() {
         let pool = db::connect_memory().await.unwrap();
         sqlx::query(
             "UPDATE app_meta SET value='https://linkit.example.test' WHERE key='public_origin'",
@@ -3588,6 +3624,9 @@ mod tests {
 
         let axum::Json(prefix_matches) = search_users(
             State(test_state(pool.clone())),
+            axum::Extension(UserIdentity {
+                id: "viewer".into(),
+            }),
             Query(UserQuery {
                 query: Some(" A1B2C3D4- ".to_owned()),
             }),
@@ -3610,6 +3649,9 @@ mod tests {
 
         let axum::Json(exact_match) = search_users(
             State(test_state(pool.clone())),
+            axum::Extension(UserIdentity {
+                id: "viewer".into(),
+            }),
             Query(UserQuery {
                 query: Some("A1B2C3D4-0000-0000-0000-000000000001".to_owned()),
             }),
@@ -3623,6 +3665,9 @@ mod tests {
 
         let axum::Json(username_matches) = search_users(
             State(test_state(pool.clone())),
+            axum::Extension(UserIdentity {
+                id: "viewer".into(),
+            }),
             Query(UserQuery {
                 query: Some("a1b2".to_owned()),
             }),
@@ -3631,8 +3676,42 @@ mod tests {
         .unwrap();
         assert!(username_matches.iter().any(|user| user.username == "a1b2"));
 
+        let axum::Json(fragment_matches) = search_users(
+            State(test_state(pool.clone())),
+            axum::Extension(UserIdentity {
+                id: "viewer".into(),
+            }),
+            Query(UserQuery {
+                query: Some("0004".to_owned()),
+            }),
+        )
+        .await
+        .unwrap();
+        assert_eq!(fragment_matches.len(), 1);
+        assert_eq!(
+            fragment_matches[0].user_id,
+            "a1b2c3d4-0000-0000-0000-000000000004"
+        );
+
+        let axum::Json(name_fragment_matches) = search_users(
+            State(test_state(pool.clone())),
+            axum::Extension(UserIdentity {
+                id: "viewer".into(),
+            }),
+            Query(UserQuery {
+                query: Some("nother".to_owned()),
+            }),
+        )
+        .await
+        .unwrap();
+        assert_eq!(name_fragment_matches.len(), 1);
+        assert_eq!(name_fragment_matches[0].username, "another");
+
         let axum::Json(non_uuid_matches) = search_users(
             State(test_state(pool.clone())),
+            axum::Extension(UserIdentity {
+                id: "viewer".into(),
+            }),
             Query(UserQuery {
                 query: Some("abcdefg".to_owned()),
             }),
@@ -3644,6 +3723,9 @@ mod tests {
 
         let axum::Json(special_username_matches) = search_users(
             State(test_state(pool.clone())),
+            axum::Extension(UserIdentity {
+                id: "viewer".into(),
+            }),
             Query(UserQuery {
                 query: Some("#?".to_owned()),
             }),
@@ -3655,18 +3737,156 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn user_id_nocase_index_supports_uuid_prefix_search() {
+    async fn user_search_fuzzy_matches_username_fragments_and_ranks_prefixes_first() {
         let pool = db::connect_memory().await.unwrap();
-        let plan: Vec<(i64, i64, i64, String)> = sqlx::query_as(
-            "EXPLAIN QUERY PLAN SELECT user_id FROM profiles WHERE user_id LIKE 'a1b2%' COLLATE NOCASE",
+        for (user_id, username) in [
+            ("lin-1", "lily"),
+            ("lin-2", "lin"),
+            ("lin-3", "julie"),
+            ("lin-4", "alice"),
+            ("lin-5", "bob"),
+        ] {
+            sqlx::query("INSERT INTO users(id,created_at) VALUES(?,0)")
+                .bind(user_id)
+                .execute(&pool)
+                .await
+                .unwrap();
+            sqlx::query("INSERT INTO profiles(user_id,username,intro,updated_at) VALUES(?,?,'',0)")
+                .bind(user_id)
+                .bind(username)
+                .execute(&pool)
+                .await
+                .unwrap();
+        }
+
+        let axum::Json(matches) = search_users(
+            State(test_state(pool.clone())),
+            axum::Extension(UserIdentity {
+                id: "viewer".into(),
+            }),
+            Query(UserQuery {
+                query: Some("li".to_owned()),
+            }),
         )
-        .fetch_all(&pool)
         .await
         .unwrap();
-        assert!(
-            plan.iter()
-                .any(|(_, _, _, detail)| detail.contains("profiles_user_id_nocase"))
+        assert_eq!(
+            matches
+                .iter()
+                .map(|user| user.username.as_str())
+                .collect::<Vec<_>>(),
+            ["lily", "lin", "alice", "julie"]
         );
+
+        let axum::Json(fragment) = search_users(
+            State(test_state(pool)),
+            axum::Extension(UserIdentity {
+                id: "viewer".into(),
+            }),
+            Query(UserQuery {
+                query: Some("lic".to_owned()),
+            }),
+        )
+        .await
+        .unwrap();
+        assert_eq!(fragment.len(), 1);
+        assert_eq!(fragment[0].username, "alice");
+    }
+
+    #[tokio::test]
+    async fn user_search_fuzzy_matches_viewer_notes_privately() {
+        let pool = db::connect_memory().await.unwrap();
+        for (user_id, username) in [("alice", "alice"), ("bob", "bob"), ("carol", "carol")] {
+            sqlx::query("INSERT INTO users(id,created_at) VALUES(?,0)")
+                .bind(user_id)
+                .execute(&pool)
+                .await
+                .unwrap();
+            sqlx::query("INSERT INTO profiles(user_id,username,intro,updated_at) VALUES(?,?,'',0)")
+                .bind(user_id)
+                .bind(username)
+                .execute(&pool)
+                .await
+                .unwrap();
+        }
+        sqlx::query("INSERT INTO users(id,created_at) VALUES('quiet',0)")
+            .execute(&pool)
+            .await
+            .unwrap();
+        for (owner, target, name) in [
+            ("alice", "bob", "Fund investor"),
+            ("alice", "quiet", "王总"),
+            ("alice", "ghost", "Fund investor"),
+            ("bob", "carol", "secret fund"),
+        ] {
+            sqlx::query("INSERT INTO user_notes(owner_user_id,target_user_id,name,updated_at) VALUES(?,?,?,0)")
+                .bind(owner)
+                .bind(target)
+                .bind(name)
+                .execute(&pool)
+                .await
+                .unwrap();
+        }
+
+        let axum::Json(alice_matches) = search_users(
+            State(test_state(pool.clone())),
+            axum::Extension(UserIdentity { id: "alice".into() }),
+            Query(UserQuery {
+                query: Some("FUND".to_owned()),
+            }),
+        )
+        .await
+        .unwrap();
+        assert_eq!(alice_matches.len(), 1);
+        assert_eq!(alice_matches[0].user_id, "bob");
+
+        let axum::Json(infix_matches) = search_users(
+            State(test_state(pool.clone())),
+            axum::Extension(UserIdentity { id: "alice".into() }),
+            Query(UserQuery {
+                query: Some("vest".to_owned()),
+            }),
+        )
+        .await
+        .unwrap();
+        assert_eq!(infix_matches.len(), 1);
+        assert_eq!(infix_matches[0].username, "bob");
+
+        let axum::Json(profileless_target) = search_users(
+            State(test_state(pool.clone())),
+            axum::Extension(UserIdentity { id: "alice".into() }),
+            Query(UserQuery {
+                query: Some("王总".to_owned()),
+            }),
+        )
+        .await
+        .unwrap();
+        assert_eq!(profileless_target.len(), 1);
+        assert_eq!(profileless_target[0].user_id, "quiet");
+        assert_eq!(profileless_target[0].username, "quiet");
+
+        let axum::Json(bob_matches) = search_users(
+            State(test_state(pool.clone())),
+            axum::Extension(UserIdentity { id: "bob".into() }),
+            Query(UserQuery {
+                query: Some("fund".to_owned()),
+            }),
+        )
+        .await
+        .unwrap();
+        assert_eq!(bob_matches.len(), 1);
+        assert_eq!(bob_matches[0].user_id, "carol");
+
+        let axum::Json(carol_matches) = search_users(
+            State(test_state(pool)),
+            axum::Extension(UserIdentity { id: "carol".into() }),
+            Query(UserQuery {
+                query: Some("fund".to_owned()),
+            }),
+        )
+        .await
+        .unwrap();
+        assert!(carol_matches.is_empty());
     }
 
     #[test]

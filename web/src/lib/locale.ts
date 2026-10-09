@@ -115,7 +115,7 @@ const english = {
     "Create a shared conversation and invite people by username.",
   "group.name": "Group name",
   "group.members": "Members",
-  "group.membersPlaceholder": "Search username or UUID",
+  "group.membersPlaceholder": "Search username, UUID or note",
   "group.create": "Create group",
   "bots.title": "Bots",
   "bots.description":
@@ -360,7 +360,7 @@ const chinese: Record<TranslationKey, string> = {
   "group.description": "创建共享对话，并通过用户名邀请成员。",
   "group.name": "群聊名称",
   "group.members": "成员",
-  "group.membersPlaceholder": "搜索用户名或 UUID",
+  "group.membersPlaceholder": "搜索用户名、UUID 或备注",
   "group.create": "创建群聊",
   "bots.title": "机器人",
   "bots.description":
