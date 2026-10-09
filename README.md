@@ -28,7 +28,8 @@ speak as a human user.
   human control owner, an `sk-…` bearer token, owner transfer, and token
   rotation. A Bot uses the same profile and conversation APIs as a user, and
   its owner can open a read-only view of the Bot's conversations. Any group
-  member can add their own Bots to a group without being its owner.
+  member can add users to a group, including their own Bots; only the group
+  owner can remove members.
 - **User API keys** — personal `uk-…` tokens created on the **API keys** page
   authenticate as their creating human on the normal routes, so scripts can
   send messages as you; revocation is immediate.

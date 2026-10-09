@@ -31,3 +31,12 @@ test("adding a bot reuses the membership endpoint with the bot's user id", () =>
   assert.match(manage, /onClick=\{\(\) => addBot\.mutate\(bot\.id\)\}/);
   assert.match(manage, /toast\.success\(t\("conversation\.addBotSuccess"\)\)/);
 });
+test("every member adds users while only the owner removes members", () => {
+  assert.doesNotMatch(manage, /isOwner \? \(\s*<form/);
+  assert.match(
+    manage,
+    /disabled=\{!username\.trim\(\) \|\| addMember\.isPending\}/,
+  );
+  assert.match(manage, /canRemove=\{isOwner && member\.role !== "owner"\}/);
+  assert.match(manage, /t\("conversation\.onlyOwnerCanRemove"\)/);
+});

@@ -46,11 +46,10 @@ curl --fail-with-body https://linkit.ntnl.io/api/conversations/CONVERSATION_ID/m
 ```
 
 `GET /api/conversations/{id}` 返回 Bot 可见的会话和成员。`PATCH` 同一路径可改群名；
-`DELETE /api/conversations/{id}/members` 配合 `{ "user_id": "…" }` 可移除普通成员。
+`DELETE /api/conversations/{id}/members` 配合 `{ "user_id": "…" }` 可移除普通成员（仅群主）。
 
-成员管理权限：群主可以增删任意成员；非群主的群成员也可以把自己的 Bot 拉进群聊（向
-`POST /api/conversations/{id}/members` 传该 Bot 的 `user_id`），无需管理员身份，但只能
-加入自己拥有的 Bot。
+成员管理权限：拉人进群对所有群成员开放（向 `POST /api/conversations/{id}/members` 传对方
+的 `user_id`，无需群主身份）；移除成员则仅限群主。
 
 ## 3. 私信与控制面边界
 

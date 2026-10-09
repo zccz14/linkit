@@ -1772,28 +1772,31 @@ function GroupManagementContent({
               />
             ))}
           </div>
-          {isOwner ? (
-            <form
-              className="flex gap-2"
-              onSubmit={(event) => {
-                event.preventDefault();
-                if (username.trim()) addMember.mutate();
-              }}
-            >
-              <Input
-                value={username}
-                onChange={(event) => setUsername(event.target.value)}
-                placeholder={t("conversation.memberPlaceholder")}
-              />
-              <Button
-                type="submit"
-                disabled={!username.trim() || addMember.isPending}
-              >
-                <PlusIcon data-icon="inline-start" />
-                {t("conversation.addMember")}
-              </Button>
-            </form>
+          {!isOwner ? (
+            <p className="text-xs text-muted-foreground">
+              {t("conversation.onlyOwnerCanRemove")}
+            </p>
           ) : null}
+          <form
+            className="flex gap-2"
+            onSubmit={(event) => {
+              event.preventDefault();
+              if (username.trim()) addMember.mutate();
+            }}
+          >
+            <Input
+              value={username}
+              onChange={(event) => setUsername(event.target.value)}
+              placeholder={t("conversation.memberPlaceholder")}
+            />
+            <Button
+              type="submit"
+              disabled={!username.trim() || addMember.isPending}
+            >
+              <PlusIcon data-icon="inline-start" />
+              {t("conversation.addMember")}
+            </Button>
+          </form>
         </section>
         {availableBots.length ? (
           <section className="flex flex-col gap-3">
