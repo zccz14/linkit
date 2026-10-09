@@ -348,6 +348,7 @@ mod tests {
         assert_eq!(user_type, "bot");
         let results = crate::search_users(
             State(state.clone()),
+            root(),
             Query(crate::UserQuery {
                 query: Some(NEW_USER.to_owned()),
             }),
@@ -559,11 +560,14 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn user_id_search_uses_the_users_nocase_index() {
+    async fn user_id_lookup_uses_the_users_nocase_index() {
         let db = crate::db::connect_memory().await.unwrap();
-        let plan: Vec<(i64, i64, i64, String)> = sqlx::query_as(
-            "EXPLAIN QUERY PLAN SELECT u.id,p.username FROM users u LEFT JOIN profiles p ON p.user_id=u.id WHERE u.id LIKE ? COLLATE NOCASE"
-        ).bind("0000%").fetch_all(&db).await.unwrap();
+        let plan: Vec<(i64, i64, i64, String)> =
+            sqlx::query_as("EXPLAIN QUERY PLAN SELECT id FROM users WHERE id=? COLLATE NOCASE")
+                .bind("0000")
+                .fetch_all(&db)
+                .await
+                .unwrap();
         assert!(plan.iter().any(|row| row.3.contains("users_id_nocase")));
     }
 
