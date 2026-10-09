@@ -31,12 +31,20 @@ test("adding a bot reuses the membership endpoint with the bot's user id", () =>
   assert.match(manage, /onClick=\{\(\) => addBot\.mutate\(bot\.id\)\}/);
   assert.match(manage, /toast\.success\(t\("conversation\.addBotSuccess"\)\)/);
 });
-test("every member adds users while only the owner removes members", () => {
+test("member adding uses the controlled multi user picker", () => {
   assert.doesNotMatch(manage, /isOwner \? \(\s*<form/);
+  assert.match(manage, /<LinkitUserPicker\s+multiple/);
+  assert.match(manage, /value=\{memberIds\}/);
   assert.match(
     manage,
-    /disabled=\{!username\.trim\(\) \|\| addMember\.isPending\}/,
+    /onValueChange=\{\(userIds\) => setMemberIds\(userIds\)\}/,
   );
+  assert.match(manage, /body: JSON\.stringify\(\{ user_id: userId \}\)/);
+  assert.match(manage, /setMemberIds\(\[\]\)/);
+  assert.doesNotMatch(manage, /conversation\.memberPlaceholder/);
+});
+
+test("only the owner removes members", () => {
   assert.match(manage, /canRemove=\{isOwner && member\.role !== "owner"\}/);
   assert.match(manage, /t\("conversation\.onlyOwnerCanRemove"\)/);
 });

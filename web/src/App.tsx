@@ -1587,7 +1587,7 @@ function GroupManagementContent({
   const [groupAvatar, setGroupAvatar] = useState(
     detail.avatar_attachment_id ?? "",
   );
-  const [username, setUsername] = useState("");
+  const [memberIds, setMemberIds] = useState<string[]>([]);
   useEffect(() => {
     setGroupTitle(detail.title);
     setGroupAvatar(detail.avatar_attachment_id ?? "");
@@ -1636,19 +1636,17 @@ function GroupManagementContent({
     }
   };
 
-  const addMember = useMutation({
-    mutationFn: async () => {
-      const member = await api<Profile>(
-        sdk,
-        `/api/users/${encodeURIComponent(username.trim())}`,
-      );
-      return api(sdk, `/api/conversations/${detail.id}/members`, {
-        method: "POST",
-        body: JSON.stringify({ user_id: member.user_id }),
-      });
+  const addMembers = useMutation({
+    mutationFn: async (userIds: string[]) => {
+      for (const userId of userIds) {
+        await api(sdk, `/api/conversations/${detail.id}/members`, {
+          method: "POST",
+          body: JSON.stringify({ user_id: userId }),
+        });
+      }
     },
     onSuccess: () => {
-      setUsername("");
+      setMemberIds([]);
       refresh();
     },
     onError: (error) => toast.error(error.message),
@@ -1778,20 +1776,23 @@ function GroupManagementContent({
             </p>
           ) : null}
           <form
-            className="flex gap-2"
+            className="flex flex-col gap-2"
             onSubmit={(event) => {
               event.preventDefault();
-              if (username.trim()) addMember.mutate();
+              if (memberIds.length) addMembers.mutate(memberIds);
             }}
           >
-            <Input
-              value={username}
-              onChange={(event) => setUsername(event.target.value)}
-              placeholder={t("conversation.memberPlaceholder")}
+            <LinkitUserPicker
+              multiple
+              value={memberIds}
+              onValueChange={(userIds) => setMemberIds(userIds)}
+              disabled={addMembers.isPending}
+              lang={document.documentElement.lang}
+              placeholder={t("group.membersPlaceholder")}
             />
             <Button
               type="submit"
-              disabled={!username.trim() || addMember.isPending}
+              disabled={!memberIds.length || addMembers.isPending}
             >
               <PlusIcon data-icon="inline-start" />
               {t("conversation.addMember")}
