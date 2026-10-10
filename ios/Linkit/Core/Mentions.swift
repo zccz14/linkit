@@ -75,7 +75,7 @@ enum Mentions {
     static func isHandleContinuation(_ character: Character) -> Bool {
         if character == "-" || character == "_" { return true }
         return character.unicodeScalars.allSatisfy { scalar in
-            CharacterSet.letters.contains(scalar) || CharacterSet.numeric.contains(scalar)
+            CharacterSet.letters.contains(scalar) || CharacterSet.decimalDigits.contains(scalar)
         }
     }
 

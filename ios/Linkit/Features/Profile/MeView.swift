@@ -20,7 +20,7 @@ struct MeView: View {
                     }
                 }
                 Section(app.locale.t("me.instance")) {
-                    LabeledContent(app.locale.t("me.server"), value: app.auth.instanceURL.host ?? app.auth.instanceURL.absoluteString)
+                    detailRow(app.locale.t("me.server"), app.auth.instanceURL.host ?? app.auth.instanceURL.absoluteString)
                 }
                 Section {
                     Button(app.locale.t("me.signOut"), role: .destructive) {
@@ -28,7 +28,7 @@ struct MeView: View {
                     }
                 }
                 Section(app.locale.t("me.about")) {
-                    LabeledContent(app.locale.t("me.version"), value: Self.appVersion)
+                    detailRow(app.locale.t("me.version"), Self.appVersion)
                 }
                 if let errorText {
                     Section {
@@ -106,6 +106,15 @@ struct MeView: View {
                 Task { await save(theme: nil, language: value == "zh-Hans" ? "zh-CN" : "en-US") }
             }
         )
+    }
+
+    private func detailRow(_ label: String, _ value: String) -> some View {
+        HStack {
+            Text(label)
+            Spacer()
+            Text(value)
+                .foregroundStyle(.secondary)
+        }
     }
 
     private func save(theme: String?, language: String?) async {
