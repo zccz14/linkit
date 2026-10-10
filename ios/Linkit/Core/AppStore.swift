@@ -10,7 +10,7 @@ final class AppStore {
     var me: APIMe?
     var conversations: [APIConversation] = []
     var unreadTotal = 0
-    private(set) var profiles: [String: APIPublicProfile] = {}
+    private(set) var profiles: [String: APIPublicProfile] = [:]
 
     private var resolvedProfileIDs: Set<String> = []
 
