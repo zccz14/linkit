@@ -1,0 +1,66 @@
+name: ios
+
+on:
+  pull_request:
+    paths:
+      - "ios/**"
+      - ".github/workflows/ios.yml"
+  push:
+    branches: [main]
+    paths:
+      - "ios/**"
+      - ".github/workflows/ios.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ios-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  ios:
+    name: ios
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@v7
+      - name: Select the newest Xcode
+        run: |
+          XCODE="$(ls -d /Applications/Xcode_*.app | sort -V | tail -1)"
+          sudo xcode-select -s "$XCODE/Contents/Developer"
+          xcodebuild -version
+      - name: Install XcodeGen
+        run: brew install xcodegen
+      - name: Generate the Xcode project
+        working-directory: ios
+        run: xcodegen generate
+      - name: Build for the iOS simulator
+        working-directory: ios
+        run: |
+          xcodebuild -project Linkit.xcodeproj -scheme Linkit -configuration Debug \
+            -destination "generic/platform=iOS Simulator" \
+            -derivedDataPath build \
+            CODE_SIGNING_ALLOWED=NO build
+      - name: Run unit tests
+        working-directory: ios
+        run: |
+          xcodebuild -project Linkit.xcodeproj -scheme Linkit -configuration Debug \
+            -destination "platform=iOS Simulator,name=iPhone 17,OS=latest" \
+            -derivedDataPath build \
+            CODE_SIGNING_ALLOWED=NO test
+      - name: Capture a simulator screenshot
+        working-directory: ios
+        run: |
+          UDID="$(xcrun simctl list devices available | sed -n 's/.*iPhone 17 (\([0-9A-F-]*\)).*/\1/p' | head -1)"
+          test -n "$UDID"
+          xcrun simctl boot "$UDID" || true
+          xcrun simctl bootstatus "$UDID" -b
+          xcrun simctl install "$UDID" build/Build/Products/Debug-iphonesimulator/Linkit.app
+          xcrun simctl launch "$UDID" io.ntnl.linkit
+          sleep 8
+          mkdir -p artifacts
+          xcrun simctl io "$UDID" screenshot artifacts/simulator.png
+      - uses: actions/upload-artifact@v7
+        with:
+          name: ios-simulator-screenshot
+          path: ios/artifacts/simulator.png

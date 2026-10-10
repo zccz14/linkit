@@ -6,3 +6,8 @@
 
 /packages/linkit-react-components/node_modules
 /packages/linkit-react-components/dist
+
+/ios/build
+/ios/DerivedData
+/ios/Linkit.xcodeproj
+/ios/artifacts

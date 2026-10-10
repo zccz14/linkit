@@ -33,6 +33,9 @@ speak as a human user.
 - **User API keys** — personal `uk-…` tokens created on the **API keys** page
   authenticate as their creating human on the normal routes, so scripts can
   send messages as you; revocation is immediate.
+- **Native iOS app** — a SwiftUI client under [`ios/`](ios/README.md) with Auth Mini sign-in,
+  direct and group messaging, mentions, attachments, live SSE updates and profile
+  preferences.
 - **Auth Mini** — setup verifies its `root_user_id` against an Auth Mini JWT;
   authenticated requests validate JWTs against the configured issuer and audience,
   then silently ensure the user's account and default profile exist. No separate
@@ -179,6 +182,12 @@ through AWS Systems Manager to the configured EC2 instance.
 Bootstrap a new Ubuntu host with `deploy/bootstrap-ubuntu.sh`, configure
 `linkit.ntnl.io` DNS, obtain its TLS certificate with Certbot, and set repository
 variables `AWS_DEPLOY_ROLE_ARN`, `AWS_REGION`, and `EC2_INSTANCE_ID`.
+
+## Native iOS app
+
+`ios/` contains the native SwiftUI client. The Xcode project is generated with XcodeGen
+from `ios/project.yml`; see [ios/README.md](ios/README.md) for the feature set,
+architecture, sign-in flow and CI details.
 
 ## Design boundary
 

@@ -1,0 +1,82 @@
+/* Conversations */
+"chat.attachFile" = "File";
+"chat.attachPhoto" = "Photo";
+"chat.bot" = "Bot";
+"chat.deletedBot" = "Deleted bot";
+"chat.direct" = "Direct message";
+"chat.downloading" = "Downloading…";
+"chat.emptyDescription" = "Start a direct message from the directory or create a group.";
+"chat.emptyTitle" = "No conversations yet";
+"chat.loadOlder" = "Load earlier messages";
+"chat.loadingOlder" = "Loading…";
+"chat.mention" = "Mention a member";
+"chat.placeholder" = "Write a message…";
+"chat.untitledGroup" = "Untitled group";
+"chat.urgent" = "Urgent";
+"chat.urgentNotice" = "Urgent messages push a loud notification to every member.";
+
+/* Shared */
+"common.cancel" = "Cancel";
+"common.done" = "Done";
+"common.error" = "Something went wrong";
+"common.loading" = "Loading…";
+"common.save" = "Save";
+
+/* Directory */
+"dir.emptyDescription" = "Search people by username or user ID.";
+"dir.emptyTitle" = "No people found";
+"dir.searchPrompt" = "Search people";
+
+/* Profile editor */
+"edit.avatar" = "Avatar";
+"edit.chooseAvatar" = "Choose image";
+"edit.intro" = "Intro";
+"edit.removeAvatar" = "Remove avatar";
+"edit.title" = "Edit profile";
+"edit.username" = "Username";
+
+/* Groups */
+"group.addMember" = "Add member";
+"group.create" = "Create group";
+"group.delete" = "Delete group";
+"group.deleteConfirm" = "Delete this group for everyone?";
+"group.manage" = "Group";
+"group.member" = "Member";
+"group.members" = "Members";
+"group.name" = "Group name";
+"group.owner" = "Owner";
+"group.saveTitle" = "Save name";
+"group.titleSection" = "Group name";
+
+/* Sign-in */
+"login.instance" = "Server: %@";
+"login.instanceHint" = "Point the app at any Linkit instance. The default is linkit.ntnl.io.";
+"login.instancePlaceholder" = "https://linkit.example.com";
+"login.instanceTitle" = "Server address";
+"login.invalidInstance" = "Enter a valid server address.";
+"login.signIn" = "Sign in with Auth Mini";
+"login.tagline" = "Profiles, direct messages and group chats, powered by your instance.";
+
+/* Me */
+"me.about" = "About";
+"me.appearance" = "Appearance";
+"me.editProfile" = "Edit profile";
+"me.instance" = "Instance";
+"me.language" = "Language";
+"me.server" = "Server";
+"me.signOut" = "Sign out";
+"me.signOutConfirm" = "Sign out of this instance?";
+"me.theme" = "Theme";
+"me.theme.dark" = "Dark";
+"me.theme.light" = "Light";
+"me.theme.system" = "System";
+"me.version" = "Version";
+
+/* People */
+"person.message" = "Message";
+"person.self" = "This is you.";
+
+/* Tabs */
+"tab.chats" = "Chats";
+"tab.directory" = "Directory";
+"tab.me" = "Me";
