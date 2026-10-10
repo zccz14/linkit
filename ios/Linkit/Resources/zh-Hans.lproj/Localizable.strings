@@ -1,0 +1,82 @@
+/* Conversations */
+"chat.attachFile" = "文件";
+"chat.attachPhoto" = "照片";
+"chat.bot" = "机器人";
+"chat.deletedBot" = "已删除的机器人";
+"chat.direct" = "私聊";
+"chat.downloading" = "下载中…";
+"chat.emptyDescription" = "从通讯录发起私聊，或创建一个群组。";
+"chat.emptyTitle" = "暂无会话";
+"chat.loadOlder" = "加载更早的消息";
+"chat.loadingOlder" = "加载中…";
+"chat.mention" = "提及成员";
+"chat.placeholder" = "输入消息…";
+"chat.untitledGroup" = "未命名群组";
+"chat.urgent" = "紧急";
+"chat.urgentNotice" = "紧急消息会向所有成员推送强提醒。";
+
+/* Shared */
+"common.cancel" = "取消";
+"common.done" = "完成";
+"common.error" = "出了点问题";
+"common.loading" = "加载中…";
+"common.save" = "保存";
+
+/* Directory */
+"dir.emptyDescription" = "按用户名或用户 ID 搜索联系人。";
+"dir.emptyTitle" = "没有找到联系人";
+"dir.searchPrompt" = "搜索联系人";
+
+/* Profile editor */
+"edit.avatar" = "头像";
+"edit.chooseAvatar" = "选择图片";
+"edit.intro" = "简介";
+"edit.removeAvatar" = "移除头像";
+"edit.title" = "编辑资料";
+"edit.username" = "用户名";
+
+/* Groups */
+"group.addMember" = "添加成员";
+"group.create" = "创建群组";
+"group.delete" = "解散群组";
+"group.deleteConfirm" = "确定要为所有人解散该群组吗？";
+"group.manage" = "群组";
+"group.member" = "成员";
+"group.members" = "成员";
+"group.name" = "群名称";
+"group.owner" = "群主";
+"group.saveTitle" = "保存名称";
+"group.titleSection" = "群名称";
+
+/* Sign-in */
+"login.instance" = "服务器：%@";
+"login.instanceHint" = "可以指向任意 Linkit 实例，默认为 linkit.ntnl.io。";
+"login.instancePlaceholder" = "https://linkit.example.com";
+"login.instanceTitle" = "服务器地址";
+"login.invalidInstance" = "请输入有效的服务器地址。";
+"login.signIn" = "使用 Auth Mini 登录";
+"login.tagline" = "由你的实例驱动：资料、私聊与群聊。";
+
+/* Me */
+"me.about" = "关于";
+"me.appearance" = "外观";
+"me.editProfile" = "编辑资料";
+"me.instance" = "实例";
+"me.language" = "语言";
+"me.server" = "服务器";
+"me.signOut" = "退出登录";
+"me.signOutConfirm" = "确定退出该实例的登录吗？";
+"me.theme" = "主题";
+"me.theme.dark" = "深色";
+"me.theme.light" = "浅色";
+"me.theme.system" = "跟随系统";
+"me.version" = "版本";
+
+/* People */
+"person.message" = "发消息";
+"person.self" = "这是你自己。";
+
+/* Tabs */
+"tab.chats" = "会话";
+"tab.directory" = "通讯录";
+"tab.me" = "我";
