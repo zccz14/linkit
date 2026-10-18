@@ -581,10 +581,7 @@ function LinkitShell({
 
   return (
     <AppLayout
-      logo={{
-        light: <LinkitMark className="size-7 shrink-0" />,
-        dark: <LinkitMark className="size-7 shrink-0" />,
-      }}
+      logo={<LinkitMark className="size-7 shrink-0" />}
       title="Linkit"
       nav={nav}
       pageTitle={title}
