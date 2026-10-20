@@ -146,7 +146,6 @@ import { Textarea } from "@/components/ui/textarea";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { useIsMobile } from "@/hooks/use-mobile";
 import { updatedConversationDetail } from "@/lib/conversation";
-import { applyFavicon } from "@/lib/favicon";
 import { clipboardFiles } from "@/lib/clipboard-files";
 import { MessageMarkdown } from "@/lib/message-markdown";
 import { shouldSendMessageOnEnter } from "@/lib/message";
@@ -245,20 +244,10 @@ export default function App() {
         linkitBaseUrl={config.data.public_origin ?? window.location.origin}
       >
         <LinkitLocaleSync />
-        <FaviconSync />
         <AuthedApp />
       </LinkitProvider>
     </AuthMiniProvider>
   );
-}
-
-// Keep the favicon in step with the resolved theme without a reload.
-function FaviconSync() {
-  const { resolvedTheme } = useLinkit();
-  useEffect(() => {
-    applyFavicon(resolvedTheme);
-  }, [resolvedTheme]);
-  return null;
 }
 
 // The signed-in Linkit profile owns the language preference; follow it instead of
