@@ -14,13 +14,16 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.15.0
       - uses: actions/setup-node@v7
         with:
           node-version: 24
-          cache: npm
+          cache: pnpm
           cache-dependency-path: |
-            web/package-lock.json
-            packages/linkit-react-components/package-lock.json
+            web/pnpm-lock.yaml
+            packages/linkit-react-components/pnpm-lock.yaml
       - uses: dtolnay/rust-toolchain@1.93.0
         with:
           components: rustfmt, clippy
@@ -28,14 +31,14 @@ jobs:
       - name: Validate Linkit React components
         working-directory: packages/linkit-react-components
         run: |
-          npm ci
-          npm run typecheck
-          npm test
-          npm run build
-          npm run pack:check
+          pnpm install --frozen-lockfile
+          pnpm run typecheck
+          pnpm test
+          pnpm run build
+          pnpm run pack:check
       - name: Validate frontend
         working-directory: web
-        run: npm ci && npm run check
+        run: pnpm install --frozen-lockfile && pnpm run check
       - name: Validate Rust
         run: |
           cargo fmt --check

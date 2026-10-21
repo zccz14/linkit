@@ -1,6 +1,7 @@
 {
   "name": "linkit-web",
   "private": true,
+  "packageManager": "pnpm@10.15.0",
   "version": "0.0.1",
   "type": "module",
   "scripts": {
@@ -11,7 +12,7 @@
     "typecheck": "tsc -b --noEmit",
     "test": "node --experimental-strip-types --test tests/*.test.ts",
     "check:portal-layering": "node scripts/check-portal-layering.mjs",
-    "check": "npm run test && npm run typecheck && npm run lint && npm run build && npm run check:portal-layering",
+    "check": "pnpm run test && pnpm run typecheck && pnpm run lint && pnpm run build && pnpm run check:portal-layering",
     "preview": "vite preview"
   },
   "dependencies": {

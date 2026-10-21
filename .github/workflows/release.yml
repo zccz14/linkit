@@ -16,18 +16,21 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.15.0
       - uses: actions/setup-node@v7
         with:
           node-version: 24
-          cache: npm
+          cache: pnpm
           cache-dependency-path: |
-            web/package-lock.json
-            packages/linkit-react-components/package-lock.json
+            web/pnpm-lock.yaml
+            packages/linkit-react-components/pnpm-lock.yaml
       - name: Install Linkit React component dependencies
         working-directory: packages/linkit-react-components
-        run: npm ci
+        run: pnpm install --frozen-lockfile
       - working-directory: web
-        run: npm ci && npm run build
+        run: pnpm install --frozen-lockfile && pnpm run build
       - uses: actions/upload-artifact@v7
         with:
           name: web-dist
@@ -78,15 +81,15 @@ jobs:
         with:
           node-version: 24
           registry-url: https://registry.npmjs.org
-          cache: npm
-          cache-dependency-path: packages/linkit-react-components/package-lock.json
+          cache: pnpm
+          cache-dependency-path: packages/linkit-react-components/pnpm-lock.yaml
       - working-directory: packages/linkit-react-components
         run: |
-          npm ci
-          npm run typecheck
-          npm test
-          npm run build
-          npm run pack:check
+          pnpm install --frozen-lockfile
+          pnpm run typecheck
+          pnpm test
+          pnpm run build
+          pnpm run pack:check
           package_name="$(node -p "require('./package.json').name")"
           package_version="$(node -p "require('./package.json').version")"
           if npm view "${package_name}@${package_version}" version >/dev/null 2>&1; then
