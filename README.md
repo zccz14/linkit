@@ -27,9 +27,11 @@ speak as a human user.
 - **Native Bots** — each Bot is a `users` principal with a durable UUID, one
   human control owner, an `sk-…` bearer token, owner transfer, and token
   rotation. A Bot uses the same profile and conversation APIs as a user, and
-  its owner can open a read-only view of the Bot's conversations. Any group
-  member can add users to a group, including their own Bots; only the group
-  owner can remove members.
+  its owner can open a read-only view of the Bot's conversations. The owner
+  sets the Bot avatar on the **Bots** page, and it appears wherever the Bot
+  speaks — messages, member lists, mentions, and direct-message Bark
+  notifications. Any group member can add users to a group, including their
+  own Bots; only the group owner can remove members.
 - **User API keys** — personal `uk-…` tokens created on the **API keys** page
   authenticate as their creating human on the normal routes, so scripts can
   send messages as you; revocation is immediate.

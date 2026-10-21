@@ -50,8 +50,11 @@ const BARK_NOTIFICATION_BODY_MAX_BYTES: usize = 3_000;
 const MESSAGE_PAGE_SIZE: i64 = 50;
 const PUBLIC_PROFILE_BATCH_SIZE: usize = 100;
 const USER_NOTE_BATCH_SIZE: usize = 100;
-const LIST_CONVERSATIONS_QUERY: &str = "SELECT c.id,c.kind,c.title,c.created_by,c.created_at,CASE WHEN c.kind='group' THEN c.avatar_attachment_id END avatar_attachment_id,CASE WHEN c.kind='direct' THEN (SELECT cm_peer.user_id FROM conversation_members cm_peer WHERE cm_peer.conversation_id=c.id AND cm_peer.user_id<>? LIMIT 1) END counterpart_user_id,CASE WHEN c.kind='direct' THEN COALESCE((SELECT p.username FROM conversation_members cm_peer JOIN profiles p ON p.user_id=cm_peer.user_id WHERE cm_peer.conversation_id=c.id AND cm_peer.user_id<>? LIMIT 1),(SELECT b.name FROM conversation_members cm_peer JOIN bots b ON b.id=cm_peer.user_id WHERE cm_peer.conversation_id=c.id AND cm_peer.user_id<>? LIMIT 1)) END counterpart_name,CASE WHEN c.kind='direct' THEN (SELECT p.avatar_attachment_id FROM conversation_members cm_peer JOIN profiles p ON p.user_id=cm_peer.user_id WHERE cm_peer.conversation_id=c.id AND cm_peer.user_id<>? LIMIT 1) END counterpart_avatar_attachment_id,(SELECT body FROM messages WHERE conversation_id=c.id ORDER BY created_at DESC LIMIT 1) latest_body,(SELECT created_at FROM messages WHERE conversation_id=c.id ORDER BY created_at DESC LIMIT 1) latest_at,(SELECT id FROM messages WHERE conversation_id=c.id ORDER BY created_at DESC LIMIT 1) latest_message_id,(SELECT COUNT(*) FROM messages WHERE conversation_id=c.id AND created_at>cm.last_read_at AND sender_id<>?) unread_count FROM conversations c JOIN conversation_members cm ON cm.conversation_id=c.id WHERE cm.user_id=? ORDER BY COALESCE(latest_at,c.created_at) DESC";
-const CONVERSATION_QUERY: &str = "SELECT c.id,c.kind,c.title,c.created_by,c.created_at,CASE WHEN c.kind='group' THEN c.avatar_attachment_id END avatar_attachment_id,CASE WHEN c.kind='direct' THEN (SELECT cm_peer.user_id FROM conversation_members cm_peer WHERE cm_peer.conversation_id=c.id AND cm_peer.user_id<>? LIMIT 1) END counterpart_user_id,CASE WHEN c.kind='direct' THEN COALESCE((SELECT p.username FROM conversation_members cm_peer JOIN profiles p ON p.user_id=cm_peer.user_id WHERE cm_peer.conversation_id=c.id AND cm_peer.user_id<>? LIMIT 1),(SELECT b.name FROM conversation_members cm_peer JOIN bots b ON b.id=cm_peer.user_id WHERE cm_peer.conversation_id=c.id AND cm_peer.user_id<>? LIMIT 1)) END counterpart_name,CASE WHEN c.kind='direct' THEN (SELECT p.avatar_attachment_id FROM conversation_members cm_peer JOIN profiles p ON p.user_id=cm_peer.user_id WHERE cm_peer.conversation_id=c.id AND cm_peer.user_id<>? LIMIT 1) END counterpart_avatar_attachment_id,(SELECT body FROM messages WHERE conversation_id=c.id ORDER BY created_at DESC LIMIT 1) latest_body,(SELECT created_at FROM messages WHERE conversation_id=c.id ORDER BY created_at DESC LIMIT 1) latest_at,(SELECT id FROM messages WHERE conversation_id=c.id ORDER BY created_at DESC LIMIT 1) latest_message_id,(SELECT COUNT(*) FROM messages WHERE conversation_id=c.id AND created_at>cm.last_read_at AND sender_id<>?) unread_count FROM conversations c JOIN conversation_members cm ON cm.conversation_id=c.id WHERE c.id=? AND cm.user_id=?";
+// One public identity per user ID. A Bot only has a profile once it creates one, so its
+// owner-managed Bot avatar is the fallback under the Bot's own profile avatar.
+const PUBLIC_IDENTITY_SELECT: &str = "SELECT u.id AS user_id,COALESCE(p.username,b.name) AS username,COALESCE(p.intro,'') AS intro,COALESCE(CASE WHEN EXISTS(SELECT 1 FROM attachments a WHERE a.id=p.avatar_attachment_id AND a.owner_user_id=p.user_id AND a.media_type LIKE 'image/%') THEN p.avatar_attachment_id END,CASE WHEN EXISTS(SELECT 1 FROM attachments a WHERE a.id=b.avatar_attachment_id AND a.media_type LIKE 'image/%') THEN b.avatar_attachment_id END) AS avatar_attachment_id,COALESCE(p.updated_at,b.updated_at) AS updated_at FROM users u LEFT JOIN profiles p ON p.user_id=u.id LEFT JOIN bots b ON b.id=u.id WHERE (p.user_id IS NOT NULL OR b.id IS NOT NULL)";
+const LIST_CONVERSATIONS_QUERY: &str = "SELECT c.id,c.kind,c.title,c.created_by,c.created_at,CASE WHEN c.kind='group' THEN c.avatar_attachment_id END avatar_attachment_id,CASE WHEN c.kind='direct' THEN (SELECT cm_peer.user_id FROM conversation_members cm_peer WHERE cm_peer.conversation_id=c.id AND cm_peer.user_id<>? LIMIT 1) END counterpart_user_id,CASE WHEN c.kind='direct' THEN COALESCE((SELECT p.username FROM conversation_members cm_peer JOIN profiles p ON p.user_id=cm_peer.user_id WHERE cm_peer.conversation_id=c.id AND cm_peer.user_id<>? LIMIT 1),(SELECT b.name FROM conversation_members cm_peer JOIN bots b ON b.id=cm_peer.user_id WHERE cm_peer.conversation_id=c.id AND cm_peer.user_id<>? LIMIT 1)) END counterpart_name,CASE WHEN c.kind='direct' THEN COALESCE((SELECT p.avatar_attachment_id FROM conversation_members cm_peer JOIN profiles p ON p.user_id=cm_peer.user_id WHERE cm_peer.conversation_id=c.id AND cm_peer.user_id<>? LIMIT 1),(SELECT b.avatar_attachment_id FROM conversation_members cm_peer JOIN bots b ON b.id=cm_peer.user_id WHERE cm_peer.conversation_id=c.id AND cm_peer.user_id<>? LIMIT 1)) END counterpart_avatar_attachment_id,(SELECT body FROM messages WHERE conversation_id=c.id ORDER BY created_at DESC LIMIT 1) latest_body,(SELECT created_at FROM messages WHERE conversation_id=c.id ORDER BY created_at DESC LIMIT 1) latest_at,(SELECT id FROM messages WHERE conversation_id=c.id ORDER BY created_at DESC LIMIT 1) latest_message_id,(SELECT COUNT(*) FROM messages WHERE conversation_id=c.id AND created_at>cm.last_read_at AND sender_id<>?) unread_count FROM conversations c JOIN conversation_members cm ON cm.conversation_id=c.id WHERE cm.user_id=? ORDER BY COALESCE(latest_at,c.created_at) DESC";
+const CONVERSATION_QUERY: &str = "SELECT c.id,c.kind,c.title,c.created_by,c.created_at,CASE WHEN c.kind='group' THEN c.avatar_attachment_id END avatar_attachment_id,CASE WHEN c.kind='direct' THEN (SELECT cm_peer.user_id FROM conversation_members cm_peer WHERE cm_peer.conversation_id=c.id AND cm_peer.user_id<>? LIMIT 1) END counterpart_user_id,CASE WHEN c.kind='direct' THEN COALESCE((SELECT p.username FROM conversation_members cm_peer JOIN profiles p ON p.user_id=cm_peer.user_id WHERE cm_peer.conversation_id=c.id AND cm_peer.user_id<>? LIMIT 1),(SELECT b.name FROM conversation_members cm_peer JOIN bots b ON b.id=cm_peer.user_id WHERE cm_peer.conversation_id=c.id AND cm_peer.user_id<>? LIMIT 1)) END counterpart_name,CASE WHEN c.kind='direct' THEN COALESCE((SELECT p.avatar_attachment_id FROM conversation_members cm_peer JOIN profiles p ON p.user_id=cm_peer.user_id WHERE cm_peer.conversation_id=c.id AND cm_peer.user_id<>? LIMIT 1),(SELECT b.avatar_attachment_id FROM conversation_members cm_peer JOIN bots b ON b.id=cm_peer.user_id WHERE cm_peer.conversation_id=c.id AND cm_peer.user_id<>? LIMIT 1)) END counterpart_avatar_attachment_id,(SELECT body FROM messages WHERE conversation_id=c.id ORDER BY created_at DESC LIMIT 1) latest_body,(SELECT created_at FROM messages WHERE conversation_id=c.id ORDER BY created_at DESC LIMIT 1) latest_at,(SELECT id FROM messages WHERE conversation_id=c.id ORDER BY created_at DESC LIMIT 1) latest_message_id,(SELECT COUNT(*) FROM messages WHERE conversation_id=c.id AND created_at>cm.last_read_at AND sender_id<>?) unread_count FROM conversations c JOIN conversation_members cm ON cm.conversation_id=c.id WHERE c.id=? AND cm.user_id=?";
 
 #[derive(Clone)]
 pub struct AppState {
@@ -638,7 +641,7 @@ struct PublicProfileBatchInput {
 }
 
 #[derive(FromRow)]
-struct PublicProfileRow {
+struct PublicIdentityRow {
     user_id: String,
     username: String,
     intro: String,
@@ -746,27 +749,29 @@ async fn delete_user_note(
     Ok(StatusCode::NO_CONTENT)
 }
 
+async fn public_identity(
+    db: &SqlitePool,
+    user_id: &str,
+) -> Result<Option<PublicIdentityRow>, AppError> {
+    let sql = format!("{PUBLIC_IDENTITY_SELECT} AND u.id=?");
+    Ok(sqlx::query_as(&sql)
+        .bind(user_id)
+        .fetch_optional(db)
+        .await?)
+}
+
 async fn public_profile(
     State(state): State<AppState>,
     Path(user_id): Path<String>,
 ) -> Result<axum::Json<PublicProfile>, AppError> {
     let public_origin = meta(&state.db, "public_origin").await?;
-    let profile = sqlx::query_as::<_, PublicProfileRow>(
-        "SELECT p.user_id,p.username,p.intro,
-                CASE WHEN EXISTS(
-                    SELECT 1 FROM attachments a
-                    WHERE a.id=p.avatar_attachment_id
-                      AND a.owner_user_id=p.user_id
-                      AND a.media_type LIKE 'image/%'
-                ) THEN p.avatar_attachment_id END AS avatar_attachment_id,
-                p.updated_at
-         FROM profiles p WHERE p.user_id=?",
-    )
-    .bind(&user_id)
-    .fetch_optional(&state.db)
-    .await?
-    .ok_or_else(|| AppError::not_found("user not found"))?;
-    Ok(axum::Json(public_profile_response(&public_origin, profile)))
+    let identity = public_identity(&state.db, &user_id)
+        .await?
+        .ok_or_else(|| AppError::not_found("user not found"))?;
+    Ok(axum::Json(public_profile_response(
+        &public_origin,
+        identity,
+    )))
 }
 
 async fn public_profiles_batch(
@@ -789,24 +794,14 @@ async fn public_profiles_batch(
         return Ok(axum::Json(Vec::new()));
     }
     let public_origin = meta(&state.db, "public_origin").await?;
-    let mut query = QueryBuilder::<Sqlite>::new(
-        "SELECT p.user_id,p.username,p.intro,
-                CASE WHEN EXISTS(
-                    SELECT 1 FROM attachments a
-                    WHERE a.id=p.avatar_attachment_id
-                      AND a.owner_user_id=p.user_id
-                      AND a.media_type LIKE 'image/%'
-                ) THEN p.avatar_attachment_id END AS avatar_attachment_id,
-                p.updated_at
-         FROM profiles p WHERE p.user_id IN (",
-    );
+    let mut query = QueryBuilder::<Sqlite>::new(format!("{PUBLIC_IDENTITY_SELECT} AND u.id IN ("));
     let mut separated = query.separated(",");
     for user_id in &user_ids {
         separated.push_bind(user_id);
     }
     separated.push_unseparated(")");
     let profiles = query
-        .build_query_as::<PublicProfileRow>()
+        .build_query_as::<PublicIdentityRow>()
         .fetch_all(&state.db)
         .await?;
     Ok(axum::Json(
@@ -817,7 +812,7 @@ async fn public_profiles_batch(
     ))
 }
 
-fn public_profile_response(public_origin: &str, profile: PublicProfileRow) -> PublicProfile {
+fn public_profile_response(public_origin: &str, profile: PublicIdentityRow) -> PublicProfile {
     PublicProfile {
         avatar_url: profile.avatar_attachment_id.map(|_| {
             public_profile_avatar_url(public_origin, &profile.user_id, profile.updated_at)
@@ -841,15 +836,16 @@ async fn public_profile_avatar(
     State(state): State<AppState>,
     Path(user_id): Path<String>,
 ) -> Result<Response, AppError> {
-    let row: Option<(String, String, String)> = sqlx::query_as(
+    let sql = format!(
         "SELECT COALESCE(d.storage_name,a.storage_name),CASE WHEN d.source_attachment_id IS NULL THEN a.file_name ELSE 'avatar.webp' END,COALESCE(d.media_type,a.media_type)
-         FROM profiles p JOIN attachments a ON a.id=p.avatar_attachment_id
-         LEFT JOIN avatar_derivatives d ON d.source_attachment_id=a.id
-         WHERE p.user_id=? AND a.owner_user_id=p.user_id AND a.media_type LIKE 'image/%'",
-    )
-    .bind(user_id)
-    .fetch_optional(&state.db)
-    .await?;
+         FROM ({PUBLIC_IDENTITY_SELECT} AND u.id=?) i
+         JOIN attachments a ON a.id=i.avatar_attachment_id
+         LEFT JOIN avatar_derivatives d ON d.source_attachment_id=a.id",
+    );
+    let row: Option<(String, String, String)> = sqlx::query_as(&sql)
+        .bind(user_id)
+        .fetch_optional(&state.db)
+        .await?;
     let Some((storage_name, file_name, media_type)) = row else {
         return Err(AppError::not_found("avatar not found"));
     };
@@ -906,7 +902,7 @@ async fn download_avatar_derivative(
     Path(id): Path<String>,
 ) -> Result<Response, AppError> {
     let row: Option<(String, String)> = sqlx::query_as(
-        "SELECT d.storage_name,d.media_type FROM avatar_derivatives d WHERE d.source_attachment_id=? AND (EXISTS(SELECT 1 FROM profiles p WHERE p.avatar_attachment_id=d.source_attachment_id) OR EXISTS(SELECT 1 FROM conversations c JOIN conversation_members cm ON cm.conversation_id=c.id WHERE c.avatar_attachment_id=d.source_attachment_id AND c.kind='group' AND cm.user_id=?))",
+        "SELECT d.storage_name,d.media_type FROM avatar_derivatives d WHERE d.source_attachment_id=? AND (EXISTS(SELECT 1 FROM profiles p WHERE p.avatar_attachment_id=d.source_attachment_id) OR EXISTS(SELECT 1 FROM bots b WHERE b.avatar_attachment_id=d.source_attachment_id) OR EXISTS(SELECT 1 FROM conversations c JOIN conversation_members cm ON cm.conversation_id=c.id WHERE c.avatar_attachment_id=d.source_attachment_id AND c.kind='group' AND cm.user_id=?))",
     )
     .bind(&id).bind(&user.id).fetch_optional(&state.db).await?;
     let Some((storage_name, media_type)) = row else {
@@ -926,7 +922,7 @@ fn schedule_avatar_backfill(state: AppState) {
         loop {
             tokio::time::sleep(AVATAR_BACKFILL_INTERVAL).await;
             let source: Result<Option<(String, String)>, sqlx::Error> = sqlx::query_as(
-                "SELECT a.id,a.owner_user_id FROM attachments a WHERE a.media_type LIKE 'image/%' AND (EXISTS(SELECT 1 FROM profiles p WHERE p.avatar_attachment_id=a.id) OR EXISTS(SELECT 1 FROM conversations c WHERE c.kind='group' AND c.avatar_attachment_id=a.id)) AND NOT EXISTS(SELECT 1 FROM avatar_derivatives d WHERE d.source_attachment_id=a.id) ORDER BY a.created_at LIMIT 1",
+                "SELECT a.id,a.owner_user_id FROM attachments a WHERE a.media_type LIKE 'image/%' AND (EXISTS(SELECT 1 FROM profiles p WHERE p.avatar_attachment_id=a.id) OR EXISTS(SELECT 1 FROM bots b WHERE b.avatar_attachment_id=a.id) OR EXISTS(SELECT 1 FROM conversations c WHERE c.kind='group' AND c.avatar_attachment_id=a.id)) AND NOT EXISTS(SELECT 1 FROM avatar_derivatives d WHERE d.source_attachment_id=a.id) ORDER BY a.created_at LIMIT 1",
             ).fetch_optional(&state.db).await;
             match source {
                 Ok(Some((id, owner))) => {
@@ -939,6 +935,29 @@ fn schedule_avatar_backfill(state: AppState) {
             }
         }
     });
+}
+
+/// The avatar source must be one of the caller's own image uploads. Normalizing here
+/// keeps the canonical WebP derivative ready before the pointer is published.
+async fn ensure_owned_avatar(
+    state: &AppState,
+    attachment_id: &str,
+    owner_user_id: &str,
+) -> Result<(), AppError> {
+    normalize_avatar_attachment(state, attachment_id, owner_user_id).await?;
+    let owned: Option<String> = sqlx::query_scalar(
+        "SELECT id FROM attachments WHERE id=? AND owner_user_id=? AND media_type LIKE 'image/%'",
+    )
+    .bind(attachment_id)
+    .bind(owner_user_id)
+    .fetch_optional(&state.db)
+    .await?;
+    if owned.is_none() {
+        return Err(AppError::bad_request(
+            "avatar_attachment_id must be one of your image uploads",
+        ));
+    }
+    Ok(())
 }
 
 async fn normalize_avatar_attachment(
@@ -1245,13 +1264,7 @@ async fn update_profile(
         }
     };
     if let Some(attachment_id) = &input.avatar_attachment_id {
-        normalize_avatar_attachment(&state, attachment_id, &user.id).await?;
-        let allowed: Option<String> = sqlx::query_scalar("SELECT id FROM attachments WHERE id=? AND owner_user_id=? AND media_type LIKE 'image/%'").bind(attachment_id).bind(&user.id).fetch_optional(&state.db).await?;
-        if allowed.is_none() {
-            return Err(AppError::bad_request(
-                "avatar_attachment_id must be one of your image uploads",
-            ));
-        }
+        ensure_owned_avatar(&state, attachment_id, &user.id).await?;
     }
     let now = chrono::Utc::now().timestamp();
     let result = sqlx::query("INSERT INTO profiles(user_id,username,intro,lang,theme,avatar_attachment_id,updated_at) VALUES(?,?,?,?,?,?,?) ON CONFLICT(user_id) DO UPDATE SET username=excluded.username,intro=excluded.intro,lang=excluded.lang,theme=excluded.theme,avatar_attachment_id=excluded.avatar_attachment_id,updated_at=excluded.updated_at")
@@ -1321,12 +1334,12 @@ async fn search_users(
                 FROM profiles
                 WHERE username LIKE ? ESCAPE '\\\' COLLATE NOCASE
                 UNION ALL
-                SELECT n.target_user_id,COALESCE(p.username,u.id),p.avatar_attachment_id,COALESCE(p.updated_at,u.created_at),1 AS source
-                FROM user_notes n JOIN users u ON u.id=n.target_user_id LEFT JOIN profiles p ON p.user_id=n.target_user_id
+                SELECT n.target_user_id,COALESCE(p.username,b.name,u.id),COALESCE(p.avatar_attachment_id,b.avatar_attachment_id),COALESCE(p.updated_at,u.created_at),1 AS source
+                FROM user_notes n JOIN users u ON u.id=n.target_user_id LEFT JOIN profiles p ON p.user_id=n.target_user_id LEFT JOIN bots b ON b.id=n.target_user_id
                 WHERE n.owner_user_id=? AND n.name LIKE ? ESCAPE '\\\' COLLATE NOCASE
                 UNION ALL
-                SELECT u.id,COALESCE(p.username,u.id),p.avatar_attachment_id,COALESCE(p.updated_at,u.created_at),2 AS source
-                FROM users u LEFT JOIN profiles p ON p.user_id=u.id
+                SELECT u.id,COALESCE(p.username,b.name,u.id),COALESCE(p.avatar_attachment_id,b.avatar_attachment_id),COALESCE(p.updated_at,u.created_at),2 AS source
+                FROM users u LEFT JOIN profiles p ON p.user_id=u.id LEFT JOIN bots b ON b.id=u.id
                 WHERE u.id LIKE ? COLLATE NOCASE
              ), deduplicated AS (
                 SELECT user_id,username,avatar_attachment_id,updated_at,MIN(source) AS source
@@ -1359,8 +1372,8 @@ async fn search_users(
                 FROM profiles
                 WHERE username LIKE ? ESCAPE '\\\' COLLATE NOCASE
                 UNION ALL
-                SELECT n.target_user_id,COALESCE(p.username,u.id),p.avatar_attachment_id,COALESCE(p.updated_at,u.created_at),1 AS source
-                FROM user_notes n JOIN users u ON u.id=n.target_user_id LEFT JOIN profiles p ON p.user_id=n.target_user_id
+                SELECT n.target_user_id,COALESCE(p.username,b.name,u.id),COALESCE(p.avatar_attachment_id,b.avatar_attachment_id),COALESCE(p.updated_at,u.created_at),1 AS source
+                FROM user_notes n JOIN users u ON u.id=n.target_user_id LEFT JOIN profiles p ON p.user_id=n.target_user_id LEFT JOIN bots b ON b.id=n.target_user_id
                 WHERE n.owner_user_id=? AND n.name LIKE ? ESCAPE '\\\' COLLATE NOCASE
              ), deduplicated AS (
                 SELECT user_id,username,avatar_attachment_id,updated_at,MIN(source) AS source
@@ -1450,6 +1463,7 @@ async fn list_conversations(
         .bind(&user.id)
         .bind(&user.id)
         .bind(&user.id)
+        .bind(&user.id)
         .fetch_all(&state.db)
         .await?;
     for conversation in &mut conversations {
@@ -1523,19 +1537,7 @@ async fn update_group_title(
     }
     if let Some(avatar_attachment_id) = input.avatar_attachment_id {
         if let Some(attachment_id) = &avatar_attachment_id {
-            normalize_avatar_attachment(&state, attachment_id, &user.id).await?;
-            let allowed: Option<String> = sqlx::query_scalar(
-                "SELECT id FROM attachments WHERE id=? AND owner_user_id=? AND media_type LIKE 'image/%'",
-            )
-            .bind(attachment_id)
-            .bind(&user.id)
-            .fetch_optional(&state.db)
-            .await?;
-            if allowed.is_none() {
-                return Err(AppError::bad_request(
-                    "avatar_attachment_id must be one of your image uploads",
-                ));
-            }
+            ensure_owned_avatar(&state, attachment_id, &user.id).await?;
         }
         sqlx::query("UPDATE conversations SET avatar_attachment_id=? WHERE id=? AND kind='group'")
             .bind(avatar_attachment_id)
@@ -1874,7 +1876,7 @@ async fn download_attachment(
     axum::Extension(user): axum::Extension<UserIdentity>,
     Path(id): Path<String>,
 ) -> Result<Response, AppError> {
-    let row: Option<(String, String, String, Option<String>)> = sqlx::query_as("SELECT a.storage_name,a.file_name,a.media_type,a.message_id FROM attachments a WHERE a.id=? AND (a.owner_user_id=? OR EXISTS(SELECT 1 FROM messages m JOIN conversation_members cm ON cm.conversation_id=m.conversation_id WHERE m.id=a.message_id AND cm.user_id=?) OR EXISTS(SELECT 1 FROM profiles p WHERE p.avatar_attachment_id=a.id) OR EXISTS(SELECT 1 FROM conversations c JOIN conversation_members cm ON cm.conversation_id=c.id WHERE c.avatar_attachment_id=a.id AND c.kind='group' AND cm.user_id=?))").bind(&id).bind(&user.id).bind(&user.id).bind(&user.id).fetch_optional(&state.db).await?;
+    let row: Option<(String, String, String, Option<String>)> = sqlx::query_as("SELECT a.storage_name,a.file_name,a.media_type,a.message_id FROM attachments a WHERE a.id=? AND (a.owner_user_id=? OR EXISTS(SELECT 1 FROM messages m JOIN conversation_members cm ON cm.conversation_id=m.conversation_id WHERE m.id=a.message_id AND cm.user_id=?) OR EXISTS(SELECT 1 FROM profiles p WHERE p.avatar_attachment_id=a.id) OR EXISTS(SELECT 1 FROM bots b WHERE b.avatar_attachment_id=a.id) OR EXISTS(SELECT 1 FROM conversations c JOIN conversation_members cm ON cm.conversation_id=c.id WHERE c.avatar_attachment_id=a.id AND c.kind='group' AND cm.user_id=?))").bind(&id).bind(&user.id).bind(&user.id).bind(&user.id).fetch_optional(&state.db).await?;
     let Some((storage_name, file_name, media_type, _)) = row else {
         return Err(AppError::not_found("attachment not found"));
     };
@@ -1897,6 +1899,7 @@ struct Bot {
     id: String,
     owner_user_id: String,
     name: String,
+    avatar_attachment_id: Option<String>,
     token_prefix: String,
     created_at: i64,
     updated_at: i64,
@@ -1919,7 +1922,7 @@ async fn list_bots(
     axum::Extension(user): axum::Extension<UserIdentity>,
 ) -> Result<axum::Json<Vec<Bot>>, AppError> {
     require_human(&state.db, &user.id).await?;
-    Ok(axum::Json(sqlx::query_as("SELECT id,owner_user_id,name,token_prefix,created_at,updated_at FROM bots WHERE owner_user_id=? ORDER BY created_at DESC").bind(user.id).fetch_all(&state.db).await?))
+    Ok(axum::Json(sqlx::query_as("SELECT id,owner_user_id,name,avatar_attachment_id,token_prefix,created_at,updated_at FROM bots WHERE owner_user_id=? ORDER BY created_at DESC").bind(user.id).fetch_all(&state.db).await?))
 }
 
 async fn create_bot(
@@ -1936,6 +1939,7 @@ async fn create_bot(
         id: id.clone(),
         owner_user_id: user.id.clone(),
         name,
+        avatar_attachment_id: None,
         token_prefix: token[..11].to_owned(),
         created_at: now,
         updated_at: now,
@@ -1954,6 +1958,7 @@ async fn create_bot(
 #[derive(Deserialize)]
 struct UpdateBotInput {
     name: Option<String>,
+    avatar_attachment_id: Option<Option<String>>,
     new_owner_username: Option<String>,
     rotate_token: Option<bool>,
 }
@@ -1973,7 +1978,7 @@ async fn update_bot(
 ) -> Result<axum::Json<UpdatedBot>, AppError> {
     require_human(&state.db, &user.id).await?;
     let mut bot: Bot = sqlx::query_as(
-        "SELECT id,owner_user_id,name,token_prefix,created_at,updated_at FROM bots WHERE id=?",
+        "SELECT id,owner_user_id,name,avatar_attachment_id,token_prefix,created_at,updated_at FROM bots WHERE id=?",
     )
     .bind(&id)
     .fetch_optional(&state.db)
@@ -2002,20 +2007,32 @@ async fn update_bot(
         .as_ref()
         .map(|value| value[..11].to_owned())
         .unwrap_or_else(|| bot.token_prefix.clone());
+    let avatar_attachment_id = match input.avatar_attachment_id {
+        Some(Some(attachment_id)) => {
+            ensure_owned_avatar(&state, &attachment_id, &user.id).await?;
+            Some(attachment_id)
+        }
+        Some(None) => None,
+        None => bot.avatar_attachment_id.clone(),
+    };
     let now = chrono::Utc::now().timestamp();
     if let Some(token) = &token {
-        sqlx::query("UPDATE bots SET owner_user_id=?,name=?,token_prefix=?,token_hash=?,updated_at=? WHERE id=?").bind(&owner).bind(&name).bind(&prefix).bind(auth::token_hash(token)).bind(now).bind(&id).execute(&state.db).await?;
+        sqlx::query("UPDATE bots SET owner_user_id=?,name=?,avatar_attachment_id=?,token_prefix=?,token_hash=?,updated_at=? WHERE id=?").bind(&owner).bind(&name).bind(&avatar_attachment_id).bind(&prefix).bind(auth::token_hash(token)).bind(now).bind(&id).execute(&state.db).await?;
     } else {
-        sqlx::query("UPDATE bots SET owner_user_id=?,name=?,updated_at=? WHERE id=?")
-            .bind(&owner)
-            .bind(&name)
-            .bind(now)
-            .bind(&id)
-            .execute(&state.db)
-            .await?;
+        sqlx::query(
+            "UPDATE bots SET owner_user_id=?,name=?,avatar_attachment_id=?,updated_at=? WHERE id=?",
+        )
+        .bind(&owner)
+        .bind(&name)
+        .bind(&avatar_attachment_id)
+        .bind(now)
+        .bind(&id)
+        .execute(&state.db)
+        .await?;
     }
     bot.owner_user_id = owner;
     bot.name = name;
+    bot.avatar_attachment_id = avatar_attachment_id;
     bot.token_prefix = prefix;
     bot.updated_at = now;
     Ok(axum::Json(UpdatedBot { bot, token }))
@@ -2480,20 +2497,15 @@ async fn bark_notification_icon(
         Some((kind, Some(_))) if kind == "group" => {
             public_group_avatar_url(public_origin, conversation_id)
         }
-        Some((kind, _)) if kind == "direct" && message.message.sender_kind == "user" => {
-            let avatar: Option<(String, i64)> = sqlx::query_as(
-                "SELECT p.avatar_attachment_id,p.updated_at FROM profiles p
-                 JOIN attachments a ON a.id=p.avatar_attachment_id
-                 WHERE p.user_id=? AND a.owner_user_id=p.user_id AND a.media_type LIKE 'image/%'",
-            )
-            .bind(&message.message.sender_id)
-            .fetch_optional(db)
-            .await
-            .ok()
-            .flatten();
-            avatar
-                .map(|(_, updated_at)| {
-                    public_profile_avatar_url(public_origin, &message.message.sender_id, updated_at)
+        Some((kind, _)) if kind == "direct" => {
+            let identity = public_identity(db, &message.message.sender_id)
+                .await
+                .ok()
+                .flatten();
+            identity
+                .filter(|identity| identity.avatar_attachment_id.is_some())
+                .map(|identity| {
+                    public_profile_avatar_url(public_origin, &identity.user_id, identity.updated_at)
                 })
                 .unwrap_or(fallback)
         }
@@ -2875,6 +2887,7 @@ async fn resolve_latest_body(
 
 async fn conversation(db: &SqlitePool, id: &str, user_id: &str) -> Result<Conversation, AppError> {
     let mut conversation: Conversation = sqlx::query_as(CONVERSATION_QUERY)
+        .bind(user_id)
         .bind(user_id)
         .bind(user_id)
         .bind(user_id)
@@ -4009,6 +4022,200 @@ mod tests {
         assert_eq!(profiles[0].intro, "first");
         assert_eq!(profiles[1].user_id, "bob");
         assert_eq!(profiles[1].intro, "second");
+    }
+
+    #[tokio::test]
+    async fn bot_avatars_resolve_through_the_public_profile_api() {
+        let pool = db::connect_memory().await.unwrap();
+        sqlx::query(
+            "UPDATE app_meta SET value='https://linkit.example.test' WHERE key='public_origin'",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query("INSERT INTO users(id,created_at) VALUES('owner',0)")
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query(
+            "INSERT INTO users(id,type,created_at) VALUES('bot','bot',0),('profiled-bot','bot',0)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query("INSERT INTO bots(id,owner_user_id,name,avatar_attachment_id,token_prefix,token_hash,created_at,updated_at) VALUES('bot','owner','Fund Bot','bot-avatar','sk-fund','fund-hash',0,5),('profiled-bot','owner','Profiled Bot','bot-avatar','sk-profiled','profiled-hash',0,5)")
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query("INSERT INTO profiles(user_id,username,intro,avatar_attachment_id,updated_at) VALUES('profiled-bot','fund-bot','Automated','profile-avatar',9)")
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query("INSERT INTO attachments(id,owner_user_id,file_name,media_type,byte_size,storage_name,created_at) VALUES('bot-avatar','owner','bot.png','image/png',2,'bot-avatar-source',0),('profile-avatar','profiled-bot','profile.png','image/png',2,'profile-avatar-source',0)")
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        let bot = public_profile(State(test_state(pool.clone())), Path("bot".into()))
+            .await
+            .unwrap()
+            .0;
+        assert_eq!(bot.username, "Fund Bot");
+        assert_eq!(bot.intro, "");
+        assert_eq!(
+            bot.avatar_url.as_deref(),
+            Some("https://linkit.example.test/api/public/profiles/bot/avatar?v=5")
+        );
+
+        // Once a Bot creates its own profile, the profile owns the identity.
+        let profiled = public_profile(State(test_state(pool.clone())), Path("profiled-bot".into()))
+            .await
+            .unwrap()
+            .0;
+        assert_eq!(profiled.username, "fund-bot");
+        assert_eq!(
+            profiled.avatar_url.as_deref(),
+            Some("https://linkit.example.test/api/public/profiles/profiled-bot/avatar?v=9")
+        );
+
+        let axum::Json(batch) = public_profiles_batch(
+            State(test_state(pool.clone())),
+            axum::Json(PublicProfileBatchInput {
+                user_ids: vec!["bot".into(), "missing".into(), "profiled-bot".into()],
+            }),
+        )
+        .await
+        .unwrap();
+        assert_eq!(batch.len(), 2);
+
+        std::fs::write(std::env::temp_dir().join("bot-avatar-source"), b"pk").unwrap();
+        let response = public_profile_avatar(State(test_state(pool)), Path("bot".into()))
+            .await
+            .unwrap();
+        assert_eq!(response.headers()[header::CONTENT_TYPE], "image/png");
+        let body = response.into_body().collect().await.unwrap().to_bytes();
+        assert_eq!(body.as_ref(), b"pk");
+    }
+
+    #[tokio::test]
+    async fn the_bot_owner_sets_and_clears_the_bot_avatar() {
+        let pool = db::connect_memory().await.unwrap();
+        sqlx::query("INSERT INTO users(id,created_at) VALUES('owner',0),('stranger',0)")
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query("INSERT INTO users(id,type,created_at) VALUES('bot','bot',0)")
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query("INSERT INTO bots(id,owner_user_id,name,token_prefix,token_hash,created_at,updated_at) VALUES('bot','owner','Fund Bot','sk-fund','fund-hash',0,0)")
+            .execute(&pool)
+            .await
+            .unwrap();
+        let bytes = canonical_avatar_png_fixture();
+        for storage_name in ["owner-bot-avatar", "stranger-bot-avatar"] {
+            std::fs::write(std::env::temp_dir().join(storage_name), &bytes).unwrap();
+        }
+        sqlx::query("INSERT INTO attachments(id,owner_user_id,file_name,media_type,byte_size,storage_name,created_at) VALUES('owner-bot-avatar','owner','avatar.png','image/png',?,'owner-bot-avatar',0),('stranger-bot-avatar','stranger','avatar.png','image/png',?,'stranger-bot-avatar',0)")
+            .bind(bytes.len() as i64)
+            .bind(bytes.len() as i64)
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        async fn update(
+            pool: &SqlitePool,
+            avatar_attachment_id: Option<Option<String>>,
+        ) -> Result<Bot, AppError> {
+            update_bot(
+                State(test_state(pool.clone())),
+                axum::Extension(UserIdentity { id: "owner".into() }),
+                Path("bot".into()),
+                axum::Json(UpdateBotInput {
+                    name: None,
+                    avatar_attachment_id,
+                    new_owner_username: None,
+                    rotate_token: None,
+                }),
+            )
+            .await
+            .map(|axum::Json(updated)| updated.bot)
+        }
+
+        let updated = update(&pool, Some(Some("owner-bot-avatar".into())))
+            .await
+            .unwrap();
+        assert_eq!(
+            updated.avatar_attachment_id.as_deref(),
+            Some("owner-bot-avatar")
+        );
+        let stored: Option<String> =
+            sqlx::query_scalar("SELECT avatar_attachment_id FROM bots WHERE id='bot'")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(stored.as_deref(), Some("owner-bot-avatar"));
+        let derivatives: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM avatar_derivatives WHERE source_attachment_id='owner-bot-avatar'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(derivatives, 1);
+
+        let error = update(&pool, Some(Some("stranger-bot-avatar".into())))
+            .await
+            .map(|_| ())
+            .unwrap_err();
+        assert_eq!(error.status, StatusCode::BAD_REQUEST);
+
+        let cleared = update(&pool, Some(None)).await.unwrap();
+        assert!(cleared.avatar_attachment_id.is_none());
+        let stored: Option<String> =
+            sqlx::query_scalar("SELECT avatar_attachment_id FROM bots WHERE id='bot'")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert!(stored.is_none());
+    }
+
+    #[tokio::test]
+    async fn direct_conversations_report_the_bot_name_and_avatar_as_the_counterpart() {
+        let pool = db::connect_memory().await.unwrap();
+        insert_test_users(&pool, &["owner"]).await;
+        sqlx::query("INSERT INTO users(id,type,created_at) VALUES('bot','bot',0)")
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query("INSERT INTO bots(id,owner_user_id,name,avatar_attachment_id,token_prefix,token_hash,created_at,updated_at) VALUES('bot','owner','Fund Bot','bot-avatar','sk-fund','fund-hash',0,0)")
+            .execute(&pool)
+            .await
+            .unwrap();
+        insert_test_conversation(
+            &pool,
+            "direct",
+            "direct",
+            &[("owner", "member"), ("bot", "member")],
+        )
+        .await;
+
+        let direct = conversation(&pool, "direct", "owner").await.unwrap();
+        assert_eq!(direct.counterpart_name.as_deref(), Some("Fund Bot"));
+        assert_eq!(
+            direct.counterpart_avatar_attachment_id.as_deref(),
+            Some("bot-avatar")
+        );
+        let axum::Json(listed) = list_conversations(
+            State(test_state(pool)),
+            axum::Extension(UserIdentity { id: "owner".into() }),
+        )
+        .await
+        .unwrap();
+        assert_eq!(listed.len(), 1);
+        assert_eq!(
+            listed[0].counterpart_avatar_attachment_id.as_deref(),
+            Some("bot-avatar")
+        );
     }
 
     #[tokio::test]
@@ -6261,11 +6468,19 @@ mod tests {
             .execute(&pool)
             .await
             .unwrap();
+        sqlx::query("INSERT INTO users(id,type,created_at) VALUES('avatar-bot','bot',0)")
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query("INSERT INTO bots(id,owner_user_id,name,avatar_attachment_id,token_prefix,token_hash,created_at,updated_at) VALUES('avatar-bot','alice','Avatar Bot','bot-avatar','sk-avatar','avatar-hash',0,6)")
+            .execute(&pool)
+            .await
+            .unwrap();
         sqlx::query("INSERT INTO profiles(user_id,username,intro,avatar_attachment_id,updated_at) VALUES('alice','alice','', 'alice-avatar',0)")
             .execute(&pool)
             .await
             .unwrap();
-        sqlx::query("INSERT INTO attachments(id,owner_user_id,file_name,media_type,byte_size,storage_name,created_at) VALUES('alice-avatar','alice','avatar.png','image/png',1,'alice-avatar-file',0),('group-avatar','alice','group.png','image/png',1,'group-avatar-file',0),('invalid-avatar','alice','invalid.txt','text/plain',1,'invalid-avatar-file',0)")
+        sqlx::query("INSERT INTO attachments(id,owner_user_id,file_name,media_type,byte_size,storage_name,created_at) VALUES('alice-avatar','alice','avatar.png','image/png',1,'alice-avatar-file',0),('bot-avatar','alice','bot.png','image/png',1,'bot-avatar-file',0),('group-avatar','alice','group.png','image/png',1,'group-avatar-file',0),('invalid-avatar','alice','invalid.txt','text/plain',1,'invalid-avatar-file',0)")
             .execute(&pool)
             .await
             .unwrap();
@@ -6316,6 +6531,21 @@ mod tests {
         assert_eq!(
             bark_notification_icon(&pool, "https://linkit.test", "direct", &bot_message).await,
             "https://linkit.test/linkit-logo.png"
+        );
+        let avatar_bot_message = Message {
+            message: StoredMessage {
+                sender_kind: "bot".into(),
+                sender_id: "avatar-bot".into(),
+                ..user_message.message.clone()
+            },
+            attachments: Vec::new(),
+            mentions: Vec::new(),
+            cursor: "0:1".into(),
+        };
+        assert_eq!(
+            bark_notification_icon(&pool, "https://linkit.test", "direct", &avatar_bot_message)
+                .await,
+            "https://linkit.test/api/public/profiles/avatar-bot/avatar?v=6"
         );
     }
 

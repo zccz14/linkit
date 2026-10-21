@@ -2155,6 +2155,7 @@ function Bots({ sdk }: { sdk: AuthMiniApi }) {
   });
   const [dialog, setDialog] = useState(false);
   const [name, setName] = useState("");
+  const [botAvatar, setBotAvatar] = useState("");
   const [token, setToken] = useState("");
   const [selected, setSelected] = useState<Bot>();
   const [deleteConfirmation, setDeleteConfirmation] = useState(false);
@@ -2181,6 +2182,7 @@ function Bots({ sdk }: { sdk: AuthMiniApi }) {
       if (result.token) setToken(result.token);
       setSelected(result);
       setName(result.name);
+      setBotAvatar(result.avatar_attachment_id ?? "");
       void queryClient.invalidateQueries({ queryKey: ["bots"] });
       toast.success(t("bots.updated"));
     },
@@ -2198,6 +2200,24 @@ function Bots({ sdk }: { sdk: AuthMiniApi }) {
     },
     onError: (error) => toast.error(error.message),
   });
+  const chooseBotAvatar = async (
+    event: React.ChangeEvent<HTMLInputElement>,
+  ) => {
+    const file = event.currentTarget.files?.[0];
+    event.currentTarget.value = "";
+    if (!file || !selected) return;
+    try {
+      const attachment = await upload(sdk, file);
+      update.mutate({
+        id: selected.id,
+        body: { avatar_attachment_id: attachment.id },
+      });
+    } catch (error) {
+      toast.error(
+        error instanceof Error ? error.message : t("profileEditor.uploadError"),
+      );
+    }
+  };
   const dialogTitle = selected
     ? t("bots.manageTitle", { name: selected.name })
     : t("bots.newTitle");
@@ -2210,6 +2230,7 @@ function Bots({ sdk }: { sdk: AuthMiniApi }) {
             setSelected(undefined);
             setToken("");
             setName("");
+            setBotAvatar("");
           }}
         >
           <PlusIcon data-icon="inline-start" />
@@ -2221,7 +2242,13 @@ function Bots({ sdk }: { sdk: AuthMiniApi }) {
           <Card key={bot.id}>
             <CardHeader>
               <CardTitle className="flex items-center gap-2">
-                <BotIcon />
+                <ProfileAvatar
+                  sdk={sdk}
+                  profile={{
+                    username: bot.name,
+                    avatar_attachment_id: bot.avatar_attachment_id,
+                  }}
+                />
                 {bot.name}
               </CardTitle>
               <CardDescription>{bot.id}</CardDescription>
@@ -2245,6 +2272,7 @@ function Bots({ sdk }: { sdk: AuthMiniApi }) {
                     setOwnerUsername("");
                     setToken("");
                     setName(bot.name);
+                    setBotAvatar(bot.avatar_attachment_id ?? "");
                     setDialog(true);
                   }}
                 >
@@ -2278,6 +2306,41 @@ function Bots({ sdk }: { sdk: AuthMiniApi }) {
                   value={name}
                   onChange={(event) => setName(event.target.value)}
                 />
+              </Field>
+              <Field>
+                <FieldLabel htmlFor="bot-avatar">{t("bots.avatar")}</FieldLabel>
+                <div className="flex items-center gap-3">
+                  <ProfileAvatar
+                    sdk={sdk}
+                    profile={{
+                      username: selected.name,
+                      avatar_attachment_id: botAvatar || undefined,
+                    }}
+                  />
+                  <Input
+                    id="bot-avatar"
+                    type="file"
+                    accept="image/*"
+                    disabled={update.isPending}
+                    onChange={(event) => void chooseBotAvatar(event)}
+                  />
+                  {botAvatar ? (
+                    <Button
+                      type="button"
+                      variant="outline"
+                      disabled={update.isPending}
+                      onClick={() =>
+                        update.mutate({
+                          id: selected.id,
+                          body: { avatar_attachment_id: null },
+                        })
+                      }
+                    >
+                      {t("bots.removeAvatar")}
+                    </Button>
+                  ) : null}
+                </div>
+                <FieldDescription>{t("bots.avatarHint")}</FieldDescription>
               </Field>
               <Field>
                 <FieldLabel htmlFor="bot-owner">

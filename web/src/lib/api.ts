@@ -71,6 +71,7 @@ export type Bot = {
   id: string;
   owner_user_id: string;
   name: string;
+  avatar_attachment_id?: string;
   token_prefix: string;
   created_at: number;
   updated_at: number;

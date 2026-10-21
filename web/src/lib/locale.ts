@@ -129,6 +129,10 @@ const english = {
   "bots.transferOwnership": "Transfer ownership",
   "bots.ownerPlaceholder": "Username of new owner",
   "bots.name": "Name",
+  "bots.avatar": "Bot avatar",
+  "bots.avatarHint":
+    "This image appears wherever the bot speaks, and it becomes the Bark notification icon for direct messages from the bot.",
+  "bots.removeAvatar": "Remove avatar",
   "bots.saveName": "Save name",
   "bots.cancel": "Cancel",
   "bots.done": "Done",
@@ -374,6 +378,10 @@ const chinese: Record<TranslationKey, string> = {
   "bots.transferOwnership": "转让所有权",
   "bots.ownerPlaceholder": "新所有者的用户名",
   "bots.name": "名称",
+  "bots.avatar": "机器人头像",
+  "bots.avatarHint":
+    "该图片会显示在机器人出现的所有位置，并作为机器人私信 Bark 通知的图标。",
+  "bots.removeAvatar": "移除头像",
   "bots.saveName": "保存名称",
   "bots.cancel": "取消",
   "bots.done": "完成",
