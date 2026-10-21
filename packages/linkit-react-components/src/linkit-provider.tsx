@@ -729,8 +729,10 @@ export function LinkitProvider({
     [languages, lang],
   );
   const userInfoCopy = useMemo(() => userInfoLabels(effectiveLang), [effectiveLang]);
+  // Addressing the target by user ID also opens direct messages with Bots, which may
+  // have no profile username of their own.
   const openUserDirectConversation = useCallback(
-    async (userId: string, username: string) => {
+    async (userId: string) => {
       if (!auth.isAuthenticated) throw new Error(userInfoCopy.signInToMessage);
       const conversationWindow = window.open("", "_blank");
       if (!conversationWindow) throw new Error(userInfoCopy.popupBlocked);
@@ -739,7 +741,7 @@ export function LinkitProvider({
         const me = await request<LinkitMe>("/api/me");
         if (me.id === userId) throw new Error(userInfoCopy.cannotMessageYourself);
         const conversation = await request<LinkitConversation>(
-          `/api/conversations/direct/${encodeURIComponent(username)}`,
+          `/api/conversations/direct/${encodeURIComponent(userId)}`,
           { method: "POST" },
         );
         conversationWindow.location.replace(conversationUrl(baseUrl, conversation.id));

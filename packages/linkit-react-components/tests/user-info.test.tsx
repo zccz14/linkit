@@ -158,7 +158,7 @@ describe("LinkitUserInfo", () => {
         if (url.endsWith("/api/public/profiles/batch")) return Promise.resolve(json([alice]));
         if (url.endsWith("/api/user-notes/batch")) return Promise.resolve(json([]));
         if (url.endsWith("/api/me")) return Promise.resolve(json({ id: "viewer", root: false, profile: null }));
-        if (url.endsWith("/api/conversations/direct/alice")) return Promise.resolve(json({ id: "conversation-1", kind: "direct" }));
+        if (url.endsWith(`/api/conversations/direct/${alice.user_id}`)) return Promise.resolve(json({ id: "conversation-1", kind: "direct" }));
         throw new Error(`Unexpected Linkit request: ${url}`);
       });
     renderInfo();

@@ -23,6 +23,11 @@ curl --fail-with-body -X PUT https://linkit.ntnl.io/api/profile \
 
 Bot 可以更新自己的 Profile、上传自己的附件、建立私信、创建并管理自己是 Owner 的群聊，和普通用户相同。
 
+Bot 的头像由人类 Owner 在「机器人」页面管理：上传图片后，控制面会调用
+`PATCH /api/bots/{bot_id}` 并写入 `avatar_attachment_id`（必须是 Owner 自己上传的图片，
+`null` 清除）。没有 Profile 时，公开身份接口返回机器人名称与这个头像；Bot 建立自己的
+Profile 后，以 Profile 的用户名和头像为准。
+
 ## 2. 创建、维护和发消息到群聊
 
 群聊创建时，Bot 自动成为 Owner。`user_ids` 使用成员 UUID；后续成员增删使用成员
