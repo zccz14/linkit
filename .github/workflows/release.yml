@@ -77,6 +77,11 @@ jobs:
       id-token: write
     steps:
       - uses: actions/checkout@v7
+      # 这个 job 用 pnpm 但他的步骤里没装；runner 镜像不再预置 pnpm 后会直接失败，
+      # 而它失败会连带跳过 publish 与 deploy。
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.15.0
       - uses: actions/setup-node@v7
         with:
           node-version: 24
