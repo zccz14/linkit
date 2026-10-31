@@ -29,8 +29,9 @@ export function MessageMarkdown({
   return createElement(
     "div",
     {
-      className:
-        "text-sm leading-6 [&_code]:break-words [&_code]:rounded-sm [&_code]:bg-muted/70 [&_code]:px-1 [&_code]:py-0.5 [&_code]:font-mono [&_code]:text-[0.8125em] [&_li+li]:mt-1 [&_ol]:my-3 [&_ol]:list-decimal [&_ol]:pl-5 [&_p+p]:mt-3 [&_pre]:my-3 [&_pre]:overflow-x-auto [&_pre]:rounded-md [&_pre]:bg-muted/70 [&_pre]:p-3 [&_pre_code]:bg-transparent [&_pre_code]:p-0 [&_ul]:my-3 [&_ul]:list-disc [&_ul]:pl-5",
+      // 版式来自 @zccz14/ux 的 .ux-markdown，与家族里其它 Markdown 面完全一致；
+      // 这里保留自己的插件链，因为消息里的 @mention 是 Linkit 的领域概念。
+      className: "ux-markdown text-sm",
     },
     createElement(ReactMarkdown, {
       skipHtml: true,
