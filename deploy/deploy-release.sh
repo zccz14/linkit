@@ -12,6 +12,13 @@ bark_apns_sha256="bcb56e84877f267d9164cc274f83fa87cd21845d24573235255f4ac565de3a
 
 cleanup() { rm -rf "$temporary_dir"; }
 trap cleanup EXIT
+# 根分区只有 8 GiB，历史上被历史 release 与日志撑满过一次；空间不足时立刻失败，
+# 而不是把二进制装到写不进去的盘上再回头排查 500。
+available_kib="$(df -Pk /opt | awk 'NR==2 {print $4}')"
+if [ "${available_kib:-0}" -lt 1048576 ]; then
+  echo "only ${available_kib} KiB free on /opt; free at least 1 GiB before deploying" >&2
+  exit 1
+fi
 curl --fail --location --retry 5 --retry-all-errors --output "$temporary_dir/$archive" "$archive_url"
 curl --fail --location --retry 5 --retry-all-errors --output "$temporary_dir/$archive.sha256" "$checksum_url"
 cd "$temporary_dir"
@@ -67,7 +74,15 @@ Environment=BARK_APNS_TEAM_ID=5U8LBRXG3A
 Environment=BARK_APNS_TOPIC=me.fin.bark
 UNIT
 systemctl daemon-reload
+previous_release="$(readlink -f /opt/linkit/current || true)"
 ln -sfn "$release_dir" /opt/linkit/current
+# 每个 release 约 17 MiB；只保留本次与上一次发布，其余删掉，避免小盘被历史版本撑满。
+for stale_release in /opt/linkit/releases/*/; do
+  stale_release="${stale_release%/}"
+  if [ "$stale_release" != "$release_dir" ] && [ "$stale_release" != "$previous_release" ]; then
+    rm -rf "$stale_release"
+  fi
+done
 systemctl restart linkit.service
 for _ in $(seq 1 30); do
   if curl --fail --silent http://127.0.0.1:8080/api/health >/dev/null; then

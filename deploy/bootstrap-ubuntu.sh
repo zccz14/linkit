@@ -9,6 +9,20 @@ install -d -m 0755 /opt/linkit/releases
 install -d -o linkit -g linkit -m 0700 /var/lib/linkit
 install -d -m 0755 /etc/nginx/snippets
 
+# 8 GiB 根分区上 nginx 访问日志与 journal 都能各自长到几百 MiB；设上限，
+# 免得日志把根分区写满后 SQLite 写不了 WAL、所有写请求变成 500。
+install -d -m 0755 /etc/systemd/journald.conf.d
+printf '[Journal]\nSystemMaxUse=200M\n' > /etc/systemd/journald.conf.d/linkit-cap.conf
+systemctl restart systemd-journald
+python3 - <<'PY'
+path = "/etc/logrotate.d/nginx"
+text = open(path).read()
+if "maxsize" not in text:
+    text = text.replace("\tdaily\n", "\tdaily\n\tmaxsize 50M\n", 1)
+    text = text.replace("\trotate 14\n", "\trotate 3\n", 1)
+    open(path, "w").write(text)
+PY
+
 install -m 0644 /dev/stdin /etc/nginx/snippets/linkit-bark.conf <<'NGINX'
 location ^~ /api/bark/ {
     access_log off;
